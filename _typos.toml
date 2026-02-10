@@ -7,6 +7,9 @@ extend-exclude = [
     "target/",
     "*.lock",
     ".benchmarks/",
+    ".mypy_cache/",
+    ".pytest_cache/",
+    ".ruff_cache/",
 ]
 
 [default.extend-words]

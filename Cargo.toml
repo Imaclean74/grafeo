@@ -20,7 +20,7 @@ rust-version = "1.91.1"
 license = "Apache-2.0"
 repository = "https://github.com/GrafeoDB/grafeo"
 authors = ["S.T. Grond"]
-description = "A high-performance, embeddable graph database with a Rust core and no required C dependencies"
+description = "A high-performance, embeddable graph database with support for LPG RDF and all major graph query languages."
 
 [workspace.dependencies]
 # Internal crates (default-features = false to allow per-crate control)
