@@ -1,6 +1,8 @@
 //! # Grafeo
 //!
-//! A high-performance, pure-Rust, embeddable graph database.
+//! A high-performance, embeddable graph database with a Rust core and no required
+//! C dependencies. Optional allocators (jemalloc/mimalloc) and TLS use C libraries
+//! for performance.
 //!
 //! If you're new here, start with [`GrafeoDB`] - that's your entry point for
 //! creating databases and running queries. Grafeo uses GQL (the ISO standard)
@@ -62,7 +64,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 // Re-export the main database API
 pub use grafeo_engine::{
     Catalog, CatalogError, Config, ConfigError, DurabilityMode, GrafeoDB, GraphModel,
-    IndexDefinition, IndexType, Session,
+    IndexDefinition, IndexType, Session, VERSION,
 };
 
 // Re-export core types - you'll need these for working with IDs and values

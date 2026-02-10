@@ -1,6 +1,6 @@
 {
   "name": "@grafeo-db/wasm",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "WebAssembly bindings for Grafeo - a high-performance embeddable graph database",
   "keywords": [
     "graph",
@@ -12,8 +12,8 @@
     "wasm",
     "webassembly"
   ],
-  "author": "StevenBtw",
-  "license": "AGPL-3.0-or-later",
+  "author": "S.T. Grond",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/GrafeoDB/grafeo.git",

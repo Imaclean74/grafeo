@@ -111,6 +111,24 @@ pub struct PyGrafeoDB {
     inner: Arc<RwLock<GrafeoDB>>,
 }
 
+impl PyGrafeoDB {
+    /// Converts an optional Python dict of property filters to a Rust HashMap.
+    fn convert_filters(
+        filters: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<Option<HashMap<String, Value>>> {
+        let Some(dict) = filters else {
+            return Ok(None);
+        };
+        let mut map = HashMap::new();
+        for (key, value) in dict.iter() {
+            let key_str: String = key.extract()?;
+            let val = PyValue::from_py(&value)?;
+            map.insert(key_str, val);
+        }
+        Ok(Some(map))
+    }
+}
+
 #[pymethods]
 impl PyGrafeoDB {
     /// Creates a database. Pass a path for persistence, or omit for in-memory.
@@ -219,6 +237,42 @@ impl PyGrafeoDB {
         };
 
         // Extract nodes and edges based on column types
+        let (nodes, edges) = extract_entities(&result, &db);
+
+        Ok(PyQueryResult::with_metrics(
+            result.columns,
+            result.rows,
+            nodes,
+            edges,
+            result.execution_time_ms,
+            result.rows_scanned,
+        ))
+    }
+
+    /// Execute a SQL/PGQ query (SQL:2023 GRAPH_TABLE).
+    #[cfg(feature = "sql-pgq")]
+    #[pyo3(signature = (query, params=None))]
+    fn execute_sql(
+        &self,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+        _py: Python<'_>,
+    ) -> PyResult<PyQueryResult> {
+        let db = self.inner.read();
+
+        let result = if let Some(p) = params {
+            let mut param_map = HashMap::new();
+            for (key, value) in p.iter() {
+                let key_str: String = key.extract()?;
+                let val = PyValue::from_py(&value)?;
+                param_map.insert(key_str, val);
+            }
+            db.execute_sql_with_params(query, param_map)
+                .map_err(PyGrafeoError::from)?
+        } else {
+            db.execute_sql(query).map_err(PyGrafeoError::from)?
+        };
+
         let (nodes, edges) = extract_entities(&result, &db);
 
         Ok(PyQueryResult::with_metrics(
@@ -818,6 +872,41 @@ impl PyGrafeoDB {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Drop a vector index for the given label and property.
+    ///
+    /// Returns True if the index existed and was removed, False if not found.
+    ///
+    /// Args:
+    ///     label: Node label of the index
+    ///     property: Property name of the index
+    ///
+    /// Example:
+    ///     removed = db.drop_vector_index("Doc", "embedding")
+    fn drop_vector_index(&self, label: &str, property: &str) -> bool {
+        let db = self.inner.read();
+        db.drop_vector_index(label, property)
+    }
+
+    /// Rebuild a vector index by rescanning all matching nodes.
+    ///
+    /// Drops the existing index and recreates it from scratch, preserving
+    /// the original configuration (dimensions, metric, M, ef_construction).
+    ///
+    /// Args:
+    ///     label: Node label of the index
+    ///     property: Property name of the index
+    ///
+    /// Raises:
+    ///     RuntimeError: If no index exists for this label+property pair.
+    ///
+    /// Example:
+    ///     db.rebuild_vector_index("Doc", "embedding")
+    fn rebuild_vector_index(&self, label: &str, property: &str) -> PyResult<()> {
+        let db = self.inner.read();
+        db.rebuild_vector_index(label, property)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Search for the k nearest neighbors of a query vector.
     ///
     /// Uses the HNSW index created by create_vector_index().
@@ -836,7 +925,10 @@ impl PyGrafeoDB {
     ///     results = db.vector_search("Doc", "embedding", [1.0, 0.0, 0.0], k=10, ef=200)
     ///     for node_id, distance in results:
     ///         print(f"Node {node_id}: distance={distance:.4f}")
-    #[pyo3(signature = (label, property, query, k, ef=None))]
+    ///
+    ///     # With property filters (only search among user_id=42 nodes):
+    ///     results = db.vector_search("Doc", "embedding", query, k=10, filters={"user_id": 42})
+    #[pyo3(signature = (label, property, query, k, ef=None, filters=None))]
     fn vector_search(
         &self,
         label: &str,
@@ -844,10 +936,12 @@ impl PyGrafeoDB {
         query: Vec<f32>,
         k: usize,
         ef: Option<usize>,
+        filters: Option<&Bound<'_, pyo3::types::PyDict>>,
     ) -> PyResult<Vec<(u64, f32)>> {
+        let filter_map = Self::convert_filters(filters)?;
         let db = self.inner.read();
         let results = db
-            .vector_search(label, property, &query, k, ef)
+            .vector_search(label, property, &query, k, ef, filter_map.as_ref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(results
             .into_iter()
@@ -898,7 +992,7 @@ impl PyGrafeoDB {
     ///
     /// Example:
     ///     results = db.batch_vector_search("Doc", "embedding", [[1.0, 0.0], [0.0, 1.0]], k=5)
-    #[pyo3(signature = (label, property, queries, k, ef=None))]
+    #[pyo3(signature = (label, property, queries, k, ef=None, filters=None))]
     fn batch_vector_search(
         &self,
         label: &str,
@@ -906,10 +1000,12 @@ impl PyGrafeoDB {
         queries: Vec<Vec<f32>>,
         k: usize,
         ef: Option<usize>,
+        filters: Option<&Bound<'_, pyo3::types::PyDict>>,
     ) -> PyResult<Vec<Vec<(u64, f32)>>> {
+        let filter_map = Self::convert_filters(filters)?;
         let db = self.inner.read();
         let results = db
-            .batch_vector_search(label, property, &queries, k, ef)
+            .batch_vector_search(label, property, &queries, k, ef, filter_map.as_ref())
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         Ok(results
             .into_iter()
@@ -919,6 +1015,60 @@ impl PyGrafeoDB {
                     .map(|(id, dist)| (id.as_u64(), dist))
                     .collect()
             })
+            .collect())
+    }
+
+    /// Search for diverse nearest neighbors using Maximal Marginal Relevance (MMR).
+    ///
+    /// MMR balances relevance to the query with diversity among results,
+    /// avoiding redundant results in RAG pipelines.
+    ///
+    /// Args:
+    ///     label: Node label that was indexed
+    ///     property: Property that was indexed
+    ///     query: Query vector (list of floats)
+    ///     k: Number of diverse results to return
+    ///     fetch_k: Initial candidates from HNSW (default: 4*k)
+    ///     lambda_mult: Relevance vs diversity (0=diverse, 1=relevant). Default: 0.5.
+    ///     ef: Search beam width (higher = better recall, slower). Uses index default if None.
+    ///
+    /// Returns:
+    ///     List of (node_id, distance) tuples, ordered by MMR selection.
+    ///
+    /// Example:
+    ///     results = db.mmr_search("Doc", "embedding", [1.0, 0.0, 0.0], k=4, lambda_mult=0.5)
+    ///     for node_id, distance in results:
+    ///         print(f"Node {node_id}: distance={distance:.4f}")
+    #[pyo3(signature = (label, property, query, k, fetch_k=None, lambda_mult=None, ef=None, filters=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn mmr_search(
+        &self,
+        label: &str,
+        property: &str,
+        query: Vec<f32>,
+        k: usize,
+        fetch_k: Option<usize>,
+        lambda_mult: Option<f32>,
+        ef: Option<usize>,
+        filters: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<Vec<(u64, f32)>> {
+        let filter_map = Self::convert_filters(filters)?;
+        let db = self.inner.read();
+        let results = db
+            .mmr_search(
+                label,
+                property,
+                &query,
+                k,
+                fetch_k,
+                lambda_mult,
+                ef,
+                filter_map.as_ref(),
+            )
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        Ok(results
+            .into_iter()
+            .map(|(id, dist)| (id.as_u64(), dist))
             .collect())
     }
 
