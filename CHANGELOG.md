@@ -2,7 +2,7 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.1] - Unreleased
+## [0.5.1] - 2026-02-12
 
 All new functionality for the 0.5.x series: hybrid search (BM25 + vector), built-in ONNX embeddings, change data capture, fully supporting the grafeo-memory AI memory package.
 

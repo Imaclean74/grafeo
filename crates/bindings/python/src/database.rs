@@ -1176,7 +1176,7 @@ impl PyGrafeoDB {
     ///                                "graph databases", k=10,
     ///                                query_vector=[1.0, 0.0, 0.0])
     #[cfg(feature = "hybrid-search")]
-    #[pyo3(signature = (label, text_property, vector_property, query_text, k, query_vector=None, fusion=None, weights=None))]
+    #[pyo3(signature = (label, text_property, vector_property, query_text, k, query_vector=None, fusion=None, weights=None, rrf_k=None))]
     #[allow(clippy::too_many_arguments)]
     fn hybrid_search(
         &self,
@@ -1188,13 +1188,17 @@ impl PyGrafeoDB {
         query_vector: Option<Vec<f32>>,
         fusion: Option<&str>,
         weights: Option<Vec<f64>>,
+        rrf_k: Option<usize>,
     ) -> PyResult<Vec<(u64, f64)>> {
         let fusion_method = match fusion {
             Some("weighted") => {
                 let w = weights.unwrap_or_else(|| vec![0.5, 0.5]);
                 Some(grafeo_core::index::text::FusionMethod::Weighted { weights: w })
             }
-            _ => None, // Default RRF
+            Some("rrf") => Some(grafeo_core::index::text::FusionMethod::Rrf {
+                k: rrf_k.unwrap_or(60),
+            }),
+            _ => rrf_k.map(|k_val| grafeo_core::index::text::FusionMethod::Rrf { k: k_val }),
         };
 
         let db = self.inner.read();
