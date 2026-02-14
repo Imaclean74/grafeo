@@ -1,6 +1,6 @@
 ---
 title: Migration Guide
-description: Migrating to Grafeo from Neo4j, DGraph, and other graph databases.
+description: Migrating to Grafeo from Neo4j, DGraph and other graph databases.
 tags:
   - migration
   - neo4j
@@ -9,7 +9,7 @@ tags:
 
 # Migration Guide
 
-How to migrate your existing graph database to Grafeo.
+How to migrate an existing graph database to Grafeo.
 
 ---
 
@@ -72,7 +72,7 @@ with open("edges.csv") as f:
 print(f"Imported {db.node_count} nodes and {db.edge_count} edges")
 ```
 
-### Step 3: Update Your Queries
+### Step 3: Update Queries
 
 Most Cypher queries work unchanged:
 
@@ -247,7 +247,7 @@ for item in data:
 
 ## Migrating from NetworkX
 
-If you have existing NetworkX graphs:
+For existing NetworkX graphs:
 
 ```python
 import networkx as nx
@@ -276,7 +276,7 @@ for source, target, attrs in G.edges(data=True):
 print(f"Imported {db.node_count} nodes and {db.edge_count} edges")
 ```
 
-You can also go the other direction:
+The reverse direction is also possible:
 
 ```python
 # Convert Grafeo to NetworkX for visualization
@@ -362,7 +362,7 @@ for line in content.strip().split("\n"):
 
 ## Performance Comparison
 
-After migration, you may notice performance differences:
+After migration, there may be performance differences:
 
 | Operation | Neo4j | Grafeo | Notes |
 |-----------|-------|--------|-------|
@@ -377,13 +377,13 @@ After migration, you may notice performance differences:
 
 ## Checklist
 
-Before going live with your migration:
+Before going live with the migration:
 
 - [ ] Export and import all data
 - [ ] Verify node and edge counts match
 - [ ] Test critical queries
 - [ ] Create indexes on frequently-queried properties
-- [ ] Run any graph algorithms you need
+- [ ] Run any required graph algorithms
 - [ ] Test application integration
 - [ ] Monitor performance in staging
 - [ ] Plan rollback procedure

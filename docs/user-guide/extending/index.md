@@ -15,7 +15,7 @@ Grafeo is designed to be extensible. Learn how to add custom functionality.
 
     ---
 
-    Add custom functions, algorithms, and integrations.
+    Add custom functions, algorithms and integrations.
 
     [:octicons-arrow-right-24: Plugin Guide](plugins.md)
 

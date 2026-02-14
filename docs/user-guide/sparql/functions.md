@@ -1,6 +1,6 @@
 ---
 title: Built-in Functions
-description: Learn about SPARQL built-in functions for strings, numbers, dates, and more.
+description: Learn about SPARQL built-in functions for strings, numbers, dates and more.
 tags:
   - sparql
   - functions

@@ -8,7 +8,7 @@ tags:
 
 # Aggregations
 
-This guide covers aggregation functions, grouping, and collection operations in Gremlin.
+This guide covers aggregation functions, grouping and collection operations in Gremlin.
 
 ## count()
 

@@ -157,7 +157,7 @@ reconstructed = quantizer.reconstruct(codes)
 ```
 Is memory the primary constraint?
 ├── No → Use Scalar Quantization (best recall)
-└── Yes → How much compression do you need?
+└── Yes → How much compression is needed?
     ├── 4x is enough → Scalar Quantization
     ├── 8-50x needed → Product Quantization
     └── 32x+ needed → Binary Quantization (with rescoring)

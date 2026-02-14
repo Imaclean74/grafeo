@@ -10,7 +10,7 @@ tags:
 
 Build a knowledge graph to organize information about entities and their relationships.
 
-## What You'll Learn
+## Topics Covered
 
 - Modeling diverse entity types
 - Creating semantic relationships
@@ -19,7 +19,7 @@ Build a knowledge graph to organize information about entities and their relatio
 
 ## The Domain: Movies
 
-We'll build a knowledge graph about movies, actors, directors, and genres.
+This tutorial builds a knowledge graph about movies, actors, directors and genres.
 
 ## Setup
 

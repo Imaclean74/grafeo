@@ -9,7 +9,7 @@ tags:
 
 # Troubleshooting
 
-Solutions to common issues you might encounter when using Grafeo.
+Solutions to common issues encountered when using Grafeo.
 
 ## Installation Issues
 
@@ -24,7 +24,7 @@ Solutions to common issues you might encounter when using Grafeo.
    python --version  # Should be 3.12+
    ```
 
-2. **Build from source** - If no pre-built wheel exists for your platform:
+2. **Build from source** - If no pre-built wheel exists for the platform:
    ```bash
    uv add maturin  # or: pip install maturin
    git clone https://github.com/GrafeoDB/grafeo
@@ -43,7 +43,7 @@ Solutions to common issues you might encounter when using Grafeo.
 
 **Symptoms:** Import succeeds but classes are missing.
 
-**Solution:** Ensure you have the latest version:
+**Solution:** Ensure the latest version is installed:
 ```bash
 uv add --upgrade grafeo  # or: pip install --upgrade grafeo
 ```
@@ -56,7 +56,7 @@ uv add --upgrade grafeo  # or: pip install --upgrade grafeo
 
 **Symptoms:** Query fails with "property 'xyz' not found."
 
-**Cause:** You're querying a property that doesn't exist on the node.
+**Cause:** The query references a property that doesn't exist on the node.
 
 **Solutions:**
 
@@ -82,7 +82,7 @@ uv add --upgrade grafeo  # or: pip install --upgrade grafeo
 
 ### "Label not found" error
 
-**Symptoms:** Query returns empty results when you expect matches.
+**Symptoms:** Query returns empty results when matches are expected.
 
 **Solutions:**
 
@@ -317,7 +317,7 @@ Or configure automatic checkpointing (planned for 0.4.x).
 
 ## Getting Help
 
-If you can't resolve an issue:
+If an issue persists:
 
 1. **Check the documentation** at [grafeo.dev](https://grafeo.dev)
 2. **Search existing issues** at [GitHub Issues](https://github.com/GrafeoDB/grafeo/issues)
@@ -339,7 +339,7 @@ Grafeo is currently at version 0.3.x and approaching production readiness. It's 
 - Embedded analytics applications
 - Data science workflows
 - Microservices with local graph state
-- Applications where you control the deployment
+- Applications with controlled deployment environments
 
 For high-availability or distributed scenarios, wait for 0.5.x (beta).
 

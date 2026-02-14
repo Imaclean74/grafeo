@@ -18,7 +18,7 @@ Grafeo is a high-performance graph database with a Rust core and no required C d
 ### Core Capabilities
 
 - **Dual data model support**: LPG and RDF with optimized storage for each
-- **Multi-language queries**: GQL, Cypher, Gremlin, GraphQL, SPARQL, and SQL/PGQ
+- **Multi-language queries**: GQL, Cypher, Gremlin, GraphQL, SPARQL and SQL/PGQ
 - Embeddable with zero external dependencies
 - **Multi-language bindings**: Python (PyO3), Node.js/TypeScript (napi-rs), Go (CGO), WebAssembly (wasm-bindgen)
 - In-memory and persistent storage modes
@@ -38,7 +38,7 @@ Grafeo is a high-performance graph database with a Rust core and no required C d
 - **Vector as a first-class type**: `Value::Vector(Arc<[f32]>)` stored alongside graph data
 - **HNSW index**: O(log n) approximate nearest neighbor search with tunable recall
 - **Distance functions**: Cosine, Euclidean, Dot Product, Manhattan (SIMD-accelerated: AVX2, SSE, NEON)
-- **Vector quantization**: Scalar (f32 → u8), Binary (1-bit), and Product Quantization (8-32x compression)
+- **Vector quantization**: Scalar (f32 → u8), Binary (1-bit) and Product Quantization (8-32x compression)
 - **BM25 text search**: Full-text inverted index with Unicode tokenizer and stop word removal
 - **Hybrid search**: Combined text + vector search with Reciprocal Rank Fusion (RRF) or weighted fusion
 - **Change data capture**: Before/after property snapshots for audit trails and history tracking
@@ -50,7 +50,7 @@ Grafeo is a high-performance graph database with a Rust core and no required C d
 
 - **Push-based vectorized execution** with adaptive chunk sizing
 - **Morsel-driven parallelism** with auto-detected thread count
-- **Columnar storage** with dictionary, delta, and RLE compression
+- **Columnar storage** with dictionary, delta and RLE compression
 - **Cost-based optimizer** with DPccp join ordering and histograms
 - **Zone maps** for intelligent data skipping (including vector zone maps)
 - **Adaptive query execution** with runtime re-optimization
@@ -61,19 +61,19 @@ Grafeo is a high-performance graph database with a Rust core and no required C d
 
 | Query Language | LPG | RDF |
 |----------------|-----|-----|
-| GQL | ✅ | — |
-| Cypher | ✅ | — |
-| Gremlin | ✅ | — |
+| GQL | ✅ | - |
+| Cypher | ✅ | - |
+| Gremlin | ✅ | - |
 | GraphQL | ✅ | ✅ |
-| SPARQL | — | ✅ |
-| SQL/PGQ | ✅ | — |
+| SPARQL | - | ✅ |
+| SQL/PGQ | ✅ | - |
 
 Grafeo uses a modular translator architecture where query languages are parsed into ASTs, then translated to a unified logical plan that executes against the appropriate storage backend (LPG or RDF).
 
 ### Data Models
 
-- **LPG (Labeled Property Graph)**: Nodes with labels and properties, edges with types and properties. Ideal for social networks, knowledge graphs, and application data.
-- **RDF (Resource Description Framework)**: Triple-based storage (subject-predicate-object) with SPO/POS/OSP indexes. Ideal for semantic web, linked data, and ontology-based applications.
+- **LPG (Labeled Property Graph)**: Nodes with labels and properties, edges with types and properties. Ideal for social networks, knowledge graphs and application data.
+- **RDF (Resource Description Framework)**: Triple-based storage (subject-predicate-object) with SPO/POS/OSP indexes. Ideal for semantic web, linked data and ontology-based applications.
 
 ## Installation
 

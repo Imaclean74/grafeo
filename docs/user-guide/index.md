@@ -5,7 +5,7 @@ description: Comprehensive guide to using Grafeo.
 
 # User Guide
 
-Welcome to the Grafeo User Guide. This section covers everything you need to know to use Grafeo effectively.
+Welcome to the Grafeo User Guide. This section covers everything needed to use Grafeo effectively.
 
 Grafeo supports both **Labeled Property Graph (LPG)** and **RDF** data models, with multiple query languages for each.
 
@@ -17,7 +17,7 @@ Grafeo supports both **Labeled Property Graph (LPG)** and **RDF** data models, w
 
     ---
 
-    Learn about LPG and RDF data models: nodes, edges, triples, and properties.
+    Learn about LPG and RDF data models: nodes, edges, triples and properties.
 
     [:octicons-arrow-right-24: Data Model](data-model/index.md)
 

@@ -9,7 +9,7 @@ tags:
 
 # Property Paths
 
-Property paths allow you to match paths of arbitrary length through the graph using a concise syntax.
+Property paths match paths of arbitrary length through the graph using a concise syntax.
 
 ## Path Operators
 
@@ -196,7 +196,7 @@ WHERE {
 
 ## Shortest Path
 
-SPARQL 1.1 doesn't have built-in shortest path, but you can simulate it:
+SPARQL 1.1 does not have built-in shortest path, but it can be simulated:
 
 ```sparql
 PREFIX foaf: <http://xmlns.com/foaf/0.1/>

@@ -34,10 +34,10 @@ A relationship connecting two nodes. Edges have:
 A tag categorizing nodes. Nodes can have multiple labels (e.g., a node can be both "Person" and "Employee").
 
 ### Property
-A key-value attribute on a node or edge. Keys are strings; values can be null, boolean, integer, float, string, list, or map.
+A key-value attribute on a node or edge. Keys are strings; values can be null, boolean, integer, float, string, list or map.
 
 ### LPG (Labeled Property Graph)
-The primary graph model in Grafeo where nodes have labels and both nodes and edges have properties. This is the model used by Neo4j, TigerGraph, and most modern graph databases.
+The primary graph model in Grafeo where nodes have labels and both nodes and edges have properties. This is the model used by Neo4j, TigerGraph and most modern graph databases.
 
 ### RDF (Resource Description Framework)
 An alternative graph model using subject-predicate-object triples. Used for semantic web and knowledge graphs. Grafeo supports RDF with the `rdf` feature flag.

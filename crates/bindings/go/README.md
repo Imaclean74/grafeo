@@ -50,7 +50,7 @@ func main() {
 
 ## Features
 
-- GQL, Cypher, SPARQL, Gremlin, and GraphQL query languages
+- GQL, Cypher, SPARQL, Gremlin and GraphQL query languages
 - Full node/edge CRUD with property management
 - ACID transactions with configurable isolation levels
 - HNSW vector similarity search

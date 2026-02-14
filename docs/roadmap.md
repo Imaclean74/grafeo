@@ -79,7 +79,7 @@ This roadmap outlines the planned development of Grafeo. Priorities may shift ba
 - **Binary Quantization** - f32 → 1 bit, 32x compression with SIMD-accelerated hamming distance
 - **Product Quantization** - Codebook-based 8-32x compression with asymmetric distance computation
 - **QuantizedHnswIndex** - Two-phase search with rescoring support
-- **SIMD Acceleration** - AVX2+FMA, SSE, and NEON support for 4-8x faster distance computations
+- **SIMD Acceleration** - AVX2+FMA, SSE and NEON support for 4-8x faster distance computations
 
 ### Vector Storage & Search
 
@@ -137,7 +137,7 @@ CREATE VECTOR INDEX movie_embeddings ON :Movie(embedding)
 
 ### Vector Search (0.4.4)
 
-- **Filtered vector search** - `vector_search()`, `batch_vector_search()`, and `mmr_search()` accept property equality filters via pre-computed allowlists
+- **Filtered vector search** - `vector_search()`, `batch_vector_search()` and `mmr_search()` accept property equality filters via pre-computed allowlists
 - **MMR search** - Maximal Marginal Relevance for diverse, relevant results in RAG pipelines
 - **Incremental vector indexing** - vector indexes stay in sync automatically as nodes change
 
@@ -145,7 +145,7 @@ CREATE VECTOR INDEX movie_embeddings ON :Movie(embedding)
 
 - **grafeo-cli** - `query`, `init`, `shell`, `version`, `completions` commands
 - **Interactive shell** - transactions, meta-commands, persistent history, CSV output
-- **Cross-platform distribution** - install via `cargo install`, `pip install`, or `npm install -g`
+- **Cross-platform distribution** - install via `cargo install`, `pip install` or `npm install -g`
 
 ### Quality
 
@@ -162,31 +162,31 @@ CREATE VECTOR INDEX movie_embeddings ON :Movie(embedding)
 
 ### Search & Retrieval (0.5.1)
 
-- **BM25 text search** (`text-index` feature) — inverted index with Okapi BM25 scoring, Unicode tokenizer, stop word removal
-- **Hybrid search** (`hybrid-search` feature) — combine BM25 + vector similarity via Reciprocal Rank Fusion (RRF) or weighted fusion
-- **Built-in embeddings** (`embed` feature, opt-in) — in-process ONNX Runtime embedding generation, load any `.onnx` model
+- **BM25 text search** (`text-index` feature): inverted index with Okapi BM25 scoring, Unicode tokenizer, stop word removal
+- **Hybrid search** (`hybrid-search` feature): combine BM25 + vector similarity via Reciprocal Rank Fusion (RRF) or weighted fusion
+- **Built-in embeddings** (`embed` feature, opt-in): in-process ONNX Runtime embedding generation, load any `.onnx` model
 
 ### Change Tracking (0.5.1)
 
-- **Change data capture** (`cdc` feature) — before/after property snapshots for all mutations, `history()` and `changes_between()` APIs
+- **Change data capture** (`cdc` feature): before/after property snapshots for all mutations, `history()` and `changes_between()` APIs
 
 ### Procedure Calls (0.5.2)
 
-- **CALL statement** — `CALL grafeo.<algorithm>() [YIELD columns]` in GQL, Cypher, and SQL/PGQ
-- **22 built-in algorithms** — all graph algorithms accessible via query strings (PageRank, Dijkstra, BFS, Louvain, etc.)
-- **Procedure registry** — `CALL grafeo.procedures()` lists all available procedures
+- **CALL statement**: `CALL grafeo.<algorithm>() [YIELD columns]` in GQL, Cypher and SQL/PGQ
+- **22 built-in algorithms**: all graph algorithms accessible via query strings (PageRank, Dijkstra, BFS, Louvain, etc.)
+- **Procedure registry**: `CALL grafeo.procedures()` lists all available procedures
 
 ### Engine Improvements (0.5.0)
 
-- **Topology-only HNSW** — ~50% memory reduction for vector workloads
-- **Standardized error codes** — machine-readable `GRAFEO-XXXX` codes
-- **Query timeout** — configurable `query_timeout` with clean abort
-- **MVCC auto-GC** — automatic version chain garbage collection
-- **Dead code removal** — ~1,500 lines of confirmed dead code removed
+- **Topology-only HNSW**: ~50% memory reduction for vector workloads
+- **Standardized error codes**: machine-readable `GRAFEO-XXXX` codes
+- **Query timeout**: configurable `query_timeout` with clean abort
+- **MVCC auto-GC**: automatic version chain garbage collection
+- **Dead code removal**: ~1,500 lines of confirmed dead code removed
 
 ### Ecosystem (0.5.1)
 
-- **[grafeo-memory](https://github.com/GrafeoDB/grafeo-memory)** — AI memory layer, LLM-driven fact extraction, knowledge graph storage
+- **[grafeo-memory](https://github.com/GrafeoDB/grafeo-memory)**: AI memory layer, LLM-driven fact extraction, knowledge graph storage
 
 ### Goal
 - Ready for production evaluation
@@ -206,7 +206,7 @@ These features are under consideration for future releases:
 
 ## Contributing
 
-Interested in contributing to a specific feature? Check our [GitHub Issues](https://github.com/GrafeoDB/grafeo/issues) or join the discussion.
+Interested in contributing to a specific feature? Check the [GitHub Issues](https://github.com/GrafeoDB/grafeo/issues) or join the discussion.
 
 ---
 

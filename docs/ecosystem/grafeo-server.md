@@ -45,7 +45,7 @@ docker run -p 7474:7474 grafeo/grafeo-server:lite
 
 ### Standard (default)
 
-All query languages, AI/search features (vector index, text index, hybrid search, CDC), RDF support, and the Studio web UI. This is what you get with `grafeo-server:latest`.
+All query languages, AI/search features (vector index, text index, hybrid search, CDC), RDF support and the Studio web UI. This is the default `grafeo-server:latest` image.
 
 ```bash
 docker run -p 7474:7474 grafeo/grafeo-server
@@ -53,7 +53,7 @@ docker run -p 7474:7474 grafeo/grafeo-server
 
 ### Full
 
-Everything in standard plus authentication (bearer token, HTTP Basic), TLS, JSON Schema validation, and ONNX embedding generation. Production-ready with security features built in.
+Everything in standard plus authentication (bearer token, HTTP Basic), TLS, JSON Schema validation and ONNX embedding generation. Production-ready with security features built in.
 
 ```bash
 docker run -p 7474:7474 grafeo/grafeo-server:full \
@@ -206,7 +206,7 @@ See the [grafeo-server README](https://github.com/GrafeoDB/grafeo-server#feature
 | Use Case | Recommendation |
 |----------|----------------|
 | Multi-client access over HTTP | grafeo-server |
-| Embedded in your application | [grafeo](https://github.com/GrafeoDB/grafeo) (library) |
+| Embedded in an application | [grafeo](https://github.com/GrafeoDB/grafeo) (library) |
 | Browser-only, no backend | [grafeo-web](https://github.com/GrafeoDB/grafeo-web) (WASM) |
 | Lightweight sidecar / CI | grafeo-server **lite** variant |
 | Production with security | grafeo-server **full** variant |

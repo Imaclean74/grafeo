@@ -5,7 +5,7 @@ description: API reference for the @grafeo-db/wasm package.
 
 # WebAssembly API
 
-Run Grafeo in the browser, Deno, or Cloudflare Workers. ~660 KB gzipped.
+Run Grafeo in the browser, Deno or Cloudflare Workers. ~660 KB gzipped.
 
 ```bash
 npm install @grafeo-db/wasm
@@ -35,8 +35,8 @@ const db = new Database();   // in-memory (all WASM databases are in-memory)
 ## Query Methods
 
 ```javascript
-db.execute(gql);                 // GQL — returns array of row objects
-db.executeRaw(gql);             // GQL — returns {columns, rows, executionTimeMs}
+db.execute(gql);                 // GQL: returns array of row objects
+db.executeRaw(gql);             // GQL: returns {columns, rows, executionTimeMs}
 db.executeWithLanguage(query, language);  // "gql", "cypher", "graphql", etc.
 ```
 

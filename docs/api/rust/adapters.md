@@ -8,7 +8,7 @@ tags:
 
 # grafeo-adapters
 
-Parsers, storage backends, and plugins.
+Parsers, storage backends and plugins.
 
 ## GQL Parser
 

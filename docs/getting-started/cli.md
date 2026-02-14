@@ -1,6 +1,6 @@
 ---
 title: Command-Line Interface
-description: Grafeo CLI for querying, inspecting, and maintaining graph databases.
+description: Grafeo CLI for querying, inspecting and maintaining graph databases.
 tags:
   - getting-started
   - cli
@@ -9,11 +9,11 @@ tags:
 
 # Command-Line Interface
 
-Grafeo ships a single Rust CLI binary (`grafeo`) for querying, inspecting, and maintaining databases. It includes an interactive REPL, admin commands, and multiple output formats.
+Grafeo ships a single Rust CLI binary (`grafeo`) for querying, inspecting and maintaining databases. It includes an interactive REPL, admin commands and multiple output formats.
 
 ## Installation
 
-Install via any of these methods — they all provide the same CLI:
+Install via any of these methods: they all provide the same CLI:
 
 === "Cargo (Recommended)"
 
@@ -21,12 +21,12 @@ Install via any of these methods — they all provide the same CLI:
     cargo install grafeo-cli
     ```
 
-=== "pip"
+=== "pip / uv"
 
     ```bash
-    pip install grafeo-cli
-    # or
     uv add grafeo-cli
+    # or
+    pip install grafeo-cli
     ```
 
 === "npm"
@@ -287,4 +287,4 @@ result = session.execute("MATCH (n) RETURN n")
     The `grafeo[cli]` Python CLI (Click-based) has been removed. Install the Rust binary
     instead via `cargo install grafeo-cli`, `pip install grafeo-cli`, or
     `npm install -g @grafeo-db/cli`. All previous commands are available with the same
-    syntax, plus new features: `query`, `shell`, `init`, CSV output, and shell completions.
+    syntax, plus new features: `query`, `shell`, `init`, CSV output and shell completions.

@@ -263,7 +263,7 @@ grafeo-engine = { version = "0.2", features = ["gql", "sparql"] }
 
 ### GQL to SPARQL
 
-1. Define appropriate prefixes for your domain
+1. Define appropriate prefixes for the domain
 2. Model node properties as separate triples
 3. Convert edge patterns to predicate URIs
 4. Use `OPTIONAL` for optional relationships

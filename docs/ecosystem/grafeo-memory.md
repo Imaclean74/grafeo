@@ -5,7 +5,7 @@ description: AI memory layer for LLM applications, powered by GrafeoDB.
 
 # grafeo-memory
 
-AI memory layer for LLM applications. Extract facts, entities, and relations from conversations and persist them in a GrafeoDB graph with vector embeddings for semantic search.
+AI memory layer for LLM applications. Extract facts, entities and relations from conversations and persist them in a GrafeoDB graph with vector embeddings for semantic search.
 
 [:octicons-mark-github-16: GitHub](https://github.com/GrafeoDB/grafeo-memory){ .md-button }
 [:material-package-variant: PyPI](https://pypi.org/project/grafeo-memory/){ .md-button }
@@ -14,7 +14,7 @@ AI memory layer for LLM applications. Extract facts, entities, and relations fro
 
 grafeo-memory provides a `MemoryManager` that orchestrates an **extract -> search -> reconcile -> execute** loop:
 
-1. **Extract** facts, entities, and relations from text using an LLM
+1. **Extract** facts, entities and relations from text using an LLM
 2. **Search** existing memories for duplicates or conflicts
 3. **Reconcile** via LLM to decide ADD / UPDATE / DELETE / NONE
 4. **Execute** mutations against the GrafeoDB graph
@@ -29,7 +29,7 @@ uv add grafeo-memory
 pip install grafeo-memory
 ```
 
-Requires Python 3.12+, grafeo >= 0.5.1, and pydantic-ai.
+Requires Python 3.12+, grafeo >= 0.5.1 and pydantic-ai.
 
 ## Quick Start
 
@@ -71,7 +71,7 @@ with MemoryManager("openai:gpt-4o-mini", config, embedder=embedder) as memory:
 
 Memories are stored as a rich graph:
 
-- `:Memory` nodes with `content`, `embedding`, and metadata properties
+- `:Memory` nodes with `content`, `embedding` and metadata properties
 - `:Entity` nodes extracted from text (people, organizations, places, etc.)
 - `:HAS_ENTITY` edges linking memories to their entities
 - `:RELATION` edges between entities (e.g., "works at", "knows")

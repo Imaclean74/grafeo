@@ -1,6 +1,6 @@
 ---
 title: Edge Traversals
-description: Traverse edges and relationships with out, in, both, and edge steps.
+description: Traverse edges and relationships with out, in, both and edge steps.
 tags:
   - gremlin
   - edges
@@ -58,7 +58,7 @@ g.V().has('name', 'Alice').bothE('KNOWS')
 
 ### Accessing Edge Properties
 
-Once you have edges, you can access their properties:
+Once edges are obtained, their properties can be accessed:
 
 ```gremlin
 // Get the 'since' property of outgoing KNOWS edges

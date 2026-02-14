@@ -1,6 +1,6 @@
 ---
 title: Interactive Demo
-description: Live, interactive demos of the anywidget-graph and anywidget-vector widgets running directly in your browser.
+description: Live, interactive demos of the anywidget-graph and anywidget-vector widgets running directly in the browser.
 tags:
   - demo
   - visualization
@@ -10,10 +10,10 @@ tags:
 
 # Interactive Demo
 
-These demos run **entirely in your browser** using [marimo](https://marimo.io) and WebAssembly, no server or Python installation required. Pan, zoom, click, and interact with the widgets below.
+These demos run **entirely in the browser** using [marimo](https://marimo.io) and WebAssembly, no server or Python installation required. Pan, zoom, click and interact with the widgets below.
 
 !!! info "First load"
-    The first time you visit this page, the Python runtime (Pyodide) will be downloaded and
+    On first load, the Python runtime (Pyodide) is downloaded and
     initialized in the background. This may take a few seconds. Subsequent interactions are instant.
 
 ```python {marimo display_code=false}
@@ -26,7 +26,7 @@ await micropip.install(["anywidget-graph", "anywidget-vector"])
 
 ## Graph Widget
 
-The [anywidget-graph](anywidget-graph.md) widget renders interactive graph visualizations powered by **Sigma.js**. Nodes are laid out automatically and you can pan, zoom, and click to inspect them.
+The [anywidget-graph](anywidget-graph.md) widget renders interactive graph visualizations powered by **Sigma.js**. Nodes are laid out automatically. Pan, zoom and click to inspect them.
 
 The example below builds a small social network with people and companies, connected by `KNOWS` and `WORKS_AT` relationships, the same dataset used in Grafeo's [graph visualization example](https://github.com/GrafeoDB/grafeo/blob/main/examples/graph_visualization.py).
 
@@ -103,9 +103,9 @@ graph_widget
 
 ## Vector Widget
 
-The [anywidget-vector](anywidget-vector.md) widget provides interactive **3D point cloud** visualization powered by **Three.js**. Orbit, pan, and zoom to explore vector spaces, useful for exploring embeddings, search results, and high-dimensional data.
+The [anywidget-vector](anywidget-vector.md) widget provides interactive **3D point cloud** visualization powered by **Three.js**. Orbit, pan and zoom to explore vector spaces, useful for exploring embeddings, search results and high-dimensional data.
 
-The example below shows clustered vectors that you might get from a vector similarity search, with three distinct groups colored by category.
+The example below shows clustered vectors from a vector similarity search, with three distinct groups colored by category.
 
 Click and drag to orbit, scroll to zoom, right-click to pan.
 
@@ -138,7 +138,7 @@ vector_widget
 ```
 
 ??? example "Equivalent Grafeo vector search code"
-    With Grafeo's built-in vector search, you can query embeddings and visualize results:
+    With Grafeo's built-in vector search, embeddings can be queried and visualized:
 
     ```python
     from grafeo import GrafeoDB
@@ -175,4 +175,4 @@ vector_widget
 These demos use the [mkdocs-marimo](https://github.com/marimo-team/mkdocs-marimo) plugin.
 Each `python {marimo}` code block is executed client-side via [Pyodide](https://pyodide.org) (Python compiled to WebAssembly). The anywidget framework bridges the Python widget state to the JavaScript renderers (Sigma.js / Three.js) that run natively in the browser.
 
-Since everything runs in your browser, there is **no backend server**, making it ideal for static documentation sites hosted on GitHub Pages.
+Since everything runs in the browser, there is **no backend server**, making it ideal for static documentation sites hosted on GitHub Pages.

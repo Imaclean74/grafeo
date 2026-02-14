@@ -163,10 +163,10 @@ This guide compares GraphQL (the API query language) with GQL (ISO/IEC 39075 gra
 ### Choose GraphQL When
 
 - Building a client-facing API
-- You need a schema-driven interface
+- A schema-driven interface is needed
 - Working with frontend developers familiar with GraphQL
 - Integrating with existing GraphQL tooling
-- You want self-documenting API queries
+- Self-documenting API queries are desired
 
 ### Choose GQL When
 
@@ -250,4 +250,4 @@ result = db.execute("""
 | Analytics | GQL |
 | Simple lookups | Either |
 
-For most graph database operations, **GQL** provides more power and flexibility. Use **GraphQL** when you need a familiar, schema-driven interface for application development or when working with teams experienced in GraphQL APIs.
+For most graph database operations, **GQL** provides more power and flexibility. Use **GraphQL** when a familiar, schema-driven interface is needed for application development or when working with teams experienced in GraphQL APIs.

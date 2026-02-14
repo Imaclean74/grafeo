@@ -32,7 +32,7 @@ Cypher uses ASCII-art style pattern matching to query and manipulate graph data.
 
     ---
 
-    MATCH, RETURN, and basic pattern matching.
+    MATCH, RETURN and basic pattern matching.
 
 -   **[Pattern Matching](patterns.md)**
 
@@ -50,7 +50,7 @@ Cypher uses ASCII-art style pattern matching to query and manipulate graph data.
 
     ---
 
-    COUNT, SUM, AVG, and grouping.
+    COUNT, SUM, AVG and grouping.
 
 -   **[Path Queries](paths.md)**
 

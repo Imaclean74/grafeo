@@ -133,12 +133,12 @@ if (grafeo_execute(db, query, &result) != GRAFEO_OK) {
 ### Memory Management
 
 - Opaque pointers (`GrafeoDatabase*`, `GrafeoResult*`, etc.) must be freed with their `grafeo_free_*` function
-- Strings returned via `char**` out-params are caller-owned — free with `grafeo_free_string()`
+- Strings returned via `char**` out-params are caller-owned: free with `grafeo_free_string()`
 - Pointers accessed via getters (e.g. `grafeo_edge_type()`) are valid until the parent is freed
 
 ## Features
 
-- GQL, Cypher, SPARQL, Gremlin, and GraphQL query languages
+- GQL, Cypher, SPARQL, Gremlin and GraphQL query languages
 - Full node/edge CRUD with JSON property serialization
 - ACID transactions with configurable isolation levels
 - HNSW vector similarity search with batch operations

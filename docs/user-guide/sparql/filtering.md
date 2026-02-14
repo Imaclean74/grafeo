@@ -9,7 +9,7 @@ tags:
 
 # Filtering
 
-The `FILTER` clause restricts results based on conditions. Filters can use comparisons, logical operators, and built-in functions.
+The `FILTER` clause restricts results based on conditions. Filters can use comparisons, logical operators and built-in functions.
 
 ## Basic FILTER
 

@@ -1,6 +1,6 @@
 ---
 title: Mutations
-description: Creating, updating, and deleting graph data in Cypher.
+description: Creating, updating and deleting graph data in Cypher.
 tags:
   - cypher
   - mutations
@@ -8,7 +8,7 @@ tags:
 
 # Mutations
 
-Cypher supports mutations for creating, updating, and deleting graph data.
+Cypher supports mutations for creating, updating and deleting graph data.
 
 ## Creating Nodes
 

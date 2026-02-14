@@ -1,6 +1,6 @@
 ---
 title: Development Setup
-description: Setting up your development environment.
+description: Setting up the development environment.
 tags:
   - contributing
 ---

@@ -13,7 +13,7 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 - **SPARQL `FILTER NOT EXISTS`**: parser now recognizes `NOT EXISTS` and `EXISTS` as built-in calls in FILTER constraints, correctly producing anti-join / semi-join plans
 - **SPARQL `FILTER REGEX`**: added REGEX function evaluation in the RDF query planner (parser and translator already supported it, but the planner silently returned no matches)
-- Re-enabled 7 previously-skipped Python tests — all pass: GraphQL range/nested filters (fixed by direct argument operator parsing), SPARQL REGEX and NOT EXISTS (fixed by parser and planner additions)
+- Re-enabled 7 previously-skipped Python tests - all pass: GraphQL range/nested filters (fixed by direct argument operator parsing), SPARQL REGEX and NOT EXISTS (fixed by parser and planner additions)
 
 ## [0.5.2] - 2026-02-13
 
@@ -47,7 +47,7 @@ Internal engine improvements: ~50% memory savings for vector workloads, safer in
 
 ### Improved
 
-- **Topology-only HNSW**: vectors are no longer duplicated inside the HNSW index — the index stores only graph topology and reads vectors on-demand through a `VectorAccessor` trait. ~50% memory reduction for vector workloads
+- **Topology-only HNSW**: vectors are no longer duplicated inside the HNSW index - the index stores only graph topology and reads vectors on-demand through a `VectorAccessor` trait. ~50% memory reduction for vector workloads
 - **Safe ID conversions**: replaced 6 `unsafe transmute_copy` calls with safe `EntityId::as_u64()` / `EntityId::from_u64()` methods
 
 ## [0.4.4] - 2026-02-11

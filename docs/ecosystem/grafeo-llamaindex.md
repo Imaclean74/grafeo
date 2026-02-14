@@ -1,6 +1,6 @@
 ---
 title: grafeo-llamaindex
-description: LlamaIndex integration for GrafeoDB with PropertyGraphStore, vector search, and knowledge graphs.
+description: LlamaIndex integration for GrafeoDB with PropertyGraphStore, vector search and knowledge graphs.
 ---
 
 # grafeo-llamaindex
@@ -29,7 +29,7 @@ uv add grafeo-llamaindex
 pip install grafeo-llamaindex
 ```
 
-Requires Python 3.12+, grafeo >= 0.4.4, and llama-index-core >= 0.14.
+Requires Python 3.12+, grafeo >= 0.4.4 and llama-index-core >= 0.14.
 
 ## Quick Start
 

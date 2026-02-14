@@ -15,7 +15,7 @@ Learn Grafeo through practical, real-world examples.
 
     ---
 
-    Build a social network with users, friendships, posts, and interactions.
+    Build a social network with users, friendships, posts and interactions.
 
     [:octicons-arrow-right-24: Start Tutorial](social-network.md)
 

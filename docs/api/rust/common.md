@@ -8,7 +8,7 @@ tags:
 
 # grafeo-common
 
-Foundation types, memory allocators, and utilities.
+Foundation types, memory allocators and utilities.
 
 ## Types
 

@@ -15,7 +15,7 @@ Grafeo includes a library of built-in graph algorithms for common analysis tasks
 
     ---
 
-    Shortest paths, all paths, and path analysis.
+    Shortest paths, all paths and path analysis.
 
     [:octicons-arrow-right-24: Path Algorithms](path-finding.md)
 
@@ -23,7 +23,7 @@ Grafeo includes a library of built-in graph algorithms for common analysis tasks
 
     ---
 
-    PageRank, betweenness, closeness, and degree centrality.
+    PageRank, betweenness, closeness and degree centrality.
 
     [:octicons-arrow-right-24: Centrality](centrality.md)
 
@@ -31,7 +31,7 @@ Grafeo includes a library of built-in graph algorithms for common analysis tasks
 
     ---
 
-    Louvain, label propagation, and connected components.
+    Louvain, label propagation and connected components.
 
     [:octicons-arrow-right-24: Community Detection](community.md)
 

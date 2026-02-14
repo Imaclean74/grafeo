@@ -5,7 +5,7 @@ description: Query graphs using standard SQL:2023 GRAPH_TABLE syntax.
 
 # SQL/PGQ Query Language
 
-SQL/PGQ (SQL:2023, ISO/IEC 9075-16) brings graph pattern matching to standard SQL. Write `SELECT ... FROM GRAPH_TABLE (MATCH ...)` and query your graph without leaving SQL.
+SQL/PGQ (SQL:2023, ISO/IEC 9075-16) brings graph pattern matching to standard SQL. Write `SELECT ... FROM GRAPH_TABLE (MATCH ...)` and query the graph without leaving SQL.
 
 ## Overview
 
@@ -167,11 +167,11 @@ See [Algorithms](../../algorithms/index.md) for the full list of available proce
 
 **Use SQL/PGQ when:**
 
-- Your team already knows SQL
-- You want to integrate graph queries into existing SQL workflows
-- You need standard SQL features (WHERE, ORDER BY, LIMIT, GROUP BY) around graph patterns
+- The team already knows SQL
+- Graph queries need to integrate into existing SQL workflows
+- Standard SQL features (WHERE, ORDER BY, LIMIT, GROUP BY) are needed around graph patterns
 
 **Use GQL directly when:**
 
-- You want the full power of GQL (INSERT, SET, DELETE, REMOVE)
-- You're doing graph-only work without SQL wrapping
+- The full power of GQL is needed (INSERT, SET, DELETE, REMOVE)
+- The work is graph-only without SQL wrapping

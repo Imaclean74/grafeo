@@ -10,7 +10,7 @@ tags:
 
 Use graph patterns to detect potentially fraudulent activity.
 
-## What You'll Learn
+## Topics Covered
 
 - Detecting suspicious connection patterns
 - Finding anomalies in transaction graphs

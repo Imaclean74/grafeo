@@ -1,6 +1,6 @@
 ---
 title: Grafeo - High-Performance Graph Database
-description: A high-performance, embeddable graph database with a Rust core and no required C dependencies. Python, Node.js, Go, and WebAssembly bindings. GQL (ISO standard) query language.
+description: A high-performance, embeddable graph database with a Rust core and no required C dependencies. Python, Node.js, Go and WebAssembly bindings. GQL (ISO standard) query language.
 hide:
   - navigation
   - toc
@@ -33,19 +33,19 @@ hide:
 
     ---
 
-    Built from the ground up in Rust for maximum performance with vectorized execution, adaptive chunking, and SIMD-optimized operations.
+    Built from the ground up in Rust for maximum performance with vectorized execution, adaptive chunking and SIMD-optimized operations.
 
 -   :material-database-search:{ .lg .middle } **Multi-Language Queries**
 
     ---
 
-    GQL, Cypher, Gremlin, GraphQL, SPARQL, and SQL/PGQ. Choose the query language that fits your needs and expertise.
+    GQL, Cypher, Gremlin, GraphQL, SPARQL and SQL/PGQ. Choose the query language that fits the project and expertise level.
 
 -   :material-graph:{ .lg .middle } **LPG & RDF Support**
 
     ---
 
-    Dual data model support for both Labeled Property Graphs and RDF triples. Choose the model that fits your domain.
+    Dual data model support for both Labeled Property Graphs and RDF triples. Choose the model that fits the domain.
 
 -   :material-vector-line:{ .lg .middle } **Vector Search**
 
@@ -57,7 +57,7 @@ hide:
 
     ---
 
-    Embed directly into your application with zero external dependencies. Perfect for edge computing, desktop apps, and serverless environments.
+    Embed directly into the application with zero external dependencies. Perfect for edge computing, desktop apps and serverless environments.
 
 -   :fontawesome-brands-rust:{ .lg .middle } **Rust Core**
 
@@ -75,13 +75,13 @@ hide:
 
     ---
 
-    Python (PyO3), Node.js/TypeScript (napi-rs), Go (CGO), and WebAssembly (wasm-bindgen). Use Grafeo from your language of choice.
+    Python (PyO3), Node.js/TypeScript (napi-rs), Go (CGO) and WebAssembly (wasm-bindgen). Use Grafeo from the language of choice.
 
 -   :material-notebook:{ .lg .middle } **Notebook Widgets**
 
     ---
 
-    Interactive graph and vector visualizations for Marimo, Jupyter, and other notebooks. Explore your data visually.
+    Interactive graph and vector visualizations for Marimo, Jupyter and other notebooks. Explore data visually.
 
 </div>
 
@@ -186,7 +186,7 @@ Grafeo supports both major graph data models with optimized storage for each:
 
 ### Query Languages
 
-Choose the query language that fits your needs:
+Choose the query language that fits the project:
 
 | Language | Data Model | Style |
 |----------|------------|-------|

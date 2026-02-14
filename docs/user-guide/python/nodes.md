@@ -8,7 +8,7 @@ tags:
 
 # Working with Nodes
 
-Learn how to create, read, update, and delete nodes using the Python API.
+Learn how to create, read, update and delete nodes using the Python API.
 
 ## Creating Nodes
 

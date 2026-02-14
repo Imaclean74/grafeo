@@ -9,7 +9,7 @@ tags:
 
 # Arguments
 
-This guide covers filtering with GraphQL arguments, the `where` clause, and comparison operators.
+This guide covers filtering with GraphQL arguments, the `where` clause and comparison operators.
 
 ## Direct Arguments
 

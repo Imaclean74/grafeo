@@ -26,7 +26,7 @@ This finds all nodes with the `Person` label and returns their `name` property.
 
 ## Named Queries
 
-Name your queries for clarity:
+Name queries for clarity:
 
 ```graphql
 query GetPeople {
@@ -39,7 +39,7 @@ query GetPeople {
 
 ## Field Selection
 
-Select the specific properties you want returned:
+Select the specific properties to return:
 
 ```graphql
 # Single field
@@ -112,7 +112,7 @@ Use `first` and `skip` to paginate results:
 }
 ```
 
-You can also use `limit` and `offset` as aliases:
+`limit` and `offset` are also supported as aliases:
 
 ```graphql
 {
@@ -154,7 +154,7 @@ Sort results with `orderBy`:
 
 ## Combining Features
 
-Combine filtering, ordering, and pagination:
+Combine filtering, ordering and pagination:
 
 ```graphql
 {

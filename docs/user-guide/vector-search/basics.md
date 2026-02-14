@@ -106,7 +106,7 @@ LIMIT 10
 
 Combine graph traversal with vector similarity for powerful queries.
 
-### Find Similar Documents by Authors You Follow
+### Find Similar Documents by Followed Authors
 
 ```sql
 MATCH (me:User {id: $user_id})-[:FOLLOWS]->(author:Author)-[:WROTE]->(doc:Document)

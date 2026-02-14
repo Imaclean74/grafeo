@@ -28,7 +28,7 @@ Requires Python 3.12+ and grafeo >= 0.4.4.
 
 ### Claude Desktop
 
-Add to your `claude_desktop_config.json`:
+Add to `claude_desktop_config.json`:
 
 ```json
 {
@@ -61,7 +61,7 @@ grafeo-mcp exposes 16 tools organized in 4 categories:
 - **`get_node`** - Retrieve a node by ID with properties and connections
 - **`search_nodes`** - Find nodes by label, with optional property filters
 - **`get_neighbors`** - Explore a node's neighborhood (in/out/both)
-- **`get_schema`** - Discover labels, edge types, and property keys
+- **`get_schema`** - Discover labels, edge types and property keys
 - **`get_stats`** - Database statistics (counts, memory, configuration)
 
 ### Vector Search
@@ -80,7 +80,7 @@ grafeo-mcp exposes 16 tools organized in 4 categories:
 
 ## MCP Resources
 
-- `graph://schema` - Rich schema with labels, properties, and edge types
+- `graph://schema` - Rich schema with labels, properties and edge types
 - `graph://stats` - Database statistics (counts, memory, disk, config)
 - `graph://nodes/{id}` - Individual node details and connection summary
 
@@ -92,7 +92,7 @@ grafeo-mcp exposes 16 tools organized in 4 categories:
 
 ## Transport
 
-Supports stdio (default), SSE, and streamable HTTP transports.
+Supports stdio (default), SSE and streamable HTTP transports.
 
 ## Requirements
 

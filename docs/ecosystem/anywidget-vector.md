@@ -7,7 +7,7 @@ Interactive 3D vector visualization for Python notebooks.
 
 ## Overview
 
-anywidget-vector provides 3D visualization for high-dimensional embeddings and vector data. Built on Three.js and the anywidget framework, it works universally across Jupyter, Marimo, VS Code, Colab, and Databricks.
+anywidget-vector provides 3D visualization for high-dimensional embeddings and vector data. Built on Three.js and the anywidget framework, it works universally across Jupyter, Marimo, VS Code, Colab and Databricks.
 
 ## Features
 
