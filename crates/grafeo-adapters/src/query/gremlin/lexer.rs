@@ -5,6 +5,8 @@
 use std::iter::Peekable;
 use std::str::Chars;
 
+use grafeo_common::utils::error::SourceSpan;
+
 /// Token types for Gremlin.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
@@ -139,20 +141,15 @@ pub enum TokenKind {
 #[derive(Debug, Clone)]
 pub struct Token {
     pub kind: TokenKind,
-    pub span: Span,
-}
-
-/// Source code span.
-#[derive(Debug, Clone, Copy)]
-pub struct Span {
-    pub start: usize,
-    pub end: usize,
+    pub span: SourceSpan,
 }
 
 /// Gremlin lexer.
 pub struct Lexer<'a> {
     chars: Peekable<Chars<'a>>,
     position: usize,
+    line: u32,
+    column: u32,
 }
 
 impl<'a> Lexer<'a> {
@@ -161,6 +158,8 @@ impl<'a> Lexer<'a> {
         Self {
             chars: source.chars().peekable(),
             position: 0,
+            line: 1,
+            column: 1,
         }
     }
 
@@ -169,6 +168,8 @@ impl<'a> Lexer<'a> {
         self.skip_whitespace();
 
         let start = self.position;
+        let start_line = self.line;
+        let start_column = self.column;
 
         let kind = match self.advance() {
             Some('.') => TokenKind::Dot,
@@ -194,10 +195,7 @@ impl<'a> Lexer<'a> {
 
         Token {
             kind,
-            span: Span {
-                start,
-                end: self.position,
-            },
+            span: SourceSpan::new(start, self.position, start_line, start_column),
         }
     }
 
@@ -217,8 +215,14 @@ impl<'a> Lexer<'a> {
 
     fn advance(&mut self) -> Option<char> {
         let c = self.chars.next();
-        if c.is_some() {
-            self.position += 1;
+        if let Some(ch) = c {
+            self.position += ch.len_utf8();
+            if ch == '\n' {
+                self.line += 1;
+                self.column = 1;
+            } else {
+                self.column += 1;
+            }
         }
         c
     }

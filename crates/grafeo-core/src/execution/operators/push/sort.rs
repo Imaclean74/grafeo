@@ -172,9 +172,9 @@ impl PushOperator for SortPushOperator {
             return Ok(());
         }
 
-        // Sort the buffer - clone keys to avoid borrow issues
-        let keys = self.keys.clone();
-        self.buffer.sort_by(|a, b| compare_rows(a, b, &keys));
+        // Sort the buffer - borrow keys separately to avoid borrow conflict
+        let keys = &self.keys;
+        self.buffer.sort_by(|a, b| compare_rows(a, b, keys));
 
         // Emit sorted rows in chunks
         let num_cols = self.num_columns.unwrap_or(0);
@@ -294,8 +294,8 @@ impl SpillableSortPushOperator {
         };
 
         // Sort current buffer
-        let keys = self.keys.clone();
-        self.buffer.sort_by(|a, b| compare_rows(a, b, &keys));
+        let keys = &self.keys;
+        self.buffer.sort_by(|a, b| compare_rows(a, b, keys));
 
         // Initialize external sort if needed
         if self.external_sort.is_none() {
@@ -381,8 +381,8 @@ impl PushOperator for SpillableSortPushOperator {
                 .map_err(|e| OperatorError::Execution(e.to_string()))?
         } else {
             // No spilling occurred - just sort in memory
-            let keys = self.keys.clone();
-            self.buffer.sort_by(|a, b| compare_rows(a, b, &keys));
+            let keys = &self.keys;
+            self.buffer.sort_by(|a, b| compare_rows(a, b, keys));
             std::mem::take(&mut self.buffer)
         };
 

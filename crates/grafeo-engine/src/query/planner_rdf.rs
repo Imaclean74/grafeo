@@ -740,6 +740,7 @@ impl RdfPlanner {
         let operator = Box::new(RdfInsertTripleOperator::new(
             Arc::clone(&self.store),
             triple,
+            insert.graph.clone(),
             self.tx_id,
         ));
 
@@ -819,6 +820,7 @@ impl RdfPlanner {
         let operator = Box::new(RdfDeleteTripleOperator::new(
             Arc::clone(&self.store),
             triple,
+            delete.graph.clone(),
             self.tx_id,
         ));
 
@@ -895,15 +897,22 @@ impl RdfPlanner {
 struct RdfInsertTripleOperator {
     store: Arc<RdfStore>,
     triple: Triple,
+    graph_name: Option<String>,
     tx_id: Option<TxId>,
     inserted: bool,
 }
 
 impl RdfInsertTripleOperator {
-    fn new(store: Arc<RdfStore>, triple: Triple, tx_id: Option<TxId>) -> Self {
+    fn new(
+        store: Arc<RdfStore>,
+        triple: Triple,
+        graph_name: Option<String>,
+        tx_id: Option<TxId>,
+    ) -> Self {
         Self {
             store,
             triple,
+            graph_name,
             tx_id,
             inserted: false,
         }
@@ -916,11 +925,17 @@ impl Operator for RdfInsertTripleOperator {
             return Ok(None);
         }
 
+        // Resolve target store: named graph or default
+        let target = match &self.graph_name {
+            Some(name) => self.store.graph_or_create(name),
+            None => Arc::clone(&self.store),
+        };
+
         // Insert the triple (buffered if in a transaction)
         if let Some(tx_id) = self.tx_id {
-            self.store.insert_in_tx(tx_id, self.triple.clone());
+            target.insert_in_tx(tx_id, self.triple.clone());
         } else {
-            self.store.insert(self.triple.clone());
+            target.insert(self.triple.clone());
         }
         self.inserted = true;
 
@@ -1090,15 +1105,22 @@ impl Operator for RdfInsertPatternOperator {
 struct RdfDeleteTripleOperator {
     store: Arc<RdfStore>,
     triple: Triple,
+    graph_name: Option<String>,
     tx_id: Option<TxId>,
     deleted: bool,
 }
 
 impl RdfDeleteTripleOperator {
-    fn new(store: Arc<RdfStore>, triple: Triple, tx_id: Option<TxId>) -> Self {
+    fn new(
+        store: Arc<RdfStore>,
+        triple: Triple,
+        graph_name: Option<String>,
+        tx_id: Option<TxId>,
+    ) -> Self {
         Self {
             store,
             triple,
+            graph_name,
             tx_id,
             deleted: false,
         }
@@ -1111,11 +1133,17 @@ impl Operator for RdfDeleteTripleOperator {
             return Ok(None);
         }
 
+        // Resolve target store: named graph or default
+        let target = match &self.graph_name {
+            Some(name) => self.store.graph_or_create(name),
+            None => Arc::clone(&self.store),
+        };
+
         // Delete the triple (buffered if in a transaction)
         if let Some(tx_id) = self.tx_id {
-            self.store.remove_in_tx(tx_id, self.triple.clone());
+            target.remove_in_tx(tx_id, self.triple.clone());
         } else {
-            self.store.remove(&self.triple);
+            target.remove(&self.triple);
         }
         self.deleted = true;
 

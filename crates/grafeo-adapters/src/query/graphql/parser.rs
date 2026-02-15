@@ -10,8 +10,7 @@ use grafeo_common::utils::error::{Error, Result};
 pub struct Parser<'a> {
     tokens: Vec<Token>,
     position: usize,
-    /// Marker for source lifetime.
-    _source: std::marker::PhantomData<&'a str>,
+    source: &'a str,
 }
 
 impl<'a> Parser<'a> {
@@ -22,7 +21,7 @@ impl<'a> Parser<'a> {
         Self {
             tokens,
             position: 0,
-            _source: std::marker::PhantomData,
+            source,
         }
     }
 
@@ -419,11 +418,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn current_span(&self) -> grafeo_common::utils::error::SourceSpan {
+        self.tokens
+            .get(self.position)
+            .or_else(|| self.tokens.last())
+            .map_or(
+                grafeo_common::utils::error::SourceSpan::new(0, 0, 1, 1),
+                |t| t.span,
+            )
+    }
+
     fn error(&self, message: &str) -> Error {
-        Error::Query(grafeo_common::utils::error::QueryError::new(
-            grafeo_common::utils::error::QueryErrorKind::Syntax,
-            message,
-        ))
+        Error::Query(
+            grafeo_common::utils::error::QueryError::new(
+                grafeo_common::utils::error::QueryErrorKind::Syntax,
+                message,
+            )
+            .with_span(self.current_span())
+            .with_source(self.source.to_string()),
+        )
     }
 }
 

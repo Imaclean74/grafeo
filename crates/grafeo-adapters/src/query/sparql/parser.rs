@@ -2084,15 +2084,9 @@ impl<'a> Parser<'a> {
 
     fn error(&self, message: &str) -> Error {
         Error::Query(
-            QueryError::new(
-                QueryErrorKind::Syntax,
-                format!(
-                    "{} at line {}, column {}",
-                    message, self.current.span.line, self.current.span.column
-                ),
-            )
-            .with_span(self.current.span)
-            .with_source(self.source.to_string()),
+            QueryError::new(QueryErrorKind::Syntax, message)
+                .with_span(self.current.span)
+                .with_source(self.source.to_string()),
         )
     }
 }

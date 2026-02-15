@@ -244,6 +244,132 @@ mod tests {
         );
     }
 
+    // ==================== INSERT DATA + GRAPH clause ====================
+
+    #[test]
+    fn insert_data_graph_routes_to_named_graph() {
+        let db = rdf_db();
+        let session = db.session();
+
+        // INSERT DATA into a named graph via SPARQL
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    GRAPH <http://ex.org/g1> {
+                        <http://ex.org/alice> <http://ex.org/name> "Alice" .
+                    }
+                }"#,
+            )
+            .unwrap();
+
+        // Default graph should be empty
+        let default_result = session
+            .execute_sparql("SELECT ?s WHERE { ?s ?p ?o }")
+            .unwrap();
+        assert_eq!(
+            default_result.row_count(),
+            0,
+            "Default graph should be empty after INSERT DATA GRAPH"
+        );
+
+        // Named graph should have the triple
+        let named_result = session
+            .execute_sparql(
+                r#"SELECT ?name WHERE {
+                    GRAPH <http://ex.org/g1> {
+                        <http://ex.org/alice> <http://ex.org/name> ?name
+                    }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(
+            named_result.row_count(),
+            1,
+            "Named graph should have the inserted triple"
+        );
+    }
+
+    #[test]
+    fn delete_data_graph_removes_from_named_graph() {
+        let db = rdf_db();
+        let session = db.session();
+
+        // Insert into named graph
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    GRAPH <http://ex.org/g1> {
+                        <http://ex.org/alice> <http://ex.org/name> "Alice" .
+                        <http://ex.org/bob> <http://ex.org/name> "Bob" .
+                    }
+                }"#,
+            )
+            .unwrap();
+
+        // Delete one triple from the named graph
+        session
+            .execute_sparql(
+                r#"DELETE DATA {
+                    GRAPH <http://ex.org/g1> {
+                        <http://ex.org/alice> <http://ex.org/name> "Alice" .
+                    }
+                }"#,
+            )
+            .unwrap();
+
+        // Only Bob should remain
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name WHERE {
+                    GRAPH <http://ex.org/g1> { ?s <http://ex.org/name> ?name }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1, "Should have 1 triple after delete");
+    }
+
+    #[test]
+    fn insert_data_graph_does_not_leak_to_default() {
+        let db = rdf_db();
+        let session = db.session();
+
+        // Insert into default and named
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/default> <http://ex.org/p> "default" .
+                }"#,
+            )
+            .unwrap();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    GRAPH <http://ex.org/g1> {
+                        <http://ex.org/named> <http://ex.org/p> "named" .
+                    }
+                }"#,
+            )
+            .unwrap();
+
+        // Default graph has exactly 1 triple
+        let default_result = session
+            .execute_sparql("SELECT ?s WHERE { ?s ?p ?o }")
+            .unwrap();
+        assert_eq!(default_result.row_count(), 1, "Default graph: 1 triple");
+
+        // Named graph has exactly 1 triple
+        let named_result = session
+            .execute_sparql(
+                r#"SELECT ?s WHERE {
+                    GRAPH <http://ex.org/g1> { ?s ?p ?o }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(named_result.row_count(), 1, "Named graph: 1 triple");
+    }
+
+    // ==================== Graph clause isolation ====================
+
     #[test]
     fn graph_clause_isolates_from_default() {
         let db = rdf_db();

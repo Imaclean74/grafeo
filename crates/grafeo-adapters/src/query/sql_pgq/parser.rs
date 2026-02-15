@@ -38,6 +38,7 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     current: Token,
     previous: Token,
+    source: &'a str,
 }
 
 impl<'a> Parser<'a> {
@@ -54,6 +55,7 @@ impl<'a> Parser<'a> {
             lexer,
             current,
             previous,
+            source: query,
         }
     }
 
@@ -1031,6 +1033,7 @@ impl<'a> Parser<'a> {
     fn error(&self, message: &str) -> grafeo_common::utils::error::Error {
         QueryError::new(QueryErrorKind::Syntax, message)
             .with_span(self.current.span)
+            .with_source(self.source.to_string())
             .into()
     }
 

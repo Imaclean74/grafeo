@@ -373,13 +373,13 @@ impl AggregateState {
                         if let Value::Int64(i) = v {
                             *sum += i;
                         } else if let Value::Float64(f) = v {
-                            // Convert to float distinct
-                            let seen_clone = seen.clone();
-                            *self = AggregateState::SumFloatDistinct(*sum as f64 + f, seen_clone);
+                            // Convert to float distinct — move the seen set instead of cloning
+                            let moved_seen = std::mem::take(seen);
+                            *self = AggregateState::SumFloatDistinct(*sum as f64 + f, moved_seen);
                         } else if let Some(num) = value_to_f64(v) {
                             // RDF string-encoded numerics
-                            let seen_clone = seen.clone();
-                            *self = AggregateState::SumFloatDistinct(*sum as f64 + num, seen_clone);
+                            let moved_seen = std::mem::take(seen);
+                            *self = AggregateState::SumFloatDistinct(*sum as f64 + num, moved_seen);
                         }
                     }
                 }

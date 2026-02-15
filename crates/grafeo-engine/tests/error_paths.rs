@@ -485,3 +485,101 @@ fn test_in_operator_with_empty_list() {
         "IN with empty list should match nothing"
     );
 }
+
+// ============================================================================
+// Error Position Info (0.5.5)
+// ============================================================================
+
+#[test]
+fn test_gql_error_shows_line_and_column() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // Missing closing paren — genuine syntax error
+    let result = session.execute("MATCH (n:Person RETURN n");
+    assert!(result.is_err(), "Expected parse error for malformed GQL");
+    let err_str = result.unwrap_err().to_string();
+    // Should contain the caret display with --> position
+    assert!(
+        err_str.contains("-->"),
+        "GQL error should show position, got: {err_str}"
+    );
+    // Should contain the source line
+    assert!(
+        err_str.contains("RETURN"),
+        "GQL error should show source query, got: {err_str}"
+    );
+    // Should contain caret markers
+    assert!(
+        err_str.contains('^'),
+        "GQL error should show caret markers, got: {err_str}"
+    );
+}
+
+#[test]
+fn test_gql_multiline_error_position() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // RETURN is a typo — genuine syntax error on line 3
+    let query = "MATCH (n:Person)\nWHERE n.age > 30\nRETRUN n";
+    let result = session.execute(query);
+    assert!(result.is_err(), "Expected parse error for RETURN typo");
+    let err_str = result.unwrap_err().to_string();
+    // Error should reference line 3 (where RETURN is)
+    assert!(
+        err_str.contains("--> query:3:"),
+        "Multiline error should show line 3, got: {err_str}"
+    );
+}
+
+#[test]
+#[cfg(feature = "cypher")]
+fn test_cypher_error_shows_position() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // Missing closing paren — genuine syntax error
+    let result = session.execute_cypher("MATCH (n:Person RETURN n");
+    assert!(result.is_err(), "Expected parse error for malformed Cypher");
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("-->"),
+        "Cypher error should show position, got: {err_str}"
+    );
+    assert!(
+        err_str.contains("RETURN"),
+        "Cypher error should show source, got: {err_str}"
+    );
+}
+
+#[test]
+#[cfg(feature = "sparql")]
+fn test_sparql_error_shows_position() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // Missing closing brace — genuine syntax error
+    let result = session.execute_sparql("SELECT ?s WHERE { ?s ?p ?o");
+    assert!(result.is_err(), "Expected parse error for malformed SPARQL");
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("-->"),
+        "SPARQL error should show position, got: {err_str}"
+    );
+}
+
+#[test]
+#[cfg(feature = "sql-pgq")]
+fn test_sql_pgq_error_shows_position() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    let result = session.execute_sql("SELECT * FROM GRAPH_TABLE(g MATCH (n) COLUMNS (n.name))");
+    assert!(result.is_err());
+    let err_str = result.unwrap_err().to_string();
+    assert!(
+        err_str.contains("-->"),
+        "SQL/PGQ error should show position, got: {err_str}"
+    );
+}
