@@ -13,12 +13,12 @@ A high-performance, embeddable graph database with a Rust core and no required C
 
 | Query Language | LPG | RDF | Status |
 |----------------|-----|-----|--------|
-| GQL (ISO/IEC 39075) | ✅ | — | Default |
-| Cypher (openCypher 9.0) | ✅ | — | Default |
-| Gremlin (Apache TinkerPop) | ✅ | — | Default |
+| GQL (ISO/IEC 39075) | ✅ | - | Default |
+| Cypher (openCypher 9.0) | ✅ | - | Default |
+| Gremlin (Apache TinkerPop) | ✅ | - | Default |
 | GraphQL | ✅ | ✅ | Default |
-| SPARQL (W3C 1.1) | — | ✅ | Default |
-| SQL/PGQ (SQL:2023) | ✅ | — | Default |
+| SPARQL (W3C 1.1) | - | ✅ | Default |
+| SQL/PGQ (SQL:2023) | ✅ | - | Default |
 
 Grafeo uses a modular translator architecture where query languages are parsed into ASTs, then translated to a unified logical plan that executes against the appropriate storage backend (LPG or RDF).
 

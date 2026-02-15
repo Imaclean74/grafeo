@@ -9,11 +9,11 @@ tags:
 
 # Aliases & Fragments
 
-This guide covers advanced GraphQL query composition using aliases, named fragments, and inline fragments.
+This guide covers advanced GraphQL query composition using aliases, named fragments and inline fragments.
 
 ## Aliases
 
-Aliases let you rename fields in the result or query the same type multiple times:
+Aliases rename fields in the result or query the same type multiple times:
 
 ### Renaming Fields
 
@@ -60,7 +60,7 @@ Query the same type with different filters using aliases:
 
 ## Named Fragments
 
-Fragments let you define reusable sets of fields:
+Fragments define reusable sets of fields:
 
 ### Defining and Using Fragments
 

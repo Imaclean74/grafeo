@@ -7,7 +7,8 @@ This is a thin Python launcher package that runs the pre-built Grafeo CLI binary
 ## Installation
 
 ```bash
-pip install grafeo-cli
+uv add grafeo-cli
+# or: pip install grafeo-cli
 ```
 
 The package looks for the `grafeo` binary in this order:

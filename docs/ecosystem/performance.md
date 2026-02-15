@@ -9,7 +9,7 @@ tags:
 
 # Performance Baselines
 
-Measured performance characteristics to help you understand what to expect from Grafeo.
+Measured performance characteristics showing what to expect from Grafeo.
 
 !!! note "Benchmark Environment"
     Unless otherwise noted, benchmarks were run on:
@@ -303,7 +303,7 @@ db = GrafeoDB.with_config(config)
 
 ---
 
-## Profiling Your Workload
+## Workload Profiling
 
 Use built-in statistics:
 

@@ -36,7 +36,7 @@ CGO bindings for cloud-native applications.
 
 ## WebAssembly API
 
-Run Grafeo in the browser, Deno, or Cloudflare Workers.
+Run Grafeo in the browser, Deno or Cloudflare Workers.
 
 - **Package**: [`@grafeo-db/wasm`](https://www.npmjs.com/package/@grafeo-db/wasm)
 - In-memory only, all query languages supported

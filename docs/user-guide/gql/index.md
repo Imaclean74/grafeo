@@ -9,7 +9,7 @@ GQL (Graph Query Language) is the ISO standard for querying property graphs (ISO
 
 ## Overview
 
-GQL uses pattern matching to query and manipulate graph data. If you're familiar with Cypher, you'll find GQL very similar.
+GQL uses pattern matching to query and manipulate graph data. The syntax is very similar to Cypher.
 
 ## Quick Reference
 
@@ -32,7 +32,7 @@ GQL uses pattern matching to query and manipulate graph data. If you're familiar
 
     ---
 
-    MATCH, RETURN, and basic pattern matching.
+    MATCH, RETURN and basic pattern matching.
 
 -   **[Pattern Matching](patterns.md)**
 
@@ -50,7 +50,7 @@ GQL uses pattern matching to query and manipulate graph data. If you're familiar
 
     ---
 
-    COUNT, SUM, AVG, and grouping.
+    COUNT, SUM, AVG and grouping.
 
 -   **[Path Queries](paths.md)**
 

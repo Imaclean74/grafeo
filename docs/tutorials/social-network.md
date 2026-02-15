@@ -8,9 +8,9 @@ tags:
 
 # Social Network Graph
 
-In this tutorial, you'll build a social network with users, friendships, posts, and likes.
+This tutorial builds a social network with users, friendships, posts and likes.
 
-## What You'll Learn
+## Topics Covered
 
 - Creating nodes with labels and properties
 - Creating relationships between nodes

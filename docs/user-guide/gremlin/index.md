@@ -165,24 +165,24 @@ let result = db.execute_gremlin("g.V().hasLabel('Person')").unwrap();
 
     ---
 
-    g.V(), hasLabel, has, and filtering.
+    g.V(), hasLabel, has and filtering.
 
 -   **[Edge Traversals](edge-traversals.md)**
 
     ---
 
-    out, in, both, and relationship patterns.
+    out, in, both and relationship patterns.
 
 -   **[Properties](properties.md)**
 
     ---
 
-    values, valueMap, and property access.
+    values, valueMap and property access.
 
 -   **[Aggregations](aggregations.md)**
 
     ---
 
-    count, sum, and grouping.
+    count, sum and grouping.
 
 </div>

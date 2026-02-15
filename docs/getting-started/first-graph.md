@@ -1,17 +1,17 @@
 ---
-title: Your First Graph
-description: Build your first graph application with Grafeo.
+title: First Graph
+description: Build a first graph application with Grafeo.
 ---
 
-# Your First Graph
+# First Graph
 
-In this tutorial, you'll build a simple social network graph to learn the fundamentals of Grafeo.
+This tutorial walks through building a simple social network graph to cover the fundamentals of Grafeo.
 
-## What We'll Build
+## What This Builds
 
 A social network with:
 
-- **People** with names, ages, and locations
+- **People** with names, ages and locations
 - **Friendships** between people
 - **Posts** created by people
 - **Likes** on posts
@@ -297,7 +297,7 @@ Now let's explore the social network:
 
 ## The Complete Graph
 
-Here's a visualization of what we've built:
+Here is a visualization of the completed graph:
 
 ```mermaid
 graph LR
@@ -320,8 +320,8 @@ graph LR
 
 ## Next Steps
 
-Congratulations! You've built your first graph application. Continue learning:
+Congratulations on building a first graph application. Continue learning:
 
-- [Configuration](configuration.md) - Optimize your database
+- [Configuration](configuration.md) - Optimize the database
 - [GQL Query Language](../user-guide/gql/index.md) - Master the query language
 - [Tutorials](../tutorials/index.md) - More real-world examples

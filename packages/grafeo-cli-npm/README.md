@@ -46,8 +46,8 @@ grafeo init ./new-db
 # Via Rust
 cargo install grafeo-cli
 
-# Via pip
-pip install grafeo-cli
+# Via pip/uv
+uv add grafeo-cli
 
 # Direct download
 # https://github.com/GrafeoDB/grafeo/releases

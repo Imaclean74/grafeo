@@ -1,6 +1,6 @@
 ---
 title: grafeo-langchain
-description: LangChain integration for GrafeoDB with graph store, vector store, and Graph RAG retrieval.
+description: LangChain integration for GrafeoDB with graph store, vector store and Graph RAG retrieval.
 ---
 
 # grafeo-langchain

@@ -1,11 +1,11 @@
 ---
 title: GraphQL Query Language
-description: Query your graph data using GraphQL syntax.
+description: Query graph data using GraphQL syntax.
 ---
 
 # GraphQL Query Language
 
-GraphQL is a query language for APIs developed by Facebook. Grafeo supports GraphQL as an optional query language, allowing you to query graph data using familiar GraphQL syntax.
+GraphQL is a query language for APIs developed by Facebook. Grafeo supports GraphQL as an optional query language, enabling queries against graph data using familiar GraphQL syntax.
 
 ## Overview
 
@@ -241,7 +241,7 @@ Use `orderBy` to sort results:
 
 ## Mutations
 
-GraphQL mutations allow you to create and delete nodes in the graph.
+GraphQL mutations support creating and deleting nodes in the graph.
 
 ### Creating Nodes
 
@@ -434,7 +434,7 @@ Translates to:
 
     ---
 
-    Types, fields, and simple selections.
+    Types, fields and simple selections.
 
 -   **[Arguments](arguments.md)**
 

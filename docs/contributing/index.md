@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Grafeo!
 
     ---
 
-    Set up your development environment.
+    Setting up the development environment.
 
 -   **[Code Style](code-style.md)**
 
@@ -39,8 +39,8 @@ Thank you for your interest in contributing to Grafeo!
 
 ## Code of Conduct
 
-Be respectful and constructive. We're all here to build something great together.
+Be respectful and constructive. The goal is to build something great together.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under Apache-2.0.
+By contributing, contributors agree that contributions will be licensed under Apache-2.0.

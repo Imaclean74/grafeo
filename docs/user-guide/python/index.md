@@ -37,7 +37,7 @@ for row in result:
 
     ---
 
-    Creating, reading, updating, and deleting nodes.
+    Creating, reading, updating and deleting nodes.
 
 -   **[Working with Edges](edges.md)**
 

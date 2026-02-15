@@ -1,6 +1,6 @@
 ---
 title: Basic Traversals
-description: Learn basic Gremlin traversals with g.V(), filtering, and vertex selection.
+description: Learn basic Gremlin traversals with g.V(), filtering and vertex selection.
 tags:
   - gremlin
   - traversals

@@ -8,7 +8,7 @@ tags:
 
 # Nodes and Labels
 
-Nodes are the fundamental entities in your graph. Each node can have one or more labels and any number of properties.
+Nodes are the fundamental entities in a graph. Each node can have one or more labels and any number of properties.
 
 ## Creating Nodes
 

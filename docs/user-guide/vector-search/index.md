@@ -9,11 +9,11 @@ tags:
 
 # Vector Search
 
-Grafeo provides first-class support for vector similarity search, enabling semantic search, recommendation systems, and AI-powered applications.
+Grafeo provides first-class support for vector similarity search, enabling semantic search, recommendation systems and AI-powered applications.
 
 ## Overview
 
-Vector search allows you to find nodes based on the semantic similarity of their embeddings rather than exact property matches. This is essential for:
+Vector search finds nodes based on the semantic similarity of their embeddings rather than exact property matches. This is essential for:
 
 - **Semantic search** - Find documents by meaning, not keywords
 - **Recommendations** - Suggest similar items based on embeddings
@@ -84,13 +84,13 @@ Benchmark results on 384-dimensional vectors:
 
 **Use vector search when:**
 
-- You need semantic/meaning-based retrieval
+- Semantic/meaning-based retrieval is needed
 - Working with embeddings from ML models (OpenAI, Sentence Transformers, etc.)
 - Building recommendation or similarity features
 - Implementing RAG (Retrieval-Augmented Generation)
 
 **Use traditional queries when:**
 
-- You need exact property matches
+- Exact property matches are needed
 - Working with structured data (names, IDs, dates)
 - Relationships matter more than similarity

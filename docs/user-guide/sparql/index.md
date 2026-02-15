@@ -88,13 +88,13 @@ SPARQL is enabled by default in Grafeo:
 
     ---
 
-    SELECT, WHERE, and basic triple patterns.
+    SELECT, WHERE and basic triple patterns.
 
 -   **[Triple Patterns](patterns.md)**
 
     ---
 
-    Matching subjects, predicates, and objects.
+    Matching subjects, predicates and objects.
 
 -   **[Filtering](filtering.md)**
 
@@ -106,7 +106,7 @@ SPARQL is enabled by default in Grafeo:
 
     ---
 
-    COUNT, SUM, AVG, GROUP BY, and HAVING.
+    COUNT, SUM, AVG, GROUP BY and HAVING.
 
 -   **[Property Paths](paths.md)**
 
@@ -118,6 +118,6 @@ SPARQL is enabled by default in Grafeo:
 
     ---
 
-    String, numeric, and date/time functions.
+    String, numeric and date/time functions.
 
 </div>

@@ -1,11 +1,11 @@
 ---
 title: Installation
-description: Install Grafeo for Python, Node.js, Go, Rust, or WebAssembly.
+description: Install Grafeo for Python, Node.js, Go, Rust or WebAssembly.
 ---
 
 # Installation
 
-Grafeo supports Python, Node.js/TypeScript, Go, Rust, and WebAssembly. Choose the installation method for your preferred language.
+Grafeo supports Python, Node.js/TypeScript, Go, Rust and WebAssembly. Choose the installation method for the preferred language.
 
 ## Python
 
@@ -105,13 +105,13 @@ console.log('Grafeo WASM installed successfully!');
 
 ### Using Cargo
 
-Add Grafeo to your project:
+Add Grafeo to the project:
 
 ```bash
 cargo add grafeo
 ```
 
-Or add it manually to your `Cargo.toml`:
+Or add it manually to `Cargo.toml`:
 
 ```toml
 [dependencies]
@@ -153,7 +153,7 @@ grafeo = { version = "0.5", features = ["embed"] }
 
 | Feature | Description |
 |---------|-------------|
-| `gql` | GQL (ISO/IEC 39075) — default query language |
+| `gql` | GQL (ISO/IEC 39075): default query language |
 | `cypher` | Cypher (openCypher 9.0) |
 | `sparql` | SPARQL (W3C 1.1) + RDF support |
 | `gremlin` | Gremlin (Apache TinkerPop) |
@@ -186,7 +186,7 @@ fn main() -> Result<(), grafeo::Error> {
 For a standalone database server accessible via REST API, use [grafeo-server](../ecosystem/grafeo-server.md):
 
 ```bash
-# Standard — all query languages, AI/search, web UI
+# Standard: all query languages, AI/search, web UI
 docker run -p 7474:7474 grafeo/grafeo-server
 ```
 
@@ -194,15 +194,15 @@ Three image variants are available:
 
 | Variant | Tag | Description |
 |---------|-----|-------------|
-| **lite** | `grafeo-server:lite` | GQL only, no UI — smallest footprint |
+| **lite** | `grafeo-server:lite` | GQL only, no UI, smallest footprint |
 | **standard** | `grafeo-server:latest` | All languages + AI/search + web UI |
 | **full** | `grafeo-server:full` | Everything + auth + TLS + ONNX embed |
 
 ```bash
-# Lite — minimal, GQL only
+# Lite: minimal, GQL only
 docker run -p 7474:7474 grafeo/grafeo-server:lite
 
-# Full — production with auth and TLS
+# Full: production with auth and TLS
 docker run -p 7474:7474 grafeo/grafeo-server:full \
   --auth-token my-secret --data-dir /data
 ```
@@ -250,4 +250,4 @@ wasm-pack build crates/bindings/wasm --target web --release
 
 ## Next Steps
 
-Now that you have Grafeo installed, continue to the [Quick Start](quickstart.md) guide.
+With Grafeo installed, continue to the [Quick Start](quickstart.md) guide.

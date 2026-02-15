@@ -8,7 +8,7 @@ tags:
 
 # Edges and Types
 
-Edges represent relationships between nodes. Each edge has a type, direction, and can have properties.
+Edges represent relationships between nodes. Each edge has a type, direction and can have properties.
 
 ## Creating Edges
 

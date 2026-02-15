@@ -10,7 +10,7 @@ tags:
 
 Build a product recommendation system using collaborative filtering on a graph.
 
-## What You'll Learn
+## Topics Covered
 
 - Modeling user-product interactions
 - Collaborative filtering with graph patterns
@@ -18,7 +18,7 @@ Build a product recommendation system using collaborative filtering on a graph.
 
 ## The Approach
 
-We'll use the principle: "Users who bought X also bought Y" implemented as graph traversals.
+This tutorial uses the principle: "Users who bought X also bought Y" implemented as graph traversals.
 
 ## Setup
 

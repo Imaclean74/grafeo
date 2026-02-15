@@ -188,7 +188,7 @@ hnsw_result = db.execute("MATCH (d:Document) RETURN d.id ORDER BY cosine_similar
 
 For memory-constrained environments, combine HNSW with quantization:
 
-See the [Quantization](quantization.md) page for how to use scalar, binary, and product quantization
+See the [Quantization](quantization.md) page for how to use scalar, binary and product quantization
 to reduce memory usage while maintaining search quality.
 
 See [Quantization](quantization.md) for details.

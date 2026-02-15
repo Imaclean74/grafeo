@@ -1,6 +1,6 @@
 # Transactions in Grafeo
 
-Grafeo provides ACID transactions with **Snapshot Isolation** semantics. This guide explains how transactions work, their guarantees, and important limitations to be aware of.
+Grafeo provides ACID transactions with **Snapshot Isolation** semantics. This guide explains how transactions work, their guarantees and important limitations to be aware of.
 
 ## Quick Start
 
@@ -23,12 +23,12 @@ db.execute("CREATE (n:Person {name: 'Charlie'})")  # Commits immediately
 
 Grafeo implements **Snapshot Isolation (SI)**, a widely-used isolation level that provides strong consistency while maintaining high concurrency.
 
-### What You Get
+### Guarantees
 
 | Guarantee | Description |
 |-----------|-------------|
 | **Repeatable Reads** | Reading the same data twice in a transaction returns the same result |
-| **No Dirty Reads** | You never see uncommitted changes from other transactions |
+| **No Dirty Reads** | Uncommitted changes from other transactions are never visible |
 | **No Lost Updates** | Write-write conflicts are detected and one transaction is aborted |
 | **Consistent Snapshot** | All reads see the database as of transaction start time |
 
@@ -57,10 +57,10 @@ tx1.commit()  # Succeeds
 tx2.commit()  # Fails with WriteConflict error
 ```
 
-When a conflict is detected, your application should:
+When a conflict is detected, the application should:
 1. Catch the exception
 2. Optionally retry the transaction
-3. Or report the conflict to the user
+3. Or report the conflict
 
 ## Important Limitation: Write Skew
 
@@ -97,7 +97,7 @@ tx2.commit()  # Success (wrote to B, no conflict with A)
 
 **Option 1: Promote Reads to Writes**
 
-Add a dummy write to entities you read to force conflict detection:
+Add a dummy write to read entities to force conflict detection:
 
 ```python
 tx = db.begin_transaction()
@@ -231,4 +231,4 @@ Full Serializable isolation (preventing write skew) is planned for a future rele
 - Serializable Snapshot Isolation (SSI) implementation
 - Configurable isolation levels per transaction
 
-For now, use the workarounds described above if your application requires serializable semantics.
+For now, use the workarounds described above if the application requires serializable semantics.

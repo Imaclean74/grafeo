@@ -8,7 +8,7 @@ tags:
 
 # Security Best Practices
 
-Grafeo is an embedded database without built-in authentication. Security depends on how you deploy and use it.
+Grafeo is an embedded database without built-in authentication. Security depends on how it is deployed and used.
 
 ---
 
@@ -16,7 +16,7 @@ Grafeo is an embedded database without built-in authentication. Security depends
 
 Grafeo is designed as an **embedded library**, not a network-accessible server:
 
-- **No authentication** - Anyone with access to your application can access the database
+- **No authentication** - Anyone with access to the application can access the database
 - **No network protocol** - No TCP/HTTP ports to secure
 - **No encryption at rest** - Database files are not encrypted
 - **File-based access control** - Security relies on filesystem permissions
@@ -30,7 +30,7 @@ This model is appropriate for:
 
 ---
 
-## Securing Your Deployment
+## Securing a Deployment
 
 ### 1. File System Permissions
 
@@ -324,11 +324,11 @@ Before deploying:
 
 ## Reporting Security Issues
 
-If you discover a security vulnerability:
+To report a security vulnerability:
 
 1. **Do not** open a public GitHub issue
 2. Email security concerns to security@grafeo.dev
 3. Include steps to reproduce
 4. Allow time for a fix before public disclosure
 
-We take security seriously and will respond promptly.
+Security issues are taken seriously and will receive a prompt response.

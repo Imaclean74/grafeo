@@ -7,7 +7,7 @@ Interactive graph visualization widget for Python notebooks.
 
 ## Overview
 
-anywidget-graph provides interactive graph visualization powered by Sigma.js. Built on the anywidget framework, it works universally across Jupyter, Marimo, VS Code, Colab, and Databricks with support for multiple graph database backends.
+anywidget-graph provides interactive graph visualization powered by Sigma.js. Built on the anywidget framework, it works universally across Jupyter, Marimo, VS Code, Colab and Databricks with support for multiple graph database backends.
 
 ## Features
 
@@ -32,7 +32,7 @@ Automatically converts query results from:
 - AQL (ArangoDB)
 
 ### Interactivity
-- Pan, zoom, and navigate
+- Pan, zoom and navigate
 - Click nodes/edges to select
 - Expand/collapse neighbors
 - Multi-select paths

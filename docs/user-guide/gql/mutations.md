@@ -1,6 +1,6 @@
 ---
 title: Mutations
-description: Creating, updating, and deleting graph data in GQL.
+description: Creating, updating and deleting graph data in GQL.
 tags:
   - gql
   - mutations
@@ -8,7 +8,7 @@ tags:
 
 # Mutations
 
-GQL supports mutations for creating, updating, and deleting graph data.
+GQL supports mutations for creating, updating and deleting graph data.
 
 ## Creating Nodes
 

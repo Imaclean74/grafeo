@@ -5,9 +5,8 @@ Python bindings for [Grafeo](https://grafeo.dev), a high-performance, embeddable
 ## Installation
 
 ```bash
-pip install grafeo
-# or
 uv add grafeo
+# or: pip install grafeo
 ```
 
 ## Quick Start
@@ -118,7 +117,7 @@ results = db.vector_search("Document", "embedding", query_vector, k=10)
 
 ## Features
 
-- GQL, Cypher, SPARQL, Gremlin, and GraphQL query languages
+- GQL, Cypher, SPARQL, Gremlin and GraphQL query languages
 - Full node/edge CRUD with native Python types
 - ACID transactions with configurable isolation levels
 - HNSW vector similarity search

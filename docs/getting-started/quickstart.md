@@ -5,7 +5,7 @@ description: Get up and running with Grafeo in minutes.
 
 # Quick Start
 
-This guide will get you up and running with Grafeo in just a few minutes.
+This guide covers getting up and running with Grafeo in just a few minutes.
 
 ## Create a Database
 
@@ -245,7 +245,7 @@ For atomic operations, use transactions:
 
 ## Next Steps
 
-- [Your First Graph](first-graph.md) - Build a complete graph application
+- [First Graph](first-graph.md) - Build a complete graph application
 - [GQL Query Language](../user-guide/gql/index.md) - Learn more about queries
 - [Python API](../user-guide/python/index.md) - Python-specific features
 - [Rust API](../user-guide/rust/index.md) - Rust-specific features

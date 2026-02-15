@@ -5,9 +5,9 @@ description: Get up and running with Grafeo in minutes.
 
 # Getting Started
 
-Welcome to Grafeo! This guide will help you get started with the high-performance graph database.
+Welcome to Grafeo! This guide covers getting started with the high-performance graph database.
 
-## Choose Your Path
+## Choose a Path
 
 <div class="grid cards" markdown>
 
@@ -15,7 +15,7 @@ Welcome to Grafeo! This guide will help you get started with the high-performanc
 
     ---
 
-    Install Grafeo for Python, Node.js, Go, Rust, or WebAssembly.
+    Install Grafeo for Python, Node.js, Go, Rust or WebAssembly.
 
     [:octicons-arrow-right-24: Installation Guide](installation.md)
 
@@ -27,11 +27,11 @@ Welcome to Grafeo! This guide will help you get started with the high-performanc
 
     [:octicons-arrow-right-24: Quick Start](quickstart.md)
 
--   :material-graph:{ .lg .middle } **Your First Graph**
+-   :material-graph:{ .lg .middle } **First Graph**
 
     ---
 
-    Build your first graph step-by-step with hands-on examples.
+    Build a first graph step-by-step with hands-on examples.
 
     [:octicons-arrow-right-24: First Graph Tutorial](first-graph.md)
 
@@ -39,7 +39,7 @@ Welcome to Grafeo! This guide will help you get started with the high-performanc
 
     ---
 
-    Learn about configuration options for memory, persistence, and performance.
+    Learn about configuration options for memory, persistence and performance.
 
     [:octicons-arrow-right-24: Configuration](configuration.md)
 

@@ -1,6 +1,6 @@
 ---
 title: Properties
-description: Access vertex and edge properties with values, valueMap, and more.
+description: Access vertex and edge properties with values, valueMap and more.
 tags:
   - gremlin
   - properties

@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Configure Grafeo for your use case.
+description: Configure Grafeo for different use cases.
 ---
 
 # Configuration

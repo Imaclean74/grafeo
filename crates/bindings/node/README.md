@@ -121,7 +121,7 @@ const results = await db.vectorSearch('Document', 'embedding', queryVector, 10);
 
 ## Features
 
-- GQL, Cypher, SPARQL, Gremlin, and GraphQL query languages
+- GQL, Cypher, SPARQL, Gremlin and GraphQL query languages
 - Full node/edge CRUD with property management
 - ACID transactions with automatic rollback
 - HNSW vector similarity search with batch operations
