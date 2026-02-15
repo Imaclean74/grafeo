@@ -4,6 +4,21 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.5] - Unreleased
 
+### Added
+
+- **Filter pushdown optimization**: equality predicates on labeled node scans are now pushed down to the store level, bypassing DataChunk materialization and expression evaluation. Compound predicates (e.g., `WHERE n.name = 'Alice' AND n.age > 30`) correctly split: equality part pushed down, remainder kept as post-filter
+- **Query error positions**: all six parsers (GQL, Cypher, SPARQL, Gremlin, GraphQL, SQL/PGQ) now produce errors with line/column positions and source-caret display
+
+### Fixed
+
+- **Transaction edge type visibility**: edges created within a transaction are now visible to subsequent queries in the same transaction
+- **INSERT DATA with GRAPH clause**: SPARQL `INSERT DATA { GRAPH <uri> { ... } }` and `DELETE DATA { GRAPH <uri> { ... } }` now correctly route triples to the named graph instead of the default graph
+- **Compound predicate correctness**: filter pushdown no longer silently drops non-equality parts of compound predicates (e.g., range conditions after equality pushdown)
+
+### Improved
+
+- **Hot-path clone elimination**: replaced unnecessary `.clone()` calls with moves/borrows in sort keys (3 sites), aggregate finalize (`take()` instead of `clone()`), aggregate state transitions (`mem::take` instead of HashSet clone), and filter PropertyKey construction
+
 ## [0.5.4] - 2026-02-15
 
 ### Fixed

@@ -374,7 +374,7 @@ impl ExpressionPredicate {
                     .iter()
                     .filter_map(|(k, v)| {
                         self.eval_expr(v, chunk, row)
-                            .map(|val| (PropertyKey::new(k.clone()), val))
+                            .map(|val| (PropertyKey::new(k.as_str()), val))
                     })
                     .collect();
                 Some(Value::Map(Arc::new(map)))
@@ -610,7 +610,7 @@ impl ExpressionPredicate {
             } if var == variable => {
                 // Property access on the iteration variable
                 if let Value::Map(m) = item {
-                    let key = PropertyKey::new(property.clone());
+                    let key = PropertyKey::new(property.as_str());
                     m.get(&key).cloned()
                 } else {
                     None

@@ -147,7 +147,7 @@ impl Accumulator {
         }
     }
 
-    fn finalize(&self, func: AggregateFunction) -> Value {
+    fn finalize(&mut self, func: AggregateFunction) -> Value {
         match func {
             AggregateFunction::Count => Value::Int64(self.count),
             AggregateFunction::Sum => {
@@ -157,8 +157,8 @@ impl Accumulator {
                     Value::Float64(self.sum)
                 }
             }
-            AggregateFunction::Min => self.min.clone().unwrap_or(Value::Null),
-            AggregateFunction::Max => self.max.clone().unwrap_or(Value::Null),
+            AggregateFunction::Min => self.min.take().unwrap_or(Value::Null),
+            AggregateFunction::Max => self.max.take().unwrap_or(Value::Null),
             AggregateFunction::Avg => {
                 if self.count == 0 {
                     Value::Null
@@ -166,7 +166,7 @@ impl Accumulator {
                     Value::Float64(self.sum / self.count as f64)
                 }
             }
-            AggregateFunction::First => self.first.clone().unwrap_or(Value::Null),
+            AggregateFunction::First => self.first.take().unwrap_or(Value::Null),
         }
     }
 }
@@ -395,21 +395,25 @@ impl PushOperator for AggregatePushOperator {
 
         if self.group_by.is_empty() {
             // Global aggregation - single row output
-            if let Some(ref accumulators) = self.global_state {
-                for (i, (acc, expr)) in accumulators.iter().zip(&self.aggregates).enumerate() {
+            if let Some(ref mut accumulators) = self.global_state {
+                for (i, (acc, expr)) in accumulators.iter_mut().zip(&self.aggregates).enumerate() {
                     columns[i].push(acc.finalize(expr.function));
                 }
             }
         } else {
             // Group by - one row per group
-            for state in self.groups.values() {
+            for state in self.groups.values_mut() {
                 // Output group key columns
                 for (i, val) in state.key_values.iter().enumerate() {
                     columns[i].push(val.clone());
                 }
 
                 // Output aggregate results
-                for (i, (acc, expr)) in state.accumulators.iter().zip(&self.aggregates).enumerate()
+                for (i, (acc, expr)) in state
+                    .accumulators
+                    .iter_mut()
+                    .zip(&self.aggregates)
+                    .enumerate()
                 {
                     columns[self.group_by.len() + i].push(acc.finalize(expr.function));
                 }
@@ -783,8 +787,8 @@ impl PushOperator for SpillableAggregatePushOperator {
 
         if self.group_by.is_empty() {
             // Global aggregation - single row output
-            if let Some(ref accumulators) = self.global_state {
-                for (i, (acc, expr)) in accumulators.iter().zip(&self.aggregates).enumerate() {
+            if let Some(ref mut accumulators) = self.global_state {
+                for (i, (acc, expr)) in accumulators.iter_mut().zip(&self.aggregates).enumerate() {
                     columns[i].push(acc.finalize(expr.function));
                 }
             }
@@ -795,15 +799,18 @@ impl PushOperator for SpillableAggregatePushOperator {
                     .drain_all()
                     .map_err(|e| OperatorError::Execution(e.to_string()))?;
 
-                for (_key, state) in groups {
+                for (_key, mut state) in groups {
                     // Output group key columns
                     for (i, val) in state.key_values.iter().enumerate() {
                         columns[i].push(val.clone());
                     }
 
                     // Output aggregate results
-                    for (i, (acc, expr)) in
-                        state.accumulators.iter().zip(&self.aggregates).enumerate()
+                    for (i, (acc, expr)) in state
+                        .accumulators
+                        .iter_mut()
+                        .zip(&self.aggregates)
+                        .enumerate()
                     {
                         columns[self.group_by.len() + i].push(acc.finalize(expr.function));
                     }
@@ -811,14 +818,18 @@ impl PushOperator for SpillableAggregatePushOperator {
             }
         } else {
             // Group by using regular hash map - one row per group
-            for state in self.groups.values() {
+            for state in self.groups.values_mut() {
                 // Output group key columns
                 for (i, val) in state.key_values.iter().enumerate() {
                     columns[i].push(val.clone());
                 }
 
                 // Output aggregate results
-                for (i, (acc, expr)) in state.accumulators.iter().zip(&self.aggregates).enumerate()
+                for (i, (acc, expr)) in state
+                    .accumulators
+                    .iter_mut()
+                    .zip(&self.aggregates)
+                    .enumerate()
                 {
                     columns[self.group_by.len() + i].push(acc.finalize(expr.function));
                 }

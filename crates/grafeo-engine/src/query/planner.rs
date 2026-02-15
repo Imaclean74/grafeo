@@ -1107,34 +1107,125 @@ impl Planner {
             return Ok(None);
         }
 
-        // Check if at least one condition has an index (otherwise full scan is needed anyway)
+        // Check if at least one condition has an index
         let has_indexed_condition = conditions
             .iter()
             .any(|(prop, _)| self.store.has_property_index(prop));
 
-        if !has_indexed_condition {
+        // Without an index we can still optimize when there's a label constraint:
+        // label-first scan + property check avoids DataChunk/expression overhead.
+        if !has_indexed_condition && scan_label.is_none() {
             return Ok(None);
         }
 
-        // Use the optimized batch lookup for multiple conditions
-        let conditions_ref: Vec<(&str, Value)> = conditions
-            .iter()
-            .map(|(p, v)| (p.as_str(), v.clone()))
-            .collect();
-        let mut matching_nodes = self.store.find_nodes_by_properties(&conditions_ref);
+        let matching_nodes = if has_indexed_condition {
+            // Use index-based batch lookup
+            let conditions_ref: Vec<(&str, Value)> = conditions
+                .iter()
+                .map(|(p, v)| (p.as_str(), v.clone()))
+                .collect();
+            let mut nodes = self.store.find_nodes_by_properties(&conditions_ref);
 
-        // If there's a label filter, also filter by label
-        if let Some(label) = &scan_label {
-            let label_nodes: std::collections::HashSet<_> =
-                self.store.nodes_by_label(label).into_iter().collect();
-            matching_nodes.retain(|n| label_nodes.contains(n));
+            // Intersect with label if present
+            if let Some(label) = &scan_label {
+                let label_nodes: std::collections::HashSet<_> =
+                    self.store.nodes_by_label(label).into_iter().collect();
+                nodes.retain(|n| label_nodes.contains(n));
+            }
+            nodes
+        } else {
+            // No index but we have a label — scan label first, then check properties.
+            // This is more efficient than ScanOperator → DataChunk → FilterOperator
+            // because it avoids DataChunk materialization and expression evaluation.
+            let label = scan_label.as_ref().expect("label checked above");
+            let label_nodes = self.store.nodes_by_label(label);
+            label_nodes
+                .into_iter()
+                .filter(|&node_id| {
+                    conditions.iter().all(|(prop, val)| {
+                        let key = grafeo_common::types::PropertyKey::new(prop);
+                        self.store
+                            .get_node_property(node_id, &key)
+                            .is_some_and(|v| v == *val)
+                    })
+                })
+                .collect()
+        };
+
+        let columns = vec![scan_variable.clone()];
+        let node_list_op: Box<dyn Operator> = Box::new(NodeListOperator::new(matching_nodes, 2048));
+
+        // Check for remaining predicate parts that weren't pushed down
+        // (e.g., range conditions in a compound predicate like `n.name = 'Alice' AND n.age > 30`)
+        if let Some(remaining) =
+            self.extract_remaining_predicate(&filter.predicate, &scan_variable, &conditions)
+        {
+            let variable_columns: HashMap<String, usize> = columns
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.clone(), i))
+                .collect();
+            let filter_expr = self.convert_expression(&remaining)?;
+            let predicate =
+                ExpressionPredicate::new(filter_expr, variable_columns, Arc::clone(&self.store));
+            let filtered = Box::new(FilterOperator::new(node_list_op, Box::new(predicate)));
+            Ok(Some((filtered, columns)))
+        } else {
+            Ok(Some((node_list_op, columns)))
         }
+    }
 
-        // Create a NodeListOperator with the matching nodes
-        let node_list_op = Box::new(NodeListOperator::new(matching_nodes, 2048));
-        let columns = vec![scan_variable];
+    /// Extracts the remaining predicate after removing pushed-down equality conditions.
+    ///
+    /// Given `n.name = 'Alice' AND n.age > 30` with pushed conditions `[("name", "Alice")]`,
+    /// returns `Some(n.age > 30)`. Returns `None` when all conditions were pushed down.
+    fn extract_remaining_predicate(
+        &self,
+        predicate: &LogicalExpression,
+        target_variable: &str,
+        pushed_conditions: &[(String, Value)],
+    ) -> Option<LogicalExpression> {
+        match predicate {
+            LogicalExpression::Binary {
+                left,
+                op: BinaryOp::And,
+                right,
+            } => {
+                let left_remaining =
+                    self.extract_remaining_predicate(left, target_variable, pushed_conditions);
+                let right_remaining =
+                    self.extract_remaining_predicate(right, target_variable, pushed_conditions);
 
-        Ok(Some((node_list_op, columns)))
+                match (left_remaining, right_remaining) {
+                    (Some(l), Some(r)) => Some(LogicalExpression::Binary {
+                        left: Box::new(l),
+                        op: BinaryOp::And,
+                        right: Box::new(r),
+                    }),
+                    (Some(l), None) => Some(l),
+                    (None, Some(r)) => Some(r),
+                    (None, None) => None,
+                }
+            }
+            LogicalExpression::Binary {
+                left,
+                op: BinaryOp::Eq,
+                right,
+            } => {
+                // Check if this equality was pushed down
+                if let Some((var, prop, val)) = self.extract_property_equality(left, right)
+                    && var == target_variable
+                    && pushed_conditions
+                        .iter()
+                        .any(|(p, v)| *p == prop && *v == val)
+                {
+                    None // Already handled at the store level
+                } else {
+                    Some(predicate.clone())
+                }
+            }
+            _ => Some(predicate.clone()),
+        }
     }
 
     /// Extracts equality conditions (property = literal) from a predicate.
