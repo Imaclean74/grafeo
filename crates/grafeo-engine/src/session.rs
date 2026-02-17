@@ -30,7 +30,6 @@ pub struct Session {
     store: Arc<LpgStore>,
     /// RDF triple store (if RDF feature is enabled).
     #[cfg(feature = "rdf")]
-    #[allow(dead_code)]
     rdf_store: Arc<RdfStore>,
     /// Transaction manager.
     tx_manager: Arc<TransactionManager>,
@@ -229,6 +228,9 @@ impl Session {
             .with_deadline(self.query_deadline());
         let mut result = executor.execute(physical_plan.operator.as_mut())?;
 
+        // Resolve node/edge IDs to full property maps
+        result.resolve_entities(&self.store);
+
         // Add execution metrics
         let elapsed_ms = start_time.elapsed().as_secs_f64() * 1000.0;
         let rows_scanned = result.rows.len() as u64;
@@ -350,7 +352,9 @@ impl Session {
         // Execute the plan
         let executor = Executor::with_columns(physical_plan.columns.clone())
             .with_deadline(self.query_deadline());
-        executor.execute(physical_plan.operator.as_mut())
+        let mut result = executor.execute(physical_plan.operator.as_mut())?;
+        result.resolve_entities(&self.store);
+        Ok(result)
     }
 
     /// Executes a Gremlin query.
@@ -409,7 +413,9 @@ impl Session {
         // Execute the plan
         let executor = Executor::with_columns(physical_plan.columns.clone())
             .with_deadline(self.query_deadline());
-        executor.execute(physical_plan.operator.as_mut())
+        let mut result = executor.execute(physical_plan.operator.as_mut())?;
+        result.resolve_entities(&self.store);
+        Ok(result)
     }
 
     /// Executes a Gremlin query with parameters.
@@ -498,7 +504,9 @@ impl Session {
         // Execute the plan
         let executor = Executor::with_columns(physical_plan.columns.clone())
             .with_deadline(self.query_deadline());
-        executor.execute(physical_plan.operator.as_mut())
+        let mut result = executor.execute(physical_plan.operator.as_mut())?;
+        result.resolve_entities(&self.store);
+        Ok(result)
     }
 
     /// Executes a GraphQL query with parameters.
@@ -618,7 +626,9 @@ impl Session {
         // Execute the plan
         let executor = Executor::with_columns(physical_plan.columns.clone())
             .with_deadline(self.query_deadline());
-        executor.execute(physical_plan.operator.as_mut())
+        let mut result = executor.execute(physical_plan.operator.as_mut())?;
+        result.resolve_entities(&self.store);
+        Ok(result)
     }
 
     /// Executes a SQL/PGQ query with parameters.

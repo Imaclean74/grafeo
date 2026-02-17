@@ -4,14 +4,22 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.6] - Unreleased
 
-Safety and performance improvements. Zero unsafe code remaining in property storage. Named graph management operators fully wired.
+Safety and performance improvements. Zero unsafe code remaining in property storage. Named graph management operators fully integrated. UNWIND and FOR list expansion for batch operations.
 
 ### Added
 
+- **UNWIND clause**: expand lists into individual rows for batch processing. `UNWIND [1, 2, 3] AS x RETURN x` produces 3 rows. Works with literal lists, parameter-substituted lists (`UNWIND $items AS x`), and vectors
+- **FOR statement** (GQL standard, ISO/IEC 39075 section 14.8): `FOR x IN [1, 2, 3] RETURN x` — the GQL-native equivalent of Cypher's UNWIND, desugars to the same execution plan
+- **UNWIND + MATCH + INSERT**: batch mutation pattern — `UNWIND $edges AS e MATCH (a {name: e.from}), (b {name: e.to}) INSERT (a)-[:KNOWS]->(b)` creates edges in bulk from parameter lists
+- **Ordered clause processing**: GQL translator now processes MATCH, UNWIND, FOR, INSERT, and RETURN clauses in source order, preserving variable scoping across clause boundaries
 - **SPARQL COPY/MOVE/ADD graph operators**: `COPY <src> TO <dst>`, `MOVE <src> TO <dst>`, and `ADD <src> TO <dst>` now execute end-to-end with source-existence validation and SILENT support
+- **Embedding model config + auto-download**: `EmbeddingModelConfig` enum with 3 presets (MiniLM-L6-v2, MiniLM-L12-v2, BGE-small-en-v1.5) and HuggingFace Hub auto-download via `load_embedding_model()`. Configurable batch size and ONNX thread count via `EmbeddingOptions`. Exposed in Python and Node.js bindings
 
 ### Fixed
 
+- **UNWIND scalar values returning NULL**: `plan_return` now tracks UNWIND/FOR variables as scalars, preventing `resolve_entities` from incorrectly treating them as node IDs
+- **UNWIND with Value::Vector**: `UnwindOperator` now handles both `Value::List` and `Value::Vector`, fixing 0-row results when parameters contain all-numeric Python lists (which PyO3 converts to vectors)
+- **`RETURN n` now returns full node/edge maps**: queries like `MATCH (n) RETURN n` now return `{_id, _labels, ...properties}` instead of a bare integer ID, matching Neo4j/Memgraph behavior. Implemented as post-processing; will be refactored into the ProjectOperator pipeline later
 - **GQL lexer UTF-8 panic**: multi-byte characters (e.g., `ç`, `ã`, CJK) in queries no longer cause `byte index is not a char boundary` panics. The lexer now advances by `char.len_utf8()` instead of a fixed 1 byte
 
 ### Improved

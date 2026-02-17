@@ -50,6 +50,25 @@ pub struct YieldItem {
     pub span: Option<SourceSpan>,
 }
 
+/// A clause in a query, preserving source order for correct variable scoping.
+#[derive(Debug, Clone)]
+pub enum QueryClause {
+    /// A MATCH clause.
+    Match(MatchClause),
+    /// An UNWIND clause.
+    Unwind(UnwindClause),
+    /// A FOR clause (desugared to UNWIND).
+    For(UnwindClause),
+    /// A CREATE/INSERT clause.
+    Create(InsertStatement),
+    /// A DELETE clause.
+    Delete(DeleteStatement),
+    /// A SET clause.
+    Set(SetClause),
+    /// A MERGE clause.
+    Merge(MergeClause),
+}
+
 /// A query statement.
 #[derive(Debug, Clone)]
 pub struct QueryStatement {
@@ -75,6 +94,8 @@ pub struct QueryStatement {
     pub return_clause: ReturnClause,
     /// Optional HAVING clause (filters aggregate results).
     pub having_clause: Option<HavingClause>,
+    /// Ordered clauses preserving source order (for UNWIND/FOR variable scoping).
+    pub ordered_clauses: Vec<QueryClause>,
     /// Source span in the original query.
     pub span: Option<SourceSpan>,
 }

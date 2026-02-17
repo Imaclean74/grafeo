@@ -398,7 +398,7 @@ impl<Id: EntityId> PropertyStorage<Id> {
         if columns.contains_key(key) {
             Some(PropertyColumnRef {
                 _guard: columns,
-                key: key.clone(),
+                _key: key.clone(),
                 _marker: PhantomData,
             })
         } else {
@@ -529,17 +529,6 @@ impl CompressedColumnData {
                     + id_to_index.len() * std::mem::size_of::<u64>()
                     + index_to_id.len() * std::mem::size_of::<u64>()
             }
-        }
-    }
-
-    /// Returns the compression ratio.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn compression_ratio(&self) -> f64 {
-        match self {
-            CompressedColumnData::Integers { data, .. } => data.compression_ratio(),
-            CompressedColumnData::Strings { encoding, .. } => encoding.compression_ratio(),
-            CompressedColumnData::Booleans { data, .. } => data.compression_ratio(),
         }
     }
 }
@@ -715,7 +704,6 @@ impl<Id: EntityId> PropertyColumn<Id> {
 
     /// Returns the number of values in this column (hot + compressed).
     #[must_use]
-    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.values.len() + self.compressed_count
     }
@@ -1094,8 +1082,7 @@ impl<Id: EntityId> Default for PropertyColumn<Id> {
 /// Holds the read lock so the column can't change while you're iterating.
 pub struct PropertyColumnRef<'a, Id: EntityId = NodeId> {
     _guard: parking_lot::RwLockReadGuard<'a, FxHashMap<PropertyKey, PropertyColumn<Id>>>,
-    #[allow(dead_code)]
-    key: PropertyKey,
+    _key: PropertyKey,
     _marker: PhantomData<Id>,
 }
 

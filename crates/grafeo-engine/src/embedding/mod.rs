@@ -18,8 +18,12 @@
 //! assert_eq!(vectors[0].len(), model.dimensions());
 //! ```
 
+mod config;
+#[cfg(feature = "embed")]
+mod download;
 mod onnx;
 
+pub use config::{EmbeddingModelConfig, EmbeddingOptions};
 pub use onnx::OnnxEmbeddingModel;
 
 use grafeo_common::utils::error::Result;

@@ -109,6 +109,8 @@ pub enum TokenKind {
     Ends,
     /// CONTAINS keyword.
     Contains,
+    /// FOR keyword (GQL standard list iteration).
+    For,
     /// VECTOR keyword (for vector index and type).
     Vector,
     /// INDEX keyword (for CREATE INDEX).
@@ -509,6 +511,7 @@ impl<'a> Lexer<'a> {
         match upper {
             "INSERT" => TokenKind::Insert,
             "TYPE" => TokenKind::Type,
+            "FOR" => TokenKind::For,
             "VECTOR" => TokenKind::Vector,
             "INDEX" => TokenKind::Index,
             "DIMENSION" => TokenKind::Dimension,

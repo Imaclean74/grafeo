@@ -89,10 +89,18 @@ impl UnwindOperator {
             while self.current_row < chunk.row_count() {
                 if let Some(col) = chunk.column(self.list_col_idx)
                     && let Some(value) = col.get_value(self.current_row)
-                    && let Value::List(list_arc) = value
                 {
-                    // Found a list - store it and return first element
-                    let list: Vec<Value> = list_arc.iter().cloned().collect();
+                    // Extract list elements from either Value::List or Value::Vector
+                    let list = match value {
+                        Value::List(list_arc) => list_arc.iter().cloned().collect::<Vec<Value>>(),
+                        Value::Vector(vec_arc) => {
+                            vec_arc.iter().map(|f| Value::Float64(*f as f64)).collect()
+                        }
+                        _ => {
+                            self.current_row += 1;
+                            continue;
+                        }
+                    };
                     if !list.is_empty() {
                         self.current_list = Some(list);
                         return Ok(Some(self.emit_row()?));

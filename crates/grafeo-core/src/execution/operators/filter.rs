@@ -29,9 +29,9 @@ pub trait Predicate: Send + Sync {
 }
 
 /// A comparison operator.
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompareOp {
+pub(crate) enum CompareOp {
     /// Equal.
     Eq,
     /// Not equal.
@@ -47,8 +47,8 @@ pub enum CompareOp {
 }
 
 /// A simple comparison predicate.
-#[allow(dead_code)]
-pub struct ComparisonPredicate {
+#[cfg(test)]
+pub(crate) struct ComparisonPredicate {
     /// Column index to compare.
     column: usize,
     /// Comparison operator.
@@ -57,14 +57,15 @@ pub struct ComparisonPredicate {
     value: Value,
 }
 
+#[cfg(test)]
 impl ComparisonPredicate {
     /// Creates a new comparison predicate.
-    #[allow(dead_code)]
-    pub fn new(column: usize, op: CompareOp, value: Value) -> Self {
+    pub(crate) fn new(column: usize, op: CompareOp, value: Value) -> Self {
         Self { column, op, value }
     }
 }
 
+#[cfg(test)]
 impl Predicate for ComparisonPredicate {
     fn evaluate(&self, chunk: &DataChunk, row: usize) -> bool {
         let Some(col) = chunk.column(self.column) else {
