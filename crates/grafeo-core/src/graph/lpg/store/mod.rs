@@ -23,6 +23,8 @@ mod versioning;
 mod tests;
 
 use super::PropertyStorage;
+#[cfg(not(feature = "tiered-storage"))]
+use super::{EdgeRecord, NodeRecord};
 use crate::index::adjacency::ChunkedAdjacency;
 use crate::statistics::Statistics;
 use arcstr::ArcStr;

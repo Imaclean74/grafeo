@@ -508,6 +508,7 @@ impl super::Planner {
     }
 
     /// Plans a CALL procedure operator.
+    #[cfg(feature = "algos")]
     pub(super) fn plan_call_procedure(
         &self,
         call: &CallProcedureOp,
@@ -569,6 +570,7 @@ impl super::Planner {
     }
 
     /// Plans a static result set (e.g., from `grafeo.procedures()`).
+    #[cfg(feature = "algos")]
     pub(super) fn plan_static_result(
         &self,
         result: grafeo_adapters::plugins::AlgorithmResult,
