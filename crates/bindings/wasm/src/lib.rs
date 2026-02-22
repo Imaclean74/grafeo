@@ -315,19 +315,3 @@ impl Database {
     }
 }
 
-/// Returns a comma-separated list of supported query languages based on enabled features.
-fn supported_languages() -> String {
-    #[allow(unused_mut)]
-    let mut langs = vec!["gql"];
-    #[cfg(feature = "cypher")]
-    langs.push("cypher");
-    #[cfg(feature = "sparql")]
-    langs.push("sparql");
-    #[cfg(feature = "gremlin")]
-    langs.push("gremlin");
-    #[cfg(feature = "graphql")]
-    langs.push("graphql");
-    #[cfg(feature = "sql-pgq")]
-    langs.push("sql");
-    langs.join(", ")
-}

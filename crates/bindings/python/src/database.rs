@@ -1726,6 +1726,50 @@ pub struct PyTransaction {
 }
 
 impl PyTransaction {
+    /// Executes a query in the given language within this transaction.
+    fn execute_language_impl(
+        &self,
+        language: &str,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<PyQueryResult> {
+        if self.committed || self.rolled_back {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "Cannot execute on completed transaction",
+            ));
+        }
+
+        let db = self.db.read();
+        let mut session_guard = self.session.lock();
+        let session = session_guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
+        })?;
+
+        let param_map = if let Some(p) = params {
+            let mut map = HashMap::new();
+            for (key, value) in p.iter() {
+                let key_str: String = key.extract()?;
+                let val = PyValue::from_py(&value)?;
+                map.insert(key_str, val);
+            }
+            Some(map)
+        } else {
+            None
+        };
+        let result = session
+            .execute_language(query, language, param_map)
+            .map_err(PyGrafeoError::from)?;
+        let (nodes, edges) = extract_entities(&result, &db);
+        Ok(PyQueryResult::with_metrics(
+            result.columns,
+            result.rows,
+            nodes,
+            edges,
+            result.execution_time_ms,
+            result.rows_scanned,
+        ))
+    }
+
     /// Create a new transaction with an optional isolation level.
     fn new(db: Arc<RwLock<GrafeoDB>>, isolation_level: Option<&str>) -> PyResult<Self> {
         // Parse isolation level string
@@ -1832,44 +1876,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session.execute(query).map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("gql", query, params)
     }
 
     /// Execute a Gremlin query within this transaction.
@@ -1884,46 +1891,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_gremlin_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session
-                .execute_gremlin(query)
-                .map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("gremlin", query, params)
     }
 
     /// Execute a GraphQL query within this transaction.
@@ -1938,46 +1906,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_graphql_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session
-                .execute_graphql(query)
-                .map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("graphql", query, params)
     }
 
     /// Execute a SPARQL query within this transaction.
@@ -1999,42 +1928,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let _db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_sparql_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session.execute_sparql(query).map_err(PyGrafeoError::from)?
-        };
-
-        // SPARQL results don't have LPG nodes/edges, so pass empty vectors
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            Vec::new(),
-            Vec::new(),
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("sparql", query, params)
     }
 
     /// Check if transaction is active.

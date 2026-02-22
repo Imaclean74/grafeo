@@ -1,6 +1,5 @@
 //! Transaction support for the Node.js API.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use napi::bindgen_prelude::*;
@@ -51,28 +50,12 @@ impl Transaction {
             ))
         })?;
 
-        let param_map = if let Some(p) = params {
-            let obj = p.as_object().ok_or_else(|| {
-                napi::Error::from(NodeGrafeoError::InvalidArgument(
-                    "params must be an object".into(),
-                ))
-            })?;
-            let mut map = HashMap::with_capacity(obj.len());
-            for (key, value) in obj {
-                map.insert(key.clone(), crate::database::json_to_value(value)?);
-            }
-            Some(map)
-        } else {
-            None
-        };
+        let param_map = grafeo_bindings_common::json::json_params_to_map(params.as_ref())
+            .map_err(|msg| napi::Error::from(NodeGrafeoError::InvalidArgument(msg)))?;
 
-        let result = if let Some(p) = param_map {
-            session
-                .execute_with_params(&query, p)
-                .map_err(NodeGrafeoError::from)?
-        } else {
-            session.execute(&query).map_err(NodeGrafeoError::from)?
-        };
+        let result = session
+            .execute_language(&query, "gql", param_map)
+            .map_err(NodeGrafeoError::from)?;
 
         let db = self.db.read();
         let (nodes, edges) = crate::database::extract_entities(&result, &db);

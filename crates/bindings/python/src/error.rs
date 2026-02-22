@@ -41,7 +41,7 @@ impl From<PyGrafeoError> for PyErr {
 
 impl From<grafeo_common::utils::error::Error> for PyGrafeoError {
     fn from(err: grafeo_common::utils::error::Error) -> Self {
-        use grafeo_bindings_common::error::{classify_error, ErrorCategory};
+        use grafeo_bindings_common::error::{ErrorCategory, classify_error};
         let msg = err.to_string();
         match classify_error(&err) {
             ErrorCategory::Query => PyGrafeoError::Query(msg),

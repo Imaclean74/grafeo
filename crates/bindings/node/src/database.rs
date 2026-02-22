@@ -3,7 +3,6 @@
 //! [`JsGrafeoDB`] wraps the Rust database engine and gives you a JavaScript API.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use napi::JsString;
@@ -84,6 +83,34 @@ impl JsGrafeoDB {
         Ok(Self {
             inner: Arc::new(RwLock::new(db)),
         })
+    }
+
+    /// Shared implementation for all language-specific execute methods.
+    async fn execute_language_impl(
+        &self,
+        language: &'static str,
+        query: String,
+        params: Option<serde_json::Value>,
+    ) -> Result<QueryResult> {
+        let db = self.inner.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let db = db.read();
+            execute_language_query(&db, &query, language, params.as_ref())
+        })
+        .await
+        .map_err(|e| napi::Error::from_reason(e.to_string()))??;
+
+        let db = self.inner.read();
+        let (nodes, edges) = extract_entities(&result, &db);
+
+        Ok(QueryResult::with_metrics(
+            result.columns,
+            result.rows,
+            nodes,
+            edges,
+            result.execution_time_ms,
+            result.rows_scanned,
+        ))
     }
 
     /// Execute a GQL query. Returns a Promise<QueryResult>.
