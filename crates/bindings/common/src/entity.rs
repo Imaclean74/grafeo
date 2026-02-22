@@ -172,7 +172,7 @@ mod tests {
             nodes[0].properties.get("name"),
             Some(&Value::String("Alice".into()))
         );
-        assert!(nodes[0].properties.get("_id").is_none());
+        assert!(!nodes[0].properties.contains_key("_id"));
         assert_eq!(edges[0].edge_type, "KNOWS");
         assert_eq!(edges[0].source_id, NodeId(1));
         assert_eq!(edges[0].target_id, NodeId(2));

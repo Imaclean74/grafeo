@@ -109,8 +109,8 @@ mod tests {
         assert_eq!(json_to_value(&serde_json::json!(true)), Value::Bool(true));
         assert_eq!(json_to_value(&serde_json::json!(42)), Value::Int64(42));
         assert_eq!(
-            json_to_value(&serde_json::json!(3.14)),
-            Value::Float64(3.14)
+            json_to_value(&serde_json::json!(2.718)),
+            Value::Float64(2.718)
         );
         assert_eq!(
             json_to_value(&serde_json::json!("hello")),
