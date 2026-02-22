@@ -4,7 +4,6 @@
 //! Start here - create a database, run queries, and manage transactions.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -128,6 +127,40 @@ impl PyGrafeoDB {
         }
         Ok(Some(map))
     }
+
+    /// Executes a query in the given language, converting Python params and
+    /// extracting entities from the result.
+    fn execute_language_impl(
+        &self,
+        language: &str,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<PyQueryResult> {
+        let db = self.inner.read();
+        let param_map = if let Some(p) = params {
+            let mut map = HashMap::new();
+            for (key, value) in p.iter() {
+                let key_str: String = key.extract()?;
+                let val = PyValue::from_py(&value)?;
+                map.insert(key_str, val);
+            }
+            Some(map)
+        } else {
+            None
+        };
+        let result = db
+            .execute_language(query, language, param_map)
+            .map_err(PyGrafeoError::from)?;
+        let (nodes, edges) = extract_entities(&result, &db);
+        Ok(PyQueryResult::with_metrics(
+            result.columns,
+            result.rows,
+            nodes,
+            edges,
+            result.execution_time_ms,
+            result.rows_scanned,
+        ))
+    }
 }
 
 #[pymethods]
@@ -178,33 +211,7 @@ impl PyGrafeoDB {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        let db = self.inner.read();
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            db.execute_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            db.execute(query).map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("gql", query, params)
     }
 
     /// Execute a query and return a query builder.
@@ -221,33 +228,7 @@ impl PyGrafeoDB {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        let db = self.inner.read();
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            db.execute_cypher_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            db.execute_cypher(query).map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("cypher", query, params)
     }
 
     /// Execute a SQL/PGQ query (SQL:2023 GRAPH_TABLE).
@@ -259,31 +240,7 @@ impl PyGrafeoDB {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        let db = self.inner.read();
-
-        let result = if let Some(p) = params {
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            db.execute_sql_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            db.execute_sql(query).map_err(PyGrafeoError::from)?
-        };
-
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("sql-pgq", query, params)
     }
 
     /// Execute a GQL query asynchronously.
@@ -357,33 +314,7 @@ impl PyGrafeoDB {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        let db = self.inner.read();
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            db.execute_gremlin_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            db.execute_gremlin(query).map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("gremlin", query, params)
     }
 
     /// Execute a GraphQL query.
@@ -395,33 +326,7 @@ impl PyGrafeoDB {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        let db = self.inner.read();
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            db.execute_graphql_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            db.execute_graphql(query).map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("graphql", query, params)
     }
 
     /// Execute a SPARQL query against the RDF triple store.
@@ -438,30 +343,7 @@ impl PyGrafeoDB {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        let _params = if let Some(p) = params {
-            let mut map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                map.insert(key_str, val);
-            }
-            map
-        } else {
-            HashMap::new()
-        };
-
-        let db = self.inner.read();
-        let result = db.execute_sparql(query).map_err(PyGrafeoError::from)?;
-
-        // SPARQL results don't have LPG nodes/edges, so pass empty vectors
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            Vec::new(),
-            Vec::new(),
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("sparql", query, params)
     }
 
     /// Create a node.
@@ -1844,6 +1726,50 @@ pub struct PyTransaction {
 }
 
 impl PyTransaction {
+    /// Executes a query in the given language within this transaction.
+    fn execute_language_impl(
+        &self,
+        language: &str,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<PyQueryResult> {
+        if self.committed || self.rolled_back {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "Cannot execute on completed transaction",
+            ));
+        }
+
+        let db = self.db.read();
+        let mut session_guard = self.session.lock();
+        let session = session_guard.as_mut().ok_or_else(|| {
+            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
+        })?;
+
+        let param_map = if let Some(p) = params {
+            let mut map = HashMap::new();
+            for (key, value) in p.iter() {
+                let key_str: String = key.extract()?;
+                let val = PyValue::from_py(&value)?;
+                map.insert(key_str, val);
+            }
+            Some(map)
+        } else {
+            None
+        };
+        let result = session
+            .execute_language(query, language, param_map)
+            .map_err(PyGrafeoError::from)?;
+        let (nodes, edges) = extract_entities(&result, &db);
+        Ok(PyQueryResult::with_metrics(
+            result.columns,
+            result.rows,
+            nodes,
+            edges,
+            result.execution_time_ms,
+            result.rows_scanned,
+        ))
+    }
+
     /// Create a new transaction with an optional isolation level.
     fn new(db: Arc<RwLock<GrafeoDB>>, isolation_level: Option<&str>) -> PyResult<Self> {
         // Parse isolation level string
@@ -1950,44 +1876,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session.execute(query).map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("gql", query, params)
     }
 
     /// Execute a Gremlin query within this transaction.
@@ -2002,46 +1891,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_gremlin_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session
-                .execute_gremlin(query)
-                .map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("gremlin", query, params)
     }
 
     /// Execute a GraphQL query within this transaction.
@@ -2056,46 +1906,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_graphql_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session
-                .execute_graphql(query)
-                .map_err(PyGrafeoError::from)?
-        };
-
-        // Extract nodes and edges based on column types
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("graphql", query, params)
     }
 
     /// Execute a SPARQL query within this transaction.
@@ -2117,42 +1928,7 @@ impl PyTransaction {
         params: Option<&Bound<'_, pyo3::types::PyDict>>,
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
-        if self.committed || self.rolled_back {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                "Cannot execute on completed transaction",
-            ));
-        }
-
-        let _db = self.db.read();
-        let mut session_guard = self.session.lock();
-        let session = session_guard.as_mut().ok_or_else(|| {
-            pyo3::exceptions::PyRuntimeError::new_err("Transaction session not available")
-        })?;
-
-        let result = if let Some(p) = params {
-            // Convert Python params to Rust HashMap
-            let mut param_map = HashMap::new();
-            for (key, value) in p.iter() {
-                let key_str: String = key.extract()?;
-                let val = PyValue::from_py(&value)?;
-                param_map.insert(key_str, val);
-            }
-            session
-                .execute_sparql_with_params(query, param_map)
-                .map_err(PyGrafeoError::from)?
-        } else {
-            session.execute_sparql(query).map_err(PyGrafeoError::from)?
-        };
-
-        // SPARQL results don't have LPG nodes/edges, so pass empty vectors
-        Ok(PyQueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            Vec::new(),
-            Vec::new(),
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("sparql", query, params)
     }
 
     /// Check if transaction is active.
@@ -2219,72 +1995,15 @@ impl PyDbStats {
 
 /// Pulls nodes and edges out of query results so Python can work with them.
 fn extract_entities(result: &QueryResult, _db: &GrafeoDB) -> (Vec<PyNode>, Vec<PyEdge>) {
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
-    let mut seen_node_ids = HashSet::new();
-    let mut seen_edge_ids = HashSet::new();
-
-    // After resolve_entities(), node/edge columns contain Value::Map with metadata.
-    // Scan all values for maps that look like resolved nodes or edges.
-    for row in &result.rows {
-        for value in row {
-            if let Value::Map(map) = value {
-                // Check for node: has _id and _labels
-                if let (Some(Value::Int64(id)), Some(Value::List(_labels))) =
-                    (map.get(&"_id".into()), map.get(&"_labels".into()))
-                {
-                    let node_id = NodeId(*id as u64);
-                    if seen_node_ids.insert(node_id) {
-                        let labels: Vec<String> = _labels
-                            .iter()
-                            .filter_map(|v| {
-                                if let Value::String(s) = v {
-                                    Some(s.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        let properties: HashMap<String, Value> = map
-                            .iter()
-                            .filter(|(k, _)| !k.as_str().starts_with('_'))
-                            .map(|(k, v)| (k.as_str().to_string(), v.clone()))
-                            .collect();
-                        nodes.push(PyNode::new(node_id, labels, properties));
-                    }
-                }
-                // Check for edge: has _id, _type, _source, _target
-                else if let (
-                    Some(Value::Int64(id)),
-                    Some(Value::String(edge_type)),
-                    Some(Value::Int64(src)),
-                    Some(Value::Int64(dst)),
-                ) = (
-                    map.get(&"_id".into()),
-                    map.get(&"_type".into()),
-                    map.get(&"_source".into()),
-                    map.get(&"_target".into()),
-                ) {
-                    let edge_id = EdgeId(*id as u64);
-                    if seen_edge_ids.insert(edge_id) {
-                        let properties: HashMap<String, Value> = map
-                            .iter()
-                            .filter(|(k, _)| !k.as_str().starts_with('_'))
-                            .map(|(k, v)| (k.as_str().to_string(), v.clone()))
-                            .collect();
-                        edges.push(PyEdge::new(
-                            edge_id,
-                            edge_type.to_string(),
-                            NodeId(*src as u64),
-                            NodeId(*dst as u64),
-                            properties,
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
+    let (raw_nodes, raw_edges) = grafeo_bindings_common::entity::extract_entities(result);
+    let nodes = raw_nodes
+        .into_iter()
+        .map(|n| PyNode::new(n.id, n.labels, n.properties))
+        .collect();
+    let edges = raw_edges
+        .into_iter()
+        .map(|e| PyEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties))
+        .collect();
     (nodes, edges)
 }
 

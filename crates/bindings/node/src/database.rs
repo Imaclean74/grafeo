@@ -3,7 +3,6 @@
 //! [`JsGrafeoDB`] wraps the Rust database engine and gives you a JavaScript API.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use napi::JsString;
@@ -86,17 +85,17 @@ impl JsGrafeoDB {
         })
     }
 
-    /// Execute a GQL query. Returns a Promise<QueryResult>.
-    #[napi]
-    pub async fn execute(
+    /// Shared implementation for all language-specific execute methods.
+    async fn execute_language_impl(
         &self,
+        language: &'static str,
         query: String,
         params: Option<serde_json::Value>,
     ) -> Result<QueryResult> {
         let db = self.inner.clone();
         let result = tokio::task::spawn_blocking(move || {
             let db = db.read();
-            execute_query(&db, &query, params.as_ref())
+            execute_language_query(&db, &query, language, params.as_ref())
         })
         .await
         .map_err(|e| napi::Error::from_reason(e.to_string()))??;
@@ -112,6 +111,16 @@ impl JsGrafeoDB {
             result.execution_time_ms,
             result.rows_scanned,
         ))
+    }
+
+    /// Execute a GQL query. Returns a Promise<QueryResult>.
+    #[napi]
+    pub async fn execute(
+        &self,
+        query: String,
+        params: Option<serde_json::Value>,
+    ) -> Result<QueryResult> {
+        self.execute_language_impl("gql", query, params).await
     }
 
     /// Execute a Cypher query.
@@ -122,34 +131,7 @@ impl JsGrafeoDB {
         query: String,
         params: Option<serde_json::Value>,
     ) -> Result<QueryResult> {
-        let db = self.inner.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<_, napi::Error> {
-            let db = db.read();
-            let param_map = convert_json_params(params.as_ref())?;
-            if let Some(p) = param_map {
-                db.execute_cypher_with_params(&query, p)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            } else {
-                db.execute_cypher(&query)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            }
-        })
-        .await
-        .map_err(|e| napi::Error::from_reason(e.to_string()))??;
-
-        let db = self.inner.read();
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(QueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("cypher", query, params).await
     }
 
     /// Execute a SQL/PGQ query (SQL:2023 GRAPH_TABLE).
@@ -160,34 +142,7 @@ impl JsGrafeoDB {
         query: String,
         params: Option<serde_json::Value>,
     ) -> Result<QueryResult> {
-        let db = self.inner.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<_, napi::Error> {
-            let db = db.read();
-            let param_map = convert_json_params(params.as_ref())?;
-            if let Some(p) = param_map {
-                db.execute_sql_with_params(&query, p)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            } else {
-                db.execute_sql(&query)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            }
-        })
-        .await
-        .map_err(|e| napi::Error::from_reason(e.to_string()))??;
-
-        let db = self.inner.read();
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(QueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("sql", query, params).await
     }
 
     /// Execute a Gremlin query.
@@ -198,34 +153,7 @@ impl JsGrafeoDB {
         query: String,
         params: Option<serde_json::Value>,
     ) -> Result<QueryResult> {
-        let db = self.inner.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<_, napi::Error> {
-            let db = db.read();
-            let param_map = convert_json_params(params.as_ref())?;
-            if let Some(p) = param_map {
-                db.execute_gremlin_with_params(&query, p)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            } else {
-                db.execute_gremlin(&query)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            }
-        })
-        .await
-        .map_err(|e| napi::Error::from_reason(e.to_string()))??;
-
-        let db = self.inner.read();
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(QueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("gremlin", query, params).await
     }
 
     /// Execute a GraphQL query.
@@ -236,56 +164,14 @@ impl JsGrafeoDB {
         query: String,
         params: Option<serde_json::Value>,
     ) -> Result<QueryResult> {
-        let db = self.inner.clone();
-        let result = tokio::task::spawn_blocking(move || -> std::result::Result<_, napi::Error> {
-            let db = db.read();
-            let param_map = convert_json_params(params.as_ref())?;
-            if let Some(p) = param_map {
-                db.execute_graphql_with_params(&query, p)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            } else {
-                db.execute_graphql(&query)
-                    .map_err(NodeGrafeoError::from)
-                    .map_err(napi::Error::from)
-            }
-        })
-        .await
-        .map_err(|e| napi::Error::from_reason(e.to_string()))??;
-
-        let db = self.inner.read();
-        let (nodes, edges) = extract_entities(&result, &db);
-
-        Ok(QueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            nodes,
-            edges,
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("graphql", query, params).await
     }
 
     /// Execute a SPARQL query against the RDF triple store.
     #[cfg(feature = "sparql")]
     #[napi(js_name = "executeSparql")]
     pub async fn execute_sparql(&self, query: String) -> Result<QueryResult> {
-        let db = self.inner.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            let db = db.read();
-            db.execute_sparql(&query).map_err(NodeGrafeoError::from)
-        })
-        .await
-        .map_err(|e| napi::Error::from_reason(e.to_string()))??;
-
-        Ok(QueryResult::with_metrics(
-            result.columns,
-            result.rows,
-            Vec::new(),
-            Vec::new(),
-            result.execution_time_ms,
-            result.rows_scanned,
-        ))
+        self.execute_language_impl("sparql", query, None).await
     }
 
     /// Create a node with labels and optional properties.
@@ -448,10 +334,12 @@ impl JsGrafeoDB {
         self.inner.read().edge_count() as u32
     }
 
-    /// Begin a transaction.
+    /// Begin a transaction with an optional isolation level.
+    ///
+    /// Isolation levels: "read_committed", "snapshot" (default), "serializable".
     #[napi(js_name = "beginTransaction")]
-    pub fn begin_transaction(&self) -> Result<Transaction> {
-        Transaction::new(self.inner.clone())
+    pub fn begin_transaction(&self, isolation_level: Option<String>) -> Result<Transaction> {
+        Transaction::new(self.inner.clone(), isolation_level.as_deref())
     }
 
     /// Create a vector similarity index on a node property.
@@ -787,6 +675,68 @@ impl JsGrafeoDB {
         .map_err(|e| napi::Error::from_reason(e.to_string()))?
     }
 
+    /// Remove a property from a node. Returns true if the property existed.
+    #[napi(js_name = "removeNodeProperty")]
+    pub fn remove_node_property(&self, id: f64, key: String) -> Result<bool> {
+        let node_id = validate_node_id(id)?;
+        let db = self.inner.read();
+        Ok(db.remove_node_property(node_id, &key))
+    }
+
+    /// Remove a property from an edge. Returns true if the property existed.
+    #[napi(js_name = "removeEdgeProperty")]
+    pub fn remove_edge_property(&self, id: f64, key: String) -> Result<bool> {
+        let edge_id = validate_edge_id(id)?;
+        let db = self.inner.read();
+        Ok(db.remove_edge_property(edge_id, &key))
+    }
+
+    /// Add a label to an existing node. Returns true if the label was added.
+    #[napi(js_name = "addNodeLabel")]
+    pub fn add_node_label(&self, id: f64, label: String) -> Result<bool> {
+        let node_id = validate_node_id(id)?;
+        let db = self.inner.read();
+        Ok(db.add_node_label(node_id, &label))
+    }
+
+    /// Remove a label from a node. Returns true if the label was removed.
+    #[napi(js_name = "removeNodeLabel")]
+    pub fn remove_node_label(&self, id: f64, label: String) -> Result<bool> {
+        let node_id = validate_node_id(id)?;
+        let db = self.inner.read();
+        Ok(db.remove_node_label(node_id, &label))
+    }
+
+    /// Get all labels for a node. Returns null if the node doesn't exist.
+    #[napi(js_name = "getNodeLabels")]
+    pub fn get_node_labels(&self, id: f64) -> Result<Option<Vec<String>>> {
+        let node_id = validate_node_id(id)?;
+        let db = self.inner.read();
+        Ok(db.get_node_labels(node_id))
+    }
+
+    /// Returns high-level database information as a JSON object.
+    #[napi]
+    pub fn info(&self) -> Result<serde_json::Value> {
+        let db = self.inner.read();
+        let info = db.info();
+        serde_json::to_value(&info).map_err(|e| NodeGrafeoError::Database(e.to_string()).into())
+    }
+
+    /// Returns schema information (labels, edge types, property keys) as a JSON object.
+    #[napi]
+    pub fn schema(&self) -> Result<serde_json::Value> {
+        let db = self.inner.read();
+        let schema = db.schema();
+        serde_json::to_value(&schema).map_err(|e| NodeGrafeoError::Database(e.to_string()).into())
+    }
+
+    /// Returns the Grafeo engine version string.
+    #[napi]
+    pub fn version(&self) -> String {
+        env!("CARGO_PKG_VERSION").to_string()
+    }
+
     /// Close the database.
     #[napi]
     pub fn close(&self) -> Result<()> {
@@ -984,72 +934,30 @@ impl JsGrafeoDB {
     }
 }
 
-/// Execute a query with optional JSON params.
-fn execute_query(
+/// Execute a query in a given language with optional JSON params.
+fn execute_language_query(
     db: &GrafeoDB,
     query: &str,
+    language: &str,
     params: Option<&serde_json::Value>,
 ) -> std::result::Result<EngineQueryResult, napi::Error> {
     let param_map = convert_json_params(params)?;
-    if let Some(p) = param_map {
-        db.execute_with_params(query, p)
-            .map_err(NodeGrafeoError::from)
-            .map_err(napi::Error::from)
-    } else {
-        db.execute(query)
-            .map_err(NodeGrafeoError::from)
-            .map_err(napi::Error::from)
-    }
+    db.execute_language(query, language, param_map)
+        .map_err(NodeGrafeoError::from)
+        .map_err(napi::Error::from)
 }
 
 /// Convert JSON params to a HashMap<String, Value>.
 fn convert_json_params(
     params: Option<&serde_json::Value>,
 ) -> std::result::Result<Option<HashMap<String, Value>>, napi::Error> {
-    let Some(params) = params else {
-        return Ok(None);
-    };
-    let Some(obj) = params.as_object() else {
-        return Err(NodeGrafeoError::InvalidArgument("params must be an object".into()).into());
-    };
-    let mut map = HashMap::with_capacity(obj.len());
-    for (key, value) in obj {
-        map.insert(key.clone(), json_to_value(value)?);
-    }
-    Ok(Some(map))
+    grafeo_bindings_common::json::json_params_to_map(params)
+        .map_err(|msg| NodeGrafeoError::InvalidArgument(msg).into())
 }
 
 /// Convert a serde_json::Value to a Grafeo Value.
 pub(crate) fn json_to_value(v: &serde_json::Value) -> std::result::Result<Value, napi::Error> {
-    match v {
-        serde_json::Value::Null => Ok(Value::Null),
-        serde_json::Value::Bool(b) => Ok(Value::Bool(*b)),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Ok(Value::Int64(i))
-            } else if let Some(f) = n.as_f64() {
-                Ok(Value::Float64(f))
-            } else {
-                Err(NodeGrafeoError::Type("Unsupported number type".into()).into())
-            }
-        }
-        serde_json::Value::String(s) => Ok(Value::String(s.clone().into())),
-        serde_json::Value::Array(arr) => {
-            let items: std::result::Result<Vec<Value>, napi::Error> =
-                arr.iter().map(json_to_value).collect();
-            Ok(Value::List(items?.into()))
-        }
-        serde_json::Value::Object(obj) => {
-            let mut map = std::collections::BTreeMap::new();
-            for (k, v) in obj {
-                map.insert(
-                    grafeo_common::types::PropertyKey::new(k.clone()),
-                    json_to_value(v)?,
-                );
-            }
-            Ok(Value::Map(Arc::new(map)))
-        }
-    }
+    Ok(grafeo_bindings_common::json::json_to_value(v))
 }
 
 /// Fetch a node from the database and wrap it as JsNode.
@@ -1092,100 +1000,21 @@ pub(crate) fn extract_entities(
     result: &EngineQueryResult,
     _db: &GrafeoDB,
 ) -> (Vec<JsNode>, Vec<JsEdge>) {
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
-    let mut seen_node_ids = HashSet::new();
-    let mut seen_edge_ids = HashSet::new();
-
-    // After resolve_entities(), node/edge columns contain Value::Map with metadata.
-    // Scan all values for maps that look like resolved nodes or edges.
-    for row in &result.rows {
-        for value in row {
-            if let Value::Map(map) = value {
-                // Check for node: has _id and _labels
-                if let (Some(Value::Int64(id)), Some(Value::List(labels))) =
-                    (map.get(&"_id".into()), map.get(&"_labels".into()))
-                {
-                    let node_id = NodeId(*id as u64);
-                    if seen_node_ids.insert(node_id) {
-                        let label_strings: Vec<String> = labels
-                            .iter()
-                            .filter_map(|v| {
-                                if let Value::String(s) = v {
-                                    Some(s.to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect();
-                        let properties: HashMap<String, Value> = map
-                            .iter()
-                            .filter(|(k, _)| !k.as_str().starts_with('_'))
-                            .map(|(k, v)| (k.as_str().to_string(), v.clone()))
-                            .collect();
-                        nodes.push(JsNode::new(node_id, label_strings, properties));
-                    }
-                }
-                // Check for edge: has _id, _type, _source, _target
-                else if let (
-                    Some(Value::Int64(id)),
-                    Some(Value::String(edge_type)),
-                    Some(Value::Int64(src)),
-                    Some(Value::Int64(dst)),
-                ) = (
-                    map.get(&"_id".into()),
-                    map.get(&"_type".into()),
-                    map.get(&"_source".into()),
-                    map.get(&"_target".into()),
-                ) {
-                    let edge_id = EdgeId(*id as u64);
-                    if seen_edge_ids.insert(edge_id) {
-                        let properties: HashMap<String, Value> = map
-                            .iter()
-                            .filter(|(k, _)| !k.as_str().starts_with('_'))
-                            .map(|(k, v)| (k.as_str().to_string(), v.clone()))
-                            .collect();
-                        edges.push(JsEdge::new(
-                            edge_id,
-                            edge_type.to_string(),
-                            NodeId(*src as u64),
-                            NodeId(*dst as u64),
-                            properties,
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
+    let (raw_nodes, raw_edges) = grafeo_bindings_common::entity::extract_entities(result);
+    let nodes = raw_nodes
+        .into_iter()
+        .map(|n| JsNode::new(n.id, n.labels, n.properties))
+        .collect();
+    let edges = raw_edges
+        .into_iter()
+        .map(|e| JsEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties))
+        .collect();
     (nodes, edges)
 }
 
 /// Convert a Grafeo Value to serde_json::Value.
 fn grafeo_value_to_json(v: &Value) -> serde_json::Value {
-    match v {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Int64(i) => serde_json::json!(*i),
-        Value::Float64(f) => serde_json::json!(*f),
-        Value::String(s) => serde_json::Value::String(s.to_string()),
-        Value::List(items) => {
-            let arr: Vec<serde_json::Value> = items.iter().map(grafeo_value_to_json).collect();
-            serde_json::Value::Array(arr)
-        }
-        Value::Map(m) => {
-            let obj: serde_json::Map<String, serde_json::Value> = m
-                .iter()
-                .map(|(k, v)| (k.to_string(), grafeo_value_to_json(v)))
-                .collect();
-            serde_json::Value::Object(obj)
-        }
-        Value::Vector(v) => {
-            let arr: Vec<serde_json::Value> = v.iter().map(|&f| serde_json::json!(f)).collect();
-            serde_json::Value::Array(arr)
-        }
-        _ => serde_json::Value::String(format!("{v:?}")),
-    }
+    grafeo_bindings_common::json::value_to_json(v)
 }
 
 /// Convert a CDC ChangeEvent to a JSON object.

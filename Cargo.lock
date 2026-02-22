@@ -1012,16 +1012,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "139ef39800118c7683f2fd3c98c1b23c09ae076556b435f8e9064ae108aaeeec"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "r-efi",
  "rand_core 0.10.0",
  "wasip2",
  "wasip3",
+ "wasm-bindgen",
 ]
 
 [[package]]
 name = "grafeo"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "grafeo-adapters",
  "grafeo-common",
@@ -1033,7 +1035,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-adapters"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "bincode",
  "byteorder",
@@ -1057,9 +1059,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "grafeo-c"
-version = "0.5.7"
+name = "grafeo-bindings-common"
+version = "0.5.8"
 dependencies = [
+ "grafeo-common",
+ "grafeo-engine",
+ "serde_json",
+]
+
+[[package]]
+name = "grafeo-c"
+version = "0.5.8"
+dependencies = [
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-core",
  "grafeo-engine",
@@ -1069,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cli"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -1090,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-common"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "ahash",
  "arcstr",
@@ -1113,7 +1125,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-core"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "ahash",
  "arcstr",
@@ -1141,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-engine"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "bincode",
@@ -1169,9 +1181,10 @@ dependencies = [
 
 [[package]]
 name = "grafeo-node"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "grafeo-adapters",
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-core",
  "grafeo-engine",
@@ -1186,9 +1199,10 @@ dependencies = [
 
 [[package]]
 name = "grafeo-python"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "grafeo-adapters",
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-core",
  "grafeo-engine",
@@ -1201,14 +1215,17 @@ dependencies = [
 
 [[package]]
 name = "grafeo-wasm"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "console_error_panic_hook",
+ "getrandom 0.4.1",
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-engine",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
 ]
