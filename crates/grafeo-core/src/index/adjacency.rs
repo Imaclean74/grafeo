@@ -411,8 +411,7 @@ impl ChunkedAdjacency {
                 .or_insert_with(AdjacencyList::new)
                 .add_edge(dst, edge_id);
         }
-        self.edge_count
-            .fetch_add(edges.len(), Ordering::Relaxed);
+        self.edge_count.fetch_add(edges.len(), Ordering::Relaxed);
 
         // Compact any lists that overflowed their delta buffer
         for list in lists.values_mut() {
