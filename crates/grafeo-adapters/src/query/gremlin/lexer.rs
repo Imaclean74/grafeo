@@ -195,12 +195,10 @@ pub enum TokenKind {
     Regex,
 
     // Tokens (T.*)
-
     /// The `T` token namespace (e.g., `T.id`, `T.label`).
     T,
 
     // Order
-
     /// The `asc` ascending sort order.
     Asc,
     /// The `desc` descending sort order.
@@ -209,7 +207,6 @@ pub enum TokenKind {
     Shuffle,
 
     // Cardinality
-
     /// The `single` cardinality (one value per key).
     Single,
     /// The `list` cardinality (ordered multi-value).
@@ -218,7 +215,6 @@ pub enum TokenKind {
     Set,
 
     // Punctuation
-
     /// Dot (`.`) separator.
     Dot,
     /// Comma (`,`) delimiter.
@@ -235,7 +231,6 @@ pub enum TokenKind {
     Underscore,
 
     // End of input
-
     /// End of input.
     Eof,
 }
