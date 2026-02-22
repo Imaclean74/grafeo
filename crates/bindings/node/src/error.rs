@@ -42,12 +42,12 @@ impl From<NodeGrafeoError> for napi::Error {
 
 impl From<grafeo_common::utils::error::Error> for NodeGrafeoError {
     fn from(err: grafeo_common::utils::error::Error) -> Self {
-        match &err {
-            grafeo_common::utils::error::Error::Query(_) => NodeGrafeoError::Query(err.to_string()),
-            grafeo_common::utils::error::Error::Transaction(_) => {
-                NodeGrafeoError::Transaction(err.to_string())
-            }
-            _ => NodeGrafeoError::Database(err.to_string()),
+        use grafeo_bindings_common::error::{ErrorCategory, classify_error};
+        let msg = err.to_string();
+        match classify_error(&err) {
+            ErrorCategory::Query => NodeGrafeoError::Query(msg),
+            ErrorCategory::Transaction => NodeGrafeoError::Transaction(msg),
+            _ => NodeGrafeoError::Database(msg),
         }
     }
 }

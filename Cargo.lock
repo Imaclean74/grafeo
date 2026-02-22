@@ -1069,6 +1069,7 @@ dependencies = [
 name = "grafeo-c"
 version = "0.5.8"
 dependencies = [
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-core",
  "grafeo-engine",
@@ -1181,6 +1182,7 @@ name = "grafeo-node"
 version = "0.5.8"
 dependencies = [
  "grafeo-adapters",
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-core",
  "grafeo-engine",
@@ -1198,6 +1200,7 @@ name = "grafeo-python"
 version = "0.5.8"
 dependencies = [
  "grafeo-adapters",
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-core",
  "grafeo-engine",
@@ -1213,6 +1216,7 @@ name = "grafeo-wasm"
 version = "0.5.8"
 dependencies = [
  "console_error_panic_hook",
+ "grafeo-bindings-common",
  "grafeo-common",
  "grafeo-engine",
  "js-sys",

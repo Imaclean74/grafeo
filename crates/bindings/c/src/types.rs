@@ -68,64 +68,12 @@ pub struct GrafeoEdge {
 
 /// Convert a Grafeo `Value` to a `serde_json::Value`.
 pub fn value_to_json(v: &Value) -> serde_json::Value {
-    match v {
-        Value::Null => serde_json::Value::Null,
-        Value::Bool(b) => serde_json::Value::Bool(*b),
-        Value::Int64(i) => serde_json::json!(*i),
-        Value::Float64(f) => serde_json::json!(*f),
-        Value::String(s) => serde_json::Value::String(s.to_string()),
-        Value::Bytes(b) => {
-            // Encode as array of integers for lossless roundtrip.
-            let arr: Vec<serde_json::Value> =
-                b.iter().map(|&byte| serde_json::json!(byte)).collect();
-            serde_json::Value::Array(arr)
-        }
-        Value::Timestamp(ts) => serde_json::json!({ "$timestamp_us": ts.as_micros() }),
-        Value::List(items) => serde_json::Value::Array(items.iter().map(value_to_json).collect()),
-        Value::Map(map) => {
-            let obj: serde_json::Map<std::string::String, serde_json::Value> = map
-                .iter()
-                .map(|(k, v)| (k.as_str().to_string(), value_to_json(v)))
-                .collect();
-            serde_json::Value::Object(obj)
-        }
-        Value::Vector(vec) => {
-            serde_json::Value::Array(vec.iter().map(|&f| serde_json::json!(f)).collect())
-        }
-    }
+    grafeo_bindings_common::json::value_to_json(v)
 }
 
 /// Convert a `serde_json::Value` to a Grafeo `Value`.
 pub fn json_to_value(v: &serde_json::Value) -> Value {
-    match v {
-        serde_json::Value::Null => Value::Null,
-        serde_json::Value::Bool(b) => Value::Bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::Int64(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::Float64(f)
-            } else {
-                Value::Null
-            }
-        }
-        serde_json::Value::String(s) => Value::String(s.as_str().into()),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<Value> = arr.iter().map(json_to_value).collect();
-            Value::List(items.into())
-        }
-        serde_json::Value::Object(obj) => {
-            // Check for special $timestamp_us encoding.
-            if let Some(ts) = obj.get("$timestamp_us").and_then(serde_json::Value::as_i64) {
-                return Value::Timestamp(grafeo_common::types::Timestamp::from_micros(ts));
-            }
-            let mut map = BTreeMap::new();
-            for (k, v) in obj {
-                map.insert(PropertyKey::new(k.clone()), json_to_value(v));
-            }
-            Value::Map(Arc::new(map))
-        }
-    }
+    grafeo_bindings_common::json::json_to_value(v)
 }
 
 /// Serialize properties `BTreeMap` to a JSON `CString`.

@@ -16,6 +16,7 @@ grafeo-engine = { path = "../../grafeo-engine" }
 grafeo-core = { path = "../../grafeo-core" }
 grafeo-common = { path = "../../grafeo-common" }
 grafeo-adapters = { path = "../../grafeo-adapters" }
+grafeo-bindings-common = { path = "../common" }
 
 pyo3 = { workspace = true, features = ["extension-module"] }
 pyo3-async-runtimes = { workspace = true }

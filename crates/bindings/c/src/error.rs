@@ -25,15 +25,15 @@ pub enum GrafeoStatus {
 
 impl From<&grafeo_common::utils::error::Error> for GrafeoStatus {
     fn from(err: &grafeo_common::utils::error::Error) -> Self {
-        use grafeo_common::utils::error::Error;
-        match err {
-            Error::Query(_) => GrafeoStatus::ErrorQuery,
-            Error::Transaction(_) => GrafeoStatus::ErrorTransaction,
-            Error::Storage(_) => GrafeoStatus::ErrorStorage,
-            Error::Io(_) => GrafeoStatus::ErrorIo,
-            Error::Serialization(_) => GrafeoStatus::ErrorSerialization,
-            Error::Internal(_) => GrafeoStatus::ErrorInternal,
-            _ => GrafeoStatus::ErrorDatabase,
+        use grafeo_bindings_common::error::{ErrorCategory, classify_error};
+        match classify_error(err) {
+            ErrorCategory::Query => GrafeoStatus::ErrorQuery,
+            ErrorCategory::Transaction => GrafeoStatus::ErrorTransaction,
+            ErrorCategory::Storage => GrafeoStatus::ErrorStorage,
+            ErrorCategory::Io => GrafeoStatus::ErrorIo,
+            ErrorCategory::Serialization => GrafeoStatus::ErrorSerialization,
+            ErrorCategory::Internal => GrafeoStatus::ErrorInternal,
+            ErrorCategory::Database => GrafeoStatus::ErrorDatabase,
         }
     }
 }

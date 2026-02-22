@@ -147,7 +147,7 @@ pub extern "C" fn grafeo_execute(
         return std::ptr::null_mut();
     };
     let guard = db.inner.read();
-    match guard.execute(query_str) {
+    match guard.execute_language(query_str, "gql", None) {
         Ok(result) => build_result(&result),
         Err(e) => {
             set_error(&e);
@@ -168,12 +168,8 @@ pub extern "C" fn grafeo_execute_with_params(
         return std::ptr::null_mut();
     };
     let guard = db.inner.read();
-    let result = if let Some(params) = crate::types::parse_params(params_json) {
-        guard.execute_with_params(query_str, params)
-    } else {
-        guard.execute(query_str)
-    };
-    match result {
+    let params = crate::types::parse_params(params_json);
+    match guard.execute_language(query_str, "gql", params) {
         Ok(r) => build_result(&r),
         Err(e) => {
             set_error(&e);
@@ -193,7 +189,7 @@ pub extern "C" fn grafeo_execute_cypher(
     let Ok(query_str) = str_from_ptr(query) else {
         return std::ptr::null_mut();
     };
-    match db.inner.read().execute_cypher(query_str) {
+    match db.inner.read().execute_language(query_str, "cypher", None) {
         Ok(r) => build_result(&r),
         Err(e) => {
             set_error(&e);
@@ -213,7 +209,7 @@ pub extern "C" fn grafeo_execute_gremlin(
     let Ok(query_str) = str_from_ptr(query) else {
         return std::ptr::null_mut();
     };
-    match db.inner.read().execute_gremlin(query_str) {
+    match db.inner.read().execute_language(query_str, "gremlin", None) {
         Ok(r) => build_result(&r),
         Err(e) => {
             set_error(&e);
@@ -233,7 +229,7 @@ pub extern "C" fn grafeo_execute_graphql(
     let Ok(query_str) = str_from_ptr(query) else {
         return std::ptr::null_mut();
     };
-    match db.inner.read().execute_graphql(query_str) {
+    match db.inner.read().execute_language(query_str, "graphql", None) {
         Ok(r) => build_result(&r),
         Err(e) => {
             set_error(&e);
@@ -253,7 +249,7 @@ pub extern "C" fn grafeo_execute_sparql(
     let Ok(query_str) = str_from_ptr(query) else {
         return std::ptr::null_mut();
     };
-    match db.inner.read().execute_sparql(query_str) {
+    match db.inner.read().execute_language(query_str, "sparql", None) {
         Ok(r) => build_result(&r),
         Err(e) => {
             set_error(&e);
@@ -273,7 +269,7 @@ pub extern "C" fn grafeo_execute_sql(
     let Ok(query_str) = str_from_ptr(query) else {
         return std::ptr::null_mut();
     };
-    match db.inner.read().execute_sql(query_str) {
+    match db.inner.read().execute_language(query_str, "sql", None) {
         Ok(r) => build_result(&r),
         Err(e) => {
             set_error(&e);

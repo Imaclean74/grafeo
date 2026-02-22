@@ -129,26 +129,10 @@ impl Database {
     /// ```
     #[wasm_bindgen(js_name = "executeWithLanguage")]
     pub fn execute_with_language(&self, query: &str, language: &str) -> Result<JsValue, JsError> {
-        let result = match language {
-            "gql" => self.inner.execute(query),
-            #[cfg(feature = "cypher")]
-            "cypher" => self.inner.execute_cypher(query),
-            #[cfg(feature = "sparql")]
-            "sparql" => self.inner.execute_sparql(query),
-            #[cfg(feature = "gremlin")]
-            "gremlin" => self.inner.execute_gremlin(query),
-            #[cfg(feature = "graphql")]
-            "graphql" => self.inner.execute_graphql(query),
-            #[cfg(feature = "sql-pgq")]
-            "sql" => self.inner.execute_sql(query),
-            other => {
-                let supported = supported_languages();
-                return Err(JsError::new(&format!(
-                    "Unknown query language: '{other}'. Supported: {supported}"
-                )));
-            }
-        }
-        .map_err(|e| JsError::new(&e.to_string()))?;
+        let result = self
+            .inner
+            .execute_language(query, language, None)
+            .map_err(|e| JsError::new(&e.to_string()))?;
 
         let rows = Array::new_with_length(result.rows.len() as u32);
         for (i, row) in result.rows.iter().enumerate() {
