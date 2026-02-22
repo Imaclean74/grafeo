@@ -195,35 +195,57 @@ pub enum TokenKind {
     Regex,
 
     // Tokens (T.*)
+
+    /// The `T` token namespace (e.g., `T.id`, `T.label`).
     T,
 
     // Order
+
+    /// The `asc` ascending sort order.
     Asc,
+    /// The `desc` descending sort order.
     Desc,
+    /// The `shuffle` random sort order.
     Shuffle,
 
     // Cardinality
+
+    /// The `single` cardinality (one value per key).
     Single,
+    /// The `list` cardinality (ordered multi-value).
     List,
+    /// The `set` cardinality (unique multi-value).
     Set,
 
     // Punctuation
+
+    /// Dot (`.`) separator.
     Dot,
+    /// Comma (`,`) delimiter.
     Comma,
+    /// Left parenthesis (`(`).
     LParen,
+    /// Right parenthesis (`)`).
     RParen,
+    /// Left bracket (`[`).
     LBracket,
+    /// Right bracket (`]`).
     RBracket,
+    /// Underscore (`_`) token.
     Underscore,
 
     // End of input
+
+    /// End of input.
     Eof,
 }
 
 /// A token with its position.
 #[derive(Debug, Clone)]
 pub struct Token {
+    /// The token type.
     pub kind: TokenKind,
+    /// Source location of this token.
     pub span: SourceSpan,
 }
 
