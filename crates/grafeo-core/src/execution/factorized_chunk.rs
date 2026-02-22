@@ -231,10 +231,12 @@ impl FactorizedChunk {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use grafeo_core::execution::factorized_chunk::FactorizedChunk;
+    /// # let mut chunk = FactorizedChunk::empty();
     /// let mults = chunk.path_multiplicities_cached();
-    /// let sum = chunk.sum_deepest_with_multiplicities(0, &mults);
-    /// let avg = chunk.avg_deepest_with_multiplicities(0, &mults);
+    /// let sum = chunk.sum_deepest(0);
+    /// let avg = chunk.avg_deepest(0);
     /// ```
     pub fn path_multiplicities_cached(&mut self) -> Arc<[usize]> {
         // Check if already cached
