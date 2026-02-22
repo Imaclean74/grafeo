@@ -4,17 +4,24 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.8] - Unreleased
 
+### Added
+
+- **`grafeo-bindings-common` crate**: shared library for all language bindings, eliminating duplicated entity extraction, error classification, and JSON-to-Value conversion. All four bindings (Python, Node.js, C, WASM) now delegate to the common crate
+- **Unified query dispatch**: `GrafeoDB::execute_language()` and `Session::execute_language()` accept a language name string (`"gql"`, `"cypher"`, `"gremlin"`, `"graphql"`, `"sparql"`, `"sql"`) with optional parameters, replacing 18 near-identical per-language functions across bindings
+- **Node.js API parity**: added `removeNodeProperty()`, `removeEdgeProperty()`, `addNodeLabel()`, `removeNodeLabel()`, `getNodeLabels()`, `info()`, `schema()`, and `version()` methods to match the Python binding's API surface
+- **Node.js transaction isolation**: `beginTransaction()` now accepts an optional `isolationLevel` parameter (`"read_committed"`, `"snapshot"`, `"serializable"`), matching Python
+- **WASM parameterized queries**: `executeWithParams()`, `executeWithLanguageAndParams()`, and `executeRawWithLanguage()` for parameterized and multi-language queries in the browser
+- **WASM per-language convenience methods**: `executeCypher()`, `executeGremlin()`, `executeGraphql()`, `executeSparql()`, `executeSql()` with proper feature gating
+- **Batch edge creation**: `LpgStore::batch_create_edges()` and `ChunkedAdjacency::batch_add_edges()` for efficient bulk graph import with single lock acquisition
+- **grafeo-adapters documentation**: all previously undocumented public items across Gremlin/GraphQL lexers, keywords, and AST types now have doc comments. `#![allow(missing_docs)]` replaced with `#![warn(missing_docs)]`
+- **Doc-test overhaul**: converted all remaining `ignore` doc-tests to compilable `no_run` or fully runnable examples. Zero `ignore` annotations remain in the codebase
+
 ### Improved
 
 - **Incremental statistics tracking**: `compute_statistics()` now reads from atomic delta counters instead of scanning all nodes and edges. Reduces statistics refresh from O(n+m) to O(|labels|+|edge_types|). Full resync only triggers after transaction rollback
 - **Cost model uses real fanout**: the query optimizer's cost model now derives average edge fanout from actual graph statistics instead of a hardcoded value of 10.0, improving plan selection for sparse and dense graphs
 - **Consistent ID sentinels**: `TxId::INVALID` now uses `u64::MAX` (matching `NodeId`, `EdgeId`, `LabelId`, `PropertyKeyId`, `EdgeTypeId`, `IndexId`) instead of `0`
-
-### Added
-
-- **Batch edge creation**: `LpgStore::batch_create_edges()` and `ChunkedAdjacency::batch_add_edges()` for efficient bulk graph import with single lock acquisition
-- **grafeo-adapters documentation**: all 205 previously undocumented public items across Gremlin/GraphQL lexers, keywords, and AST types now have doc comments. `#![allow(missing_docs)]` replaced with `#![warn(missing_docs)]`
-- **Doc-test overhaul**: converted all 37 remaining `ignore` doc-tests across 30 files to compilable `no_run` or fully runnable examples. Zero `ignore` annotations remain in the codebase
+- **Binding consistency**: all four bindings now share entity extraction, error classification, and JSON conversion via `grafeo-bindings-common`, ensuring identical behavior and reducing maintenance surface
 
 ## [0.5.7] - 2026-02-19
 
