@@ -122,7 +122,7 @@ impl Database {
 
     /// Executes a query using a specific query language.
     ///
-    /// Supported languages: `"gql"`, `"cypher"`, `"sparql"`, `"gremlin"`, `"graphql"`.
+    /// Supported languages: `"gql"`, `"cypher"`, `"sparql"`, `"gremlin"`, `"graphql"`, `"sql"`.
     /// Languages require their corresponding feature flag to be enabled.
     ///
     /// ```js
@@ -133,16 +133,7 @@ impl Database {
     /// ```
     #[wasm_bindgen(js_name = "executeWithLanguage")]
     pub fn execute_with_language(&self, query: &str, language: &str) -> Result<JsValue, JsError> {
-        let result = self
-            .inner
-            .execute_language(query, language, None)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-
-        let rows = Array::new_with_length(result.rows.len() as u32);
-        for (i, row) in result.rows.iter().enumerate() {
-            rows.set(i as u32, types::row_to_js_object(&result.columns, row));
-        }
-        Ok(rows.into())
+        self.execute_language_impl(query, language, None)
     }
 
     /// Exports the database to a binary snapshot.
@@ -313,8 +304,208 @@ impl Database {
         Ok(arr.into())
     }
 
+    /// Executes a GQL query with parameters and returns results as an array of objects.
+    ///
+    /// Parameters are passed as a JavaScript object with string keys.
+    /// Use `$name` syntax in the query to reference parameters.
+    ///
+    /// ```js
+    /// const results = db.executeWithParams(
+    ///   "MATCH (p:Person {name: $name}) RETURN p.name, p.age",
+    ///   { name: "Alice" }
+    /// );
+    /// ```
+    #[wasm_bindgen(js_name = "executeWithParams")]
+    pub fn execute_with_params(&self, query: &str, params: JsValue) -> Result<JsValue, JsError> {
+        self.execute_language_impl(query, "gql", Some(params))
+    }
+
+    /// Executes a query using a specific language with parameters.
+    ///
+    /// Combines language selection with parameterised queries.
+    ///
+    /// ```js
+    /// const results = db.executeWithLanguageAndParams(
+    ///   "MATCH (p:Person {name: $name}) RETURN p.name",
+    ///   "cypher",
+    ///   { name: "Alice" }
+    /// );
+    /// ```
+    #[wasm_bindgen(js_name = "executeWithLanguageAndParams")]
+    pub fn execute_with_language_and_params(
+        &self,
+        query: &str,
+        language: &str,
+        params: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.execute_language_impl(query, language, Some(params))
+    }
+
+    /// Executes a Cypher query and returns results as an array of objects.
+    ///
+    /// Requires the `cypher` feature flag.
+    ///
+    /// ```js
+    /// const results = db.executeCypher("MATCH (p:Person) RETURN p.name");
+    /// ```
+    #[cfg(feature = "cypher")]
+    #[wasm_bindgen(js_name = "executeCypher")]
+    pub fn execute_cypher(&self, query: &str) -> Result<JsValue, JsError> {
+        self.execute_language_impl(query, "cypher", None)
+    }
+
+    /// Executes a Gremlin query and returns results as an array of objects.
+    ///
+    /// Requires the `gremlin` feature flag.
+    ///
+    /// ```js
+    /// const results = db.executeGremlin("g.V().hasLabel('Person').values('name')");
+    /// ```
+    #[cfg(feature = "gremlin")]
+    #[wasm_bindgen(js_name = "executeGremlin")]
+    pub fn execute_gremlin(&self, query: &str) -> Result<JsValue, JsError> {
+        self.execute_language_impl(query, "gremlin", None)
+    }
+
+    /// Executes a GraphQL query and returns results as an array of objects.
+    ///
+    /// Requires the `graphql` feature flag.
+    ///
+    /// ```js
+    /// const results = db.executeGraphql("{ Person { name age } }");
+    /// ```
+    #[cfg(feature = "graphql")]
+    #[wasm_bindgen(js_name = "executeGraphql")]
+    pub fn execute_graphql(&self, query: &str) -> Result<JsValue, JsError> {
+        self.execute_language_impl(query, "graphql", None)
+    }
+
+    /// Executes a SPARQL query and returns results as an array of objects.
+    ///
+    /// Requires the `sparql` feature flag.
+    ///
+    /// ```js
+    /// const results = db.executeSparql("SELECT ?name WHERE { ?p a :Person ; :name ?name }");
+    /// ```
+    #[cfg(feature = "sparql")]
+    #[wasm_bindgen(js_name = "executeSparql")]
+    pub fn execute_sparql(&self, query: &str) -> Result<JsValue, JsError> {
+        self.execute_language_impl(query, "sparql", None)
+    }
+
+    /// Executes a SQL/PGQ query and returns results as an array of objects.
+    ///
+    /// Requires the `sql-pgq` feature flag.
+    ///
+    /// ```js
+    /// const results = db.executeSql("SELECT * FROM GRAPH_TABLE (...)");
+    /// ```
+    #[cfg(feature = "sql-pgq")]
+    #[wasm_bindgen(js_name = "executeSql")]
+    pub fn execute_sql(&self, query: &str) -> Result<JsValue, JsError> {
+        self.execute_language_impl(query, "sql", None)
+    }
+
+    /// Executes a query in a specific language and returns raw columns, rows, and metadata.
+    ///
+    /// Returns `{ columns: string[], rows: any[][], executionTimeMs?: number }`.
+    ///
+    /// ```js
+    /// const raw = db.executeRawWithLanguage("MATCH (p:Person) RETURN p.name", "cypher");
+    /// // { columns: ["p.name"], rows: [["Alice"], ["Bob"]], executionTimeMs: 0.5 }
+    /// ```
+    #[wasm_bindgen(js_name = "executeRawWithLanguage")]
+    pub fn execute_raw_with_language(
+        &self,
+        query: &str,
+        language: &str,
+    ) -> Result<JsValue, JsError> {
+        let result = self
+            .inner
+            .execute_language(query, language, None)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        let obj = js_sys::Object::new();
+
+        // columns: string[]
+        let cols = Array::new_with_length(result.columns.len() as u32);
+        for (i, col) in result.columns.iter().enumerate() {
+            cols.set(i as u32, JsValue::from_str(col));
+        }
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("columns"), &cols);
+
+        // rows: any[][]
+        let rows = Array::new_with_length(result.rows.len() as u32);
+        for (i, row) in result.rows.iter().enumerate() {
+            let js_row = Array::new_with_length(row.len() as u32);
+            for (j, val) in row.iter().enumerate() {
+                js_row.set(j as u32, types::value_to_js(val));
+            }
+            rows.set(i as u32, js_row.into());
+        }
+        let _ = js_sys::Reflect::set(&obj, &JsValue::from_str("rows"), &rows);
+
+        // executionTimeMs?: number
+        if let Some(ms) = result.execution_time_ms {
+            let _ = js_sys::Reflect::set(
+                &obj,
+                &JsValue::from_str("executionTimeMs"),
+                &JsValue::from_f64(ms),
+            );
+        }
+
+        Ok(obj.into())
+    }
+
     /// Returns the Grafeo version.
     pub fn version() -> String {
         env!("CARGO_PKG_VERSION").to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private helpers (not exported to JS)
+// ---------------------------------------------------------------------------
+
+impl Database {
+    /// Shared implementation for all language-specific execute methods.
+    ///
+    /// Converts an optional JS params object to the internal
+    /// `HashMap<String, Value>` representation and delegates to
+    /// `GrafeoDB::execute_language`.
+    fn execute_language_impl(
+        &self,
+        query: &str,
+        language: &str,
+        params: Option<JsValue>,
+    ) -> Result<JsValue, JsError> {
+        let param_map = Self::convert_params(params)?;
+
+        let result = self
+            .inner
+            .execute_language(query, language, param_map)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        let rows = Array::new_with_length(result.rows.len() as u32);
+        for (i, row) in result.rows.iter().enumerate() {
+            rows.set(i as u32, types::row_to_js_object(&result.columns, row));
+        }
+        Ok(rows.into())
+    }
+
+    /// Converts a JS params value (object or null/undefined) to an optional
+    /// `HashMap<String, Value>` suitable for `execute_language`.
+    fn convert_params(
+        params: Option<JsValue>,
+    ) -> Result<Option<HashMap<String, Value>>, JsError> {
+        let Some(js_val) = params else {
+            return Ok(None);
+        };
+        if js_val.is_null() || js_val.is_undefined() {
+            return Ok(None);
+        }
+        let json_val: serde_json::Value =
+            serde_wasm_bindgen::from_value(js_val).map_err(|e| JsError::new(&e.to_string()))?;
+        json_params_to_map(Some(&json_val)).map_err(|e| JsError::new(&e))
     }
 }
