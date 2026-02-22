@@ -2,6 +2,14 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
+## [0.5.8] - 2026-02-22
+
+### Improved
+
+- **Incremental statistics tracking**: `compute_statistics()` now reads from atomic delta counters instead of scanning all nodes and edges. Reduces statistics refresh from O(n+m) to O(|labels|+|edge_types|). Full resync only triggers after transaction rollback
+- **Cost model uses real fanout**: the query optimizer's cost model now derives average edge fanout from actual graph statistics instead of a hardcoded value of 10.0, improving plan selection for sparse and dense graphs
+- **Consistent ID sentinels**: `TxId::INVALID` now uses `u64::MAX` (matching `NodeId`, `EdgeId`, `LabelId`, `PropertyKeyId`, `EdgeTypeId`, `IndexId`) instead of `0`
+
 ## [0.5.7] - 2026-02-19
 
 ### Fixed
@@ -14,9 +22,6 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ### Improved
 
-- **Incremental statistics tracking**: `compute_statistics()` now reads from atomic delta counters instead of scanning all nodes and edges. Reduces statistics refresh from O(n+m) to O(|labels|+|edge_types|). Full resync only triggers after transaction rollback
-- **Cost model uses real fanout**: the query optimizer's cost model now derives average edge fanout from actual graph statistics instead of a hardcoded value of 10.0, improving plan selection for sparse and dense graphs
-- **Consistent ID sentinels**: `TxId::INVALID` now uses `u64::MAX` (matching `NodeId`, `EdgeId`, `LabelId`, `PropertyKeyId`, `EdgeTypeId`, `IndexId`) instead of `0`
 - **LpgStore submodule split**: split the monolithic `store.rs` (4,600+ lines) into 10 focused submodules (node_ops, edge_ops, property_ops, traversal, schema, index, search, statistics, versioning). No public API changes. Same pattern as the earlier `database/` module split
 - **Translator consolidation**: extracted shared `is_aggregate_function` and `to_aggregate_function` helpers from GQL and Cypher translators into a common `translator_common` module, removing code duplication
 - **Doc-test fixes**: converted 9 ignored doc-tests to compilable `no_run` examples across fold.rs, cardinality.rs, and embedding config. Fixed incorrect function signatures in parallel_partition doc-test
