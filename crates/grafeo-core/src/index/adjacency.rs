@@ -394,6 +394,34 @@ impl ChunkedAdjacency {
         self.edge_count.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Adds multiple edges in a single lock acquisition.
+    ///
+    /// Each tuple is `(src, dst, edge_id)`. Takes the write lock once and
+    /// inserts all edges, then compacts any lists that exceed the delta
+    /// threshold. Significantly faster than calling `add_edge()` in a loop
+    /// for bulk imports.
+    pub fn batch_add_edges(&self, edges: &[(NodeId, NodeId, EdgeId)]) {
+        if edges.is_empty() {
+            return;
+        }
+        let mut lists = self.lists.write();
+        for &(src, dst, edge_id) in edges {
+            lists
+                .entry(src)
+                .or_insert_with(AdjacencyList::new)
+                .add_edge(dst, edge_id);
+        }
+        self.edge_count
+            .fetch_add(edges.len(), Ordering::Relaxed);
+
+        // Compact any lists that overflowed their delta buffer
+        for list in lists.values_mut() {
+            if list.delta_inserts.len() >= DELTA_COMPACTION_THRESHOLD {
+                list.compact(self.chunk_capacity);
+            }
+        }
+    }
+
     /// Marks an edge as deleted.
     pub fn mark_deleted(&self, src: NodeId, edge_id: EdgeId) {
         let mut lists = self.lists.write();
