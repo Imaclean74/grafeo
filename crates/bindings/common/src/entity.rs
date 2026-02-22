@@ -130,10 +130,7 @@ mod tests {
     fn node_map(id: i64, labels: &[&str], props: &[(&str, Value)]) -> Value {
         let mut map = BTreeMap::new();
         map.insert(PropertyKey::new("_id"), Value::Int64(id));
-        let label_vals: Vec<Value> = labels
-            .iter()
-            .map(|l| Value::String((*l).into()))
-            .collect();
+        let label_vals: Vec<Value> = labels.iter().map(|l| Value::String((*l).into())).collect();
         map.insert(PropertyKey::new("_labels"), Value::List(label_vals.into()));
         for (k, v) in props {
             map.insert(PropertyKey::new(*k), v.clone());
@@ -144,10 +141,7 @@ mod tests {
     fn edge_map(id: i64, edge_type: &str, src: i64, dst: i64, props: &[(&str, Value)]) -> Value {
         let mut map = BTreeMap::new();
         map.insert(PropertyKey::new("_id"), Value::Int64(id));
-        map.insert(
-            PropertyKey::new("_type"),
-            Value::String(edge_type.into()),
-        );
+        map.insert(PropertyKey::new("_type"), Value::String(edge_type.into()));
         map.insert(PropertyKey::new("_source"), Value::Int64(src));
         map.insert(PropertyKey::new("_target"), Value::Int64(dst));
         for (k, v) in props {
