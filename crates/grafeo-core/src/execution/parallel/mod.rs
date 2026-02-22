@@ -33,7 +33,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use grafeo_core::execution::parallel::{
 //!     ParallelPipeline, ParallelPipelineConfig, CloneableOperatorFactory, RangeSource
 //! };
@@ -43,10 +43,7 @@
 //! let source = Arc::new(RangeSource::new(1_000_000));
 //!
 //! // Create operator factory (each worker gets its own operators)
-//! let factory = Arc::new(
-//!     CloneableOperatorFactory::new()
-//!         .with_operator(|| Box::new(FilterOp::new()))
-//! );
+//! let factory = Arc::new(CloneableOperatorFactory::new());
 //!
 //! // Configure and execute
 //! let config = ParallelPipelineConfig::default().with_workers(4);

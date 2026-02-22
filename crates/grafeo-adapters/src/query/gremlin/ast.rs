@@ -248,56 +248,77 @@ pub enum ByModifier {
 /// Token type for by() modifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
+    /// `T.id` — the element identifier.
     Id,
+    /// `T.label` — the element label.
     Label,
+    /// `T.key` — the property key.
     Key,
+    /// `T.value` — the property value.
     Value,
 }
 
 /// Sort order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortOrder {
+    /// Ascending order.
     Asc,
+    /// Descending order.
     Desc,
+    /// Random order.
     Shuffle,
 }
 
 /// Order modifier.
 #[derive(Debug, Clone)]
 pub struct OrderModifier {
+    /// The key or traversal to order by.
     pub by: ByModifier,
+    /// The sort direction.
     pub order: SortOrder,
 }
 
 /// Choose clause for branching.
 #[derive(Debug, Clone)]
 pub struct ChooseClause {
+    /// The branching condition.
     pub condition: ChooseCondition,
+    /// Steps to execute when the condition is true.
     pub true_branch: Vec<Step>,
+    /// Steps to execute when the condition is false.
     pub false_branch: Option<Vec<Step>>,
 }
 
 /// Choose condition.
 #[derive(Debug, Clone)]
 pub enum ChooseCondition {
+    /// A predicate condition.
     Predicate(Box<Predicate>),
+    /// A traversal condition (truthy if non-empty).
     Traversal(Vec<Step>),
+    /// A `has(key)` existence check.
     HasKey(String),
 }
 
 /// Property step for setting properties.
 #[derive(Debug, Clone)]
 pub struct PropertyStep {
+    /// Optional cardinality (`single`, `list`, or `set`).
     pub cardinality: Option<Cardinality>,
+    /// The property key.
     pub key: String,
+    /// The property value.
     pub value: Value,
 }
 
 /// Property cardinality.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cardinality {
+    /// At most one value per key (default).
     Single,
+    /// Multiple values per key (ordered).
     List,
+    /// Multiple unique values per key.
     Set,
 }
 

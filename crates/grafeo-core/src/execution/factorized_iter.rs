@@ -14,8 +14,11 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! let chunk = get_factorized_chunk();
+//! ```rust
+//! use grafeo_core::execution::factorized_chunk::FactorizedChunk;
+//! use grafeo_core::execution::factorized_iter::PrecomputedIter;
+//!
+//! let chunk = FactorizedChunk::empty();
 //!
 //! // Pre-computed iteration (better for repeated access)
 //! let iter = PrecomputedIter::new(&chunk);

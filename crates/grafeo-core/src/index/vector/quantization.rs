@@ -11,17 +11,24 @@
 //!
 //! Converts f32 values to u8 by learning min/max ranges per dimension:
 //!
-//! ```ignore
+//! ```
 //! use grafeo_core::index::vector::quantization::ScalarQuantizer;
 //!
-//! let vectors: Vec<Vec<f32>> = get_training_vectors();
-//! let quantizer = ScalarQuantizer::train(&vectors);
+//! // Training vectors to learn min/max ranges
+//! let vectors = vec![
+//!     vec![0.0f32, 0.3, 0.7],
+//!     vec![0.2, 0.5, 1.0],
+//!     vec![0.1, 0.6, 0.9],
+//! ];
+//! let refs: Vec<&[f32]> = vectors.iter().map(|v| v.as_slice()).collect();
+//! let quantizer = ScalarQuantizer::train(&refs);
 //!
 //! // Quantize: f32 -> u8 (4x compression)
 //! let original = vec![0.1f32, 0.5, 0.9];
 //! let quantized = quantizer.quantize(&original);
 //!
 //! // Compute distance in quantized space (approximate)
+//! let other_quantized = quantizer.quantize(&[0.15, 0.45, 0.85]);
 //! let dist = quantizer.distance_u8(&quantized, &other_quantized);
 //! ```
 //!
@@ -29,14 +36,16 @@
 //!
 //! Converts f32 values to bits (sign only), enabling hamming distance:
 //!
-//! ```ignore
+//! ```
 //! use grafeo_core::index::vector::quantization::BinaryQuantizer;
 //!
-//! let v = vec![0.1f32, -0.5, 0.0, 0.9];
-//! let bits = BinaryQuantizer::quantize(&v);
+//! let v1 = vec![0.1f32, -0.5, 0.0, 0.9];
+//! let v2 = vec![0.2f32, -0.3, 0.1, 0.8];
+//! let bits1 = BinaryQuantizer::quantize(&v1);
+//! let bits2 = BinaryQuantizer::quantize(&v2);
 //!
 //! // Hamming distance (count differing bits)
-//! let dist = BinaryQuantizer::hamming_distance(&bits, &other_bits);
+//! let dist = BinaryQuantizer::hamming_distance(&bits1, &bits2);
 //! ```
 
 use serde::{Deserialize, Serialize};

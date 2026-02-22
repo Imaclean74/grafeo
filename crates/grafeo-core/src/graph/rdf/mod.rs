@@ -15,7 +15,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```
 //! use grafeo_core::graph::rdf::{RdfStore, Term, Triple};
 //!
 //! let store = RdfStore::new();
@@ -28,7 +28,8 @@
 //! ));
 //!
 //! // Query triples with a specific subject
-//! for triple in store.triples_with_subject(Term::iri("http://example.org/alice")) {
+//! let subject = Term::iri("http://example.org/alice");
+//! for triple in store.triples_with_subject(&subject) {
 //!     println!("{:?}", triple);
 //! }
 //! ```

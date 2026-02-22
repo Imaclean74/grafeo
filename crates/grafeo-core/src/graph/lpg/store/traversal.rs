@@ -74,10 +74,19 @@ impl LpgStore {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// # use grafeo_core::graph::lpg::LpgStore;
+    /// # use grafeo_common::types::Value;
+    /// let store = LpgStore::new();
+    /// let a = store.create_node(&["Node"]);
+    /// let b = store.create_node(&["Node"]);
+    /// let c = store.create_node(&["Node"]);
+    /// let _e1 = store.create_edge(a, b, "LINKS");
+    /// let _e2 = store.create_edge(c, b, "LINKS");
+    ///
     /// // For edges: A->B, C->B
-    /// let incoming = store.edges_to(B);
-    /// // Returns: [(A, edge1), (C, edge2)]
+    /// let incoming = store.edges_to(b);
+    /// assert_eq!(incoming.len(), 2);
     /// ```
     pub fn edges_to(&self, node: NodeId) -> Vec<(NodeId, EdgeId)> {
         if let Some(ref backward) = self.backward_adj {

@@ -110,9 +110,15 @@ impl LpgStore {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```
+    /// # use grafeo_core::graph::lpg::LpgStore;
+    /// # use grafeo_common::types::{PropertyKey, Value};
+    /// let store = LpgStore::new();
+    /// let node_id = store.create_node(&["Person"]);
+    /// store.set_node_property(node_id, "age", Value::from(30i64));
+    ///
     /// // Fast: Direct single-property lookup
-    /// let age = store.get_node_property(node_id, "age");
+    /// let age = store.get_node_property(node_id, &PropertyKey::new("age"));
     ///
     /// // Slow: Loads all properties, then extracts one
     /// let age = store.get_node(node_id).and_then(|n| n.get_property("age").cloned());

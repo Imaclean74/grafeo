@@ -14,67 +14,111 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CommonKeyword {
     // Query structure
+    /// The `MATCH` keyword.
     Match,
+    /// The `RETURN` keyword.
     Return,
+    /// The `WHERE` keyword.
     Where,
+    /// The `AS` keyword.
     As,
+    /// The `DISTINCT` keyword.
     Distinct,
+    /// The `WITH` keyword.
     With,
+    /// The `OPTIONAL` keyword.
     Optional,
 
     // Ordering & pagination
+    /// The `ORDER` keyword.
     Order,
+    /// The `BY` keyword.
     By,
+    /// The `ASC` keyword.
     Asc,
+    /// The `DESC` keyword.
     Desc,
+    /// The `LIMIT` keyword.
     Limit,
+    /// The `SKIP` keyword.
     Skip,
 
     // Logical operators
+    /// The `AND` keyword.
     And,
+    /// The `OR` keyword.
     Or,
+    /// The `NOT` keyword.
     Not,
 
     // Comparison
+    /// The `IN` keyword.
     In,
+    /// The `IS` keyword.
     Is,
+    /// The `LIKE` keyword.
     Like,
 
     // String predicates
+    /// The `STARTS` keyword.
     Starts,
+    /// The `ENDS` keyword.
     Ends,
+    /// The `CONTAINS` keyword.
     Contains,
 
     // Literals
+    /// The `NULL` keyword.
     Null,
+    /// The `TRUE` keyword.
     True,
+    /// The `FALSE` keyword.
     False,
 
     // Mutation
+    /// The `CREATE` keyword.
     Create,
+    /// The `DELETE` keyword.
     Delete,
+    /// The `SET` keyword.
     Set,
+    /// The `REMOVE` keyword.
     Remove,
+    /// The `MERGE` keyword.
     Merge,
+    /// The `DETACH` keyword.
     Detach,
+    /// The `ON` keyword.
     On,
 
     // Subquery / procedure
+    /// The `CALL` keyword.
     Call,
+    /// The `YIELD` keyword.
     Yield,
+    /// The `EXISTS` keyword.
     Exists,
+    /// The `UNWIND` keyword.
     Unwind,
 
     // Graph structure
+    /// The `NODE` keyword.
     Node,
+    /// The `EDGE` keyword.
     Edge,
 
     // Aggregate / grouping
+    /// The `HAVING` keyword.
     Having,
+    /// The `CASE` keyword.
     Case,
+    /// The `WHEN` keyword.
     When,
+    /// The `THEN` keyword.
     Then,
+    /// The `ELSE` keyword.
     Else,
+    /// The `END` keyword.
     End,
 }
 
