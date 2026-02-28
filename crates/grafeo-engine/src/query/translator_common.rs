@@ -135,8 +135,8 @@ mod tests {
 
     #[test]
     fn var_gen_starts_at_zero() {
-        let gen = VarGen::new();
-        assert_eq!(gen.current(), 0);
+        let vg = VarGen::new();
+        assert_eq!(vg.current(), 0);
     }
 
     #[test]
