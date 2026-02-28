@@ -116,8 +116,12 @@ impl ShortestPathOperator {
         let mut target_path_count = 0;
 
         while let Some(current) = queue.pop_front() {
-            let current_depth = *distances.get(&current).unwrap();
-            let current_paths = *path_counts.get(&current).unwrap();
+            let current_depth = *distances
+                .get(&current)
+                .expect("BFS: node dequeued has distance");
+            let current_paths = *path_counts
+                .get(&current)
+                .expect("BFS: node dequeued has path count");
 
             // If we've found target and we're past its depth, stop
             if let Some(td) = target_depth
@@ -144,7 +148,9 @@ impl ShortestPathOperator {
                 if let Some(&existing_depth) = distances.get(&neighbor) {
                     if existing_depth == new_depth {
                         // Same depth, add to path count
-                        *path_counts.get_mut(&neighbor).unwrap() += current_paths;
+                        *path_counts
+                            .get_mut(&neighbor)
+                            .expect("BFS: neighbor has path count at same depth") += current_paths;
                     }
                     // If existing_depth < new_depth, skip (already processed at shorter distance)
                 } else {
@@ -263,7 +269,7 @@ impl ShortestPathOperator {
 
                     if !forward_visited.contains_key(&neighbor) {
                         forward_visited.insert(neighbor, new_depth);
-                        if best.is_none() || new_depth < best.unwrap() {
+                        if best.is_none_or(|b| new_depth < b) {
                             forward_queue.push_back((neighbor, new_depth));
                         }
                     }
@@ -291,7 +297,7 @@ impl ShortestPathOperator {
 
                     if !backward_visited.contains_key(&neighbor) {
                         backward_visited.insert(neighbor, new_depth);
-                        if best.is_none() || new_depth < best.unwrap() {
+                        if best.is_none_or(|b| new_depth < b) {
                             backward_queue.push_back((neighbor, new_depth));
                         }
                     }
