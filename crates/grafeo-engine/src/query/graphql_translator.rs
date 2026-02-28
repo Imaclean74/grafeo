@@ -15,7 +15,7 @@ use crate::query::plan::{
     LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp, ReturnItem, ReturnOp,
     SetPropertyOp, SkipOp, SortKey, SortOp, SortOrder,
 };
-use crate::query::translator_common::{capitalize_first, VarGen};
+use crate::query::translator_common::{VarGen, capitalize_first};
 use grafeo_adapters::query::graphql::{self, ast};
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
 use std::collections::HashMap;
@@ -799,7 +799,6 @@ impl GraphQLTranslator {
             "No field found in selection set",
         )))
     }
-
 }
 
 #[cfg(test)]

@@ -10,7 +10,9 @@ use crate::query::plan::{
     ProjectOp, Projection, RemoveLabelOp, ReturnItem, ReturnOp, SetPropertyOp, ShortestPathOp,
     SkipOp, SortKey, SortOp, SortOrder, UnaryOp, UnwindOp,
 };
-use crate::query::translator_common::{combine_with_and, is_aggregate_function, to_aggregate_function};
+use crate::query::translator_common::{
+    combine_with_and, is_aggregate_function, to_aggregate_function,
+};
 use grafeo_adapters::query::cypher::{self, ast};
 use grafeo_common::types::Value;
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
