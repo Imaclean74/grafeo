@@ -520,6 +520,7 @@ fn test_multiple_sequential_transactions() {
 // ============================================================================
 
 #[test]
+#[ignore = "stress test: slow in CI, run locally with --ignored"]
 fn test_stress_concurrent_writers() {
     // 8 threads each inserting 50 nodes simultaneously
     let db = Arc::new(GrafeoDB::new_in_memory());
@@ -564,6 +565,7 @@ fn test_stress_concurrent_writers() {
 }
 
 #[test]
+#[ignore = "stress test: slow in CI, run locally with --ignored"]
 fn test_stress_concurrent_reads_during_writes() {
     // Mixed workload: 4 writers + 8 readers operating simultaneously
     let db = Arc::new(GrafeoDB::new_in_memory());
@@ -639,6 +641,7 @@ fn test_stress_concurrent_reads_during_writes() {
 }
 
 #[test]
+#[ignore = "stress test: slow in CI, run locally with --ignored"]
 fn test_stress_transaction_conflicts() {
     // 4 threads with interleaved commit/rollback patterns
     let db = Arc::new(GrafeoDB::new_in_memory());
@@ -693,6 +696,7 @@ fn test_stress_transaction_conflicts() {
 }
 
 #[test]
+#[ignore = "stress test: slow in CI, run locally with --ignored"]
 fn test_stress_concurrent_epoch_pressure() {
     // 4 threads each running 8 sequential transactions — creates many epochs
     let db = Arc::new(GrafeoDB::new_in_memory());
@@ -740,6 +744,7 @@ fn test_stress_concurrent_epoch_pressure() {
 }
 
 #[test]
+#[ignore = "stress test: slow in CI, run locally with --ignored"]
 fn test_stress_rapid_session_lifecycle() {
     // 16 threads rapidly creating, using, and dropping sessions
     let db = Arc::new(GrafeoDB::new_in_memory());
@@ -779,6 +784,7 @@ fn test_stress_rapid_session_lifecycle() {
 }
 
 #[test]
+#[ignore = "stress test: slow in CI, run locally with --ignored"]
 fn test_stress_concurrent_edges_and_nodes() {
     // Create nodes and edges simultaneously from multiple threads
     let db = Arc::new(GrafeoDB::new_in_memory());
