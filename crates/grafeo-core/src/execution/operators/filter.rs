@@ -712,8 +712,8 @@ impl ExpressionPredicate {
                 let r = right.as_bool()?;
                 Some(Value::Bool(l ^ r))
             }
-            BinaryFilterOp::Eq => Some(Value::Bool(self.values_equal(left, right))),
-            BinaryFilterOp::Ne => Some(Value::Bool(!self.values_equal(left, right))),
+            BinaryFilterOp::Eq => Some(Value::Bool(Self::values_equal(left, right))),
+            BinaryFilterOp::Ne => Some(Value::Bool(!Self::values_equal(left, right))),
             BinaryFilterOp::Lt => self.compare_values(left, right).map(|c| Value::Bool(c < 0)),
             BinaryFilterOp::Le => self
                 .compare_values(left, right)
@@ -847,7 +847,7 @@ impl ExpressionPredicate {
         let right_val = self.eval_expr(right, chunk, row)?;
         match right_val {
             Value::List(items) => {
-                let found = items.iter().any(|item| self.values_equal(left, item));
+                let found = items.iter().any(|item| Self::values_equal(left, item));
                 Some(Value::Bool(found))
             }
             _ => None,
@@ -1460,7 +1460,7 @@ impl ExpressionPredicate {
             let test_val = self.eval_expr(test_expr, chunk, row)?;
             for (when_expr, then_expr) in when_clauses {
                 let when_val = self.eval_expr(when_expr, chunk, row)?;
-                if self.values_equal(&test_val, &when_val) {
+                if Self::values_equal(&test_val, &when_val) {
                     return self.eval_expr(then_expr, chunk, row);
                 }
             }
@@ -1501,7 +1501,7 @@ impl ExpressionPredicate {
         }
     }
 
-    fn values_equal(&self, left: &Value, right: &Value) -> bool {
+    fn values_equal(left: &Value, right: &Value) -> bool {
         match (left, right) {
             (Value::Null, Value::Null) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -1519,13 +1519,16 @@ impl ExpressionPredicate {
                 s.parse::<f64>().is_ok_and(|n| (n - f).abs() < f64::EPSILON)
             }
             (Value::List(a), Value::List(b)) => {
-                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| self.values_equal(x, y))
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(x, y)| Self::values_equal(x, y))
             }
             (Value::Map(a), Value::Map(b)) => {
                 a.len() == b.len()
                     && a.iter()
                         .zip(b.iter())
-                        .all(|((k1, v1), (k2, v2))| k1 == k2 && self.values_equal(v1, v2))
+                        .all(|((k1, v1), (k2, v2))| k1 == k2 && Self::values_equal(v1, v2))
             }
             _ => false,
         }
