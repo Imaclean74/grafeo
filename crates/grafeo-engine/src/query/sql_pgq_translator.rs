@@ -5,12 +5,14 @@
 //! translation follows the GQL translator pattern.
 
 use crate::query::plan::{
-    BinaryOp, CallProcedureOp, CreatePropertyGraphOp, ExpandDirection, ExpandOp, FilterOp, LimitOp,
-    LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp, ProcedureYield,
-    PropertyGraphEdgeTable, PropertyGraphNodeTable, ReturnItem, ReturnOp, SkipOp, SortKey, SortOp,
-    SortOrder, UnaryOp,
+    AggregateExpr, AggregateOp, BinaryOp, CallProcedureOp, CreatePropertyGraphOp, ExpandDirection,
+    ExpandOp, FilterOp, LimitOp, LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp,
+    ProcedureYield, PropertyGraphEdgeTable, PropertyGraphNodeTable, ReturnItem, ReturnOp, SkipOp,
+    SortKey, SortOp, SortOrder, UnaryOp,
 };
-use crate::query::translator_common::combine_with_and;
+use crate::query::translator_common::{
+    combine_with_and, is_aggregate_function, to_aggregate_function,
+};
 use grafeo_adapters::query::sql_pgq::{self, ast};
 use grafeo_common::types::Value;
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
@@ -112,6 +114,81 @@ impl SqlPgqTranslator {
 
         // 6. Translate COLUMNS clause → Return (outermost projection)
         plan = self.translate_columns(&select.graph_table.columns, plan)?;
+
+        // 7. Handle outer SELECT list with aggregates (e.g., SELECT COUNT(*) AS total)
+        if let ast::SelectList::Columns(items) = &select.select_list {
+            let has_aggregates = items.iter().any(|item| {
+                matches!(
+                    &item.expression,
+                    ast::Expression::FunctionCall { name, .. }
+                    if is_aggregate_function(name)
+                )
+            });
+
+            if has_aggregates {
+                let mut aggregates = Vec::new();
+                let mut group_by = Vec::new();
+
+                for item in items {
+                    let alias = item.alias.clone();
+                    match &item.expression {
+                        ast::Expression::FunctionCall {
+                            name,
+                            args,
+                            distinct,
+                        } if is_aggregate_function(name) => {
+                            let agg_fn = to_aggregate_function(name).unwrap();
+                            let expr = if args.len() == 1 {
+                                let arg = &args[0];
+                                if matches!(arg, ast::Expression::Variable(v) if v == "*") {
+                                    None // COUNT(*)
+                                } else {
+                                    Some(self.translate_expression(arg, None)?)
+                                }
+                            } else {
+                                None
+                            };
+                            aggregates.push(AggregateExpr {
+                                function: agg_fn,
+                                expression: expr,
+                                distinct: *distinct,
+                                alias,
+                                percentile: None,
+                            });
+                        }
+                        _ => {
+                            // Non-aggregate in SELECT with aggregates → group by
+                            let expr = self.translate_expression(&item.expression, None)?;
+                            group_by.push(expr);
+                        }
+                    }
+                }
+
+                plan = LogicalOperator::Aggregate(AggregateOp {
+                    group_by,
+                    aggregates,
+                    input: Box::new(plan),
+                    having: None,
+                });
+
+                // Wrap with Return for the aggregate result
+                let return_items: Vec<ReturnItem> = items
+                    .iter()
+                    .map(|item| {
+                        let alias = item.alias.clone().unwrap_or_else(|| "result".to_string());
+                        ReturnItem {
+                            expression: LogicalExpression::Variable(alias.clone()),
+                            alias: Some(alias),
+                        }
+                    })
+                    .collect();
+                plan = LogicalOperator::Return(ReturnOp {
+                    items: return_items,
+                    distinct: false,
+                    input: Box::new(plan),
+                });
+            }
+        }
 
         Ok(LogicalPlan::new(plan))
     }

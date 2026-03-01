@@ -751,6 +751,40 @@ impl SparqlTranslator {
     }
 
     fn translate_triple_pattern(&mut self, triple: &ast::TriplePattern) -> Result<LogicalOperator> {
+        // Handle Sequence property paths: expand into chained triple patterns
+        // e.g. ?person foaf:knows/foaf:name ?name  becomes:
+        //   ?person foaf:knows ?_anon0 . ?_anon0 foaf:name ?name
+        if let ast::PropertyPath::Sequence(paths) = &triple.predicate {
+            let subject = self.translate_triple_term(&triple.subject)?;
+            let object = self.translate_triple_term(&triple.object)?;
+            let graph = self.graph_context_stack.last().cloned();
+
+            let mut current_subject = subject;
+            let mut plan = LogicalOperator::Empty;
+
+            for (i, path) in paths.iter().enumerate() {
+                let next_object = if i == paths.len() - 1 {
+                    object.clone()
+                } else {
+                    TripleComponent::Variable(format!("_:seq{}", self.next_anon()))
+                };
+
+                let pred = self.translate_property_path(path)?;
+                let scan = LogicalOperator::TripleScan(TripleScanOp {
+                    subject: current_subject,
+                    predicate: pred,
+                    object: next_object.clone(),
+                    graph: graph.clone(),
+                    input: None,
+                });
+
+                plan = self.join_patterns(plan, scan);
+                current_subject = next_object;
+            }
+
+            return Ok(plan);
+        }
+
         // Handle Alternative property paths: translate as Union of triple scans
         if let ast::PropertyPath::Alternative(alternatives) = &triple.predicate {
             let subject = self.translate_triple_term(&triple.subject)?;

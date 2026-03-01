@@ -7,6 +7,7 @@ use crate::query::plan::{
     DeleteNodeOp, DistinctOp, ExpandDirection, ExpandOp, FilterOp, JoinOp, JoinType, LeftJoinOp,
     LimitOp, LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp, ProjectOp, Projection,
     ReturnItem, ReturnOp, SetPropertyOp, SkipOp, SortKey, SortOp, SortOrder, UnaryOp, UnionOp,
+    UnwindOp,
 };
 use crate::query::translator_common::VarGen;
 use grafeo_adapters::query::gremlin::{self, ast};
@@ -73,6 +74,13 @@ impl GremlinTranslator {
 
         // Track edge expansion context for InV/OutV/BothV resolution
         let mut edge_ctx: Option<EdgeContext> = None;
+
+        // Label-to-variable mapping for as()/select() patterns
+        let mut labels: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        // Override for multi-column Return (e.g., select('a', 'b'))
+        let mut return_items_override: Option<Vec<ReturnItem>> = None;
 
         // For g.E(), initialize edge context from the source Expand
         if matches!(&stmt.source, ast::TraversalSource::E(_)) {
@@ -178,6 +186,64 @@ impl GremlinTranslator {
                 _ => {}
             }
 
+            // Handle as() labels: store current variable under the label name
+            if let ast::Step::As(label) = step {
+                labels.insert(label.clone(), current_var.clone());
+                continue;
+            }
+
+            // Handle select() using stored labels
+            if let ast::Step::Select(keys) = step {
+                if keys.len() == 1 {
+                    // select('a') - project the stored variable
+                    if let Some(var) = labels.get(&keys[0]) {
+                        let alias = keys[0].clone();
+                        plan = LogicalOperator::Project(ProjectOp {
+                            projections: vec![Projection {
+                                expression: LogicalExpression::Variable(var.clone()),
+                                alias: Some(alias.clone()),
+                            }],
+                            input: Box::new(plan),
+                        });
+                        current_var = alias;
+                    }
+                } else {
+                    // select('a', 'b') - project multiple stored variables as a map
+                    let projections: Vec<Projection> = keys
+                        .iter()
+                        .filter_map(|k| {
+                            labels.get(k).map(|var| Projection {
+                                expression: LogicalExpression::Variable(var.clone()),
+                                alias: Some(k.clone()),
+                            })
+                        })
+                        .collect();
+                    if !projections.is_empty() {
+                        // Build multi-column Return items so all keys appear in output
+                        return_items_override = Some(
+                            projections
+                                .iter()
+                                .map(|p| ReturnItem {
+                                    expression: LogicalExpression::Variable(
+                                        p.alias.clone().unwrap_or_default(),
+                                    ),
+                                    alias: p.alias.clone(),
+                                })
+                                .collect(),
+                        );
+                        let first_alias = projections[0].alias.clone();
+                        plan = LogicalOperator::Project(ProjectOp {
+                            projections,
+                            input: Box::new(plan),
+                        });
+                        if let Some(alias) = first_alias {
+                            current_var = alias;
+                        }
+                    }
+                }
+                continue;
+            }
+
             // Check if this is a step-level addE
             if let ast::Step::AddE(edge_type) = step {
                 edge_ctx = None;
@@ -193,6 +259,21 @@ impl GremlinTranslator {
 
             let (new_plan, new_var) = self.translate_step(step, plan, &current_var)?;
             plan = new_plan;
+
+            // When a Project step with multiple projections is produced,
+            // set up a multi-column Return so all projected columns appear.
+            if let ast::Step::Project(keys) = step
+                && keys.len() > 1
+            {
+                return_items_override = Some(
+                    keys.iter()
+                        .map(|k| ReturnItem {
+                            expression: LogicalExpression::Variable(k.clone()),
+                            alias: Some(k.clone()),
+                        })
+                        .collect(),
+                );
+            }
 
             // Update edge context after step translation
             match step {
@@ -238,11 +319,14 @@ impl GremlinTranslator {
             plan,
             LogicalOperator::Return(_) | LogicalOperator::DeleteNode(_)
         ) {
-            plan = LogicalOperator::Return(ReturnOp {
-                items: vec![ReturnItem {
+            let items = return_items_override.unwrap_or_else(|| {
+                vec![ReturnItem {
                     expression: LogicalExpression::Variable(current_var),
                     alias: None,
-                }],
+                }]
+            });
+            plan = LogicalOperator::Return(ReturnOp {
+                items,
                 distinct: false,
                 input: Box::new(plan),
             });
@@ -641,9 +725,10 @@ impl GremlinTranslator {
                 Ok((plan, None))
             }
             ast::Step::Dedup(keys) => {
-                // If keys are specified, use column-specific dedup
+                // Gremlin dedup() deduplicates on the current traverser variable.
+                // When keys are empty, dedup on current_var (not all columns).
                 let columns = if keys.is_empty() {
-                    None
+                    Some(vec![current_var.to_string()])
                 } else {
                     Some(keys.clone())
                 };
@@ -681,26 +766,46 @@ impl GremlinTranslator {
 
             // Map steps
             ast::Step::Values(keys) => {
-                // Use Project instead of Return to allow chaining with subsequent steps
-                let projections: Vec<Projection> = keys
-                    .iter()
-                    .map(|k| Projection {
-                        expression: LogicalExpression::Property {
-                            variable: current_var.to_string(),
-                            property: k.clone(),
-                        },
-                        alias: Some(k.clone()),
-                    })
-                    .collect();
-
-                let plan = LogicalOperator::Project(ProjectOp {
-                    projections,
-                    input: Box::new(input),
-                });
-
-                // Use the first key as the new variable name for subsequent steps
-                let new_var = keys.first().cloned();
-                Ok((plan, new_var))
+                if keys.len() > 1 {
+                    // Gremlin values('a','b') emits one traverser per key.
+                    // Translate as Union of individual property projections.
+                    let alias = self.var_gen.next();
+                    let branches: Vec<LogicalOperator> = keys
+                        .iter()
+                        .map(|k| {
+                            LogicalOperator::Project(ProjectOp {
+                                projections: vec![Projection {
+                                    expression: LogicalExpression::Property {
+                                        variable: current_var.to_string(),
+                                        property: k.clone(),
+                                    },
+                                    alias: Some(alias.clone()),
+                                }],
+                                input: Box::new(input.clone()),
+                            })
+                        })
+                        .collect();
+                    let plan = LogicalOperator::Union(UnionOp { inputs: branches });
+                    Ok((plan, Some(alias)))
+                } else {
+                    // Single key: simple Project
+                    let projections: Vec<Projection> = keys
+                        .iter()
+                        .map(|k| Projection {
+                            expression: LogicalExpression::Property {
+                                variable: current_var.to_string(),
+                                property: k.clone(),
+                            },
+                            alias: Some(k.clone()),
+                        })
+                        .collect();
+                    let plan = LogicalOperator::Project(ProjectOp {
+                        projections,
+                        input: Box::new(input),
+                    });
+                    let new_var = keys.first().cloned();
+                    Ok((plan, new_var))
+                }
             }
             ast::Step::Id => {
                 let plan = LogicalOperator::Project(ProjectOp {
@@ -809,19 +914,20 @@ impl GremlinTranslator {
                 Ok((plan, Some(alias)))
             }
             ast::Step::Fold => {
+                let alias = "fold".to_string();
                 let plan = LogicalOperator::Aggregate(AggregateOp {
                     group_by: Vec::new(),
                     aggregates: vec![AggregateExpr {
                         function: AggregateFunction::Collect,
                         expression: Some(LogicalExpression::Variable(current_var.to_string())),
                         distinct: false,
-                        alias: Some("fold".to_string()),
+                        alias: Some(alias.clone()),
                         percentile: None,
                     }],
                     input: Box::new(input),
                     having: None,
                 });
-                Ok((plan, None))
+                Ok((plan, Some(alias)))
             }
             ast::Step::Order(modifiers) => {
                 let keys = if modifiers.is_empty() {
@@ -910,68 +1016,74 @@ impl GremlinTranslator {
             }
 
             ast::Step::By(by_modifier) => {
-                // 'by' modifies a preceding order() step
-                // If the input is a Sort operation, we replace its keys with the by modifier
+                // 'by' modifies a preceding step: order(), groupCount(), or project()
                 match input {
                     LogicalOperator::Sort(mut sort_op) => {
-                        let (expr, order) = match by_modifier {
-                            ast::ByModifier::Identity => (
-                                LogicalExpression::Variable(current_var.to_string()),
-                                SortOrder::Ascending,
-                            ),
-                            ast::ByModifier::Key(key) => (
-                                LogicalExpression::Property {
-                                    variable: current_var.to_string(),
-                                    property: key.clone(),
-                                },
-                                SortOrder::Ascending,
-                            ),
-                            ast::ByModifier::KeyWithOrder(key, ast_order) => (
-                                LogicalExpression::Property {
-                                    variable: current_var.to_string(),
-                                    property: key.clone(),
-                                },
-                                match ast_order {
-                                    ast::SortOrder::Asc => SortOrder::Ascending,
-                                    ast::SortOrder::Desc => SortOrder::Descending,
-                                    ast::SortOrder::Shuffle => SortOrder::Ascending,
-                                },
-                            ),
-                            ast::ByModifier::Order(ast_order) => (
-                                LogicalExpression::Variable(current_var.to_string()),
-                                match ast_order {
-                                    ast::SortOrder::Asc => SortOrder::Ascending,
-                                    ast::SortOrder::Desc => SortOrder::Descending,
-                                    ast::SortOrder::Shuffle => SortOrder::Ascending,
-                                },
-                            ),
-                            ast::ByModifier::Token(token) => (
-                                match token {
-                                    ast::TokenType::Id => {
-                                        LogicalExpression::Id(current_var.to_string())
-                                    }
-                                    ast::TokenType::Label => {
-                                        LogicalExpression::Labels(current_var.to_string())
-                                    }
-                                    _ => LogicalExpression::Variable(current_var.to_string()),
-                                },
-                                SortOrder::Ascending,
-                            ),
-                            _ => (
-                                LogicalExpression::Variable(current_var.to_string()),
-                                SortOrder::Ascending,
-                            ),
+                        let by_expr = self.translate_by_modifier(by_modifier, current_var);
+                        let order = match by_modifier {
+                            ast::ByModifier::KeyWithOrder(_, ast_order)
+                            | ast::ByModifier::Order(ast_order) => match ast_order {
+                                ast::SortOrder::Asc => SortOrder::Ascending,
+                                ast::SortOrder::Desc => SortOrder::Descending,
+                                ast::SortOrder::Shuffle => SortOrder::Ascending,
+                            },
+                            _ => SortOrder::Ascending,
                         };
-
-                        // Replace or add to the sort keys
                         sort_op.keys = vec![SortKey {
-                            expression: expr,
+                            expression: by_expr,
                             order,
                         }];
                         Ok((LogicalOperator::Sort(sort_op), None))
                     }
+                    LogicalOperator::Aggregate(mut agg_op) => {
+                        // groupCount().by('key') - replace group_by with the by expression.
+                        // Extract the original variable from the existing group_by (set as
+                        // Variable(current_var) during groupCount()), since current_var
+                        // now points to the aggregate alias.
+                        let original_var =
+                            if let Some(LogicalExpression::Variable(v)) = agg_op.group_by.first() {
+                                v.clone()
+                            } else {
+                                current_var.to_string()
+                            };
+                        let by_expr = self.translate_by_modifier(by_modifier, &original_var);
+                        agg_op.group_by = vec![by_expr];
+                        Ok((LogicalOperator::Aggregate(agg_op), None))
+                    }
+                    LogicalOperator::Project(mut proj_op) => {
+                        // project('n','a').by('name').by('age')
+                        // Each successive .by() fills the next unfilled projection.
+                        // The original vertex variable is in the first projection's
+                        // Property expression (set during the Project step).
+                        let original_var = proj_op
+                            .projections
+                            .first()
+                            .and_then(|p| {
+                                if let LogicalExpression::Property { variable, .. } = &p.expression
+                                {
+                                    Some(variable.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(|| current_var.to_string());
+                        let by_expr = self.translate_by_modifier(by_modifier, &original_var);
+                        for proj in &mut proj_op.projections {
+                            // Find the first projection whose expression still
+                            // matches the default placeholder (Property with the
+                            // alias as key). Replace with the actual by-expression.
+                            if let LogicalExpression::Property { property, .. } = &proj.expression
+                                && proj.alias.as_deref() == Some(property.as_str())
+                            {
+                                proj.expression = by_expr;
+                                return Ok((LogicalOperator::Project(proj_op), None));
+                            }
+                        }
+                        // All projections already filled; ignore extra .by()
+                        Ok((LogicalOperator::Project(proj_op), None))
+                    }
                     _ => {
-                        // by() without a preceding order() - ignore
+                        // by() without a supported preceding step - ignore
                         Ok((input, None))
                     }
                 }
@@ -990,11 +1102,17 @@ impl GremlinTranslator {
                 Ok((plan, Some(alias)))
             }
 
-            // Unfold: after a fold()/collect(), re-expand list items
+            // Unfold: expand list elements into individual rows
             ast::Step::Unfold => {
-                // Unfold is the inverse of fold; for now pass through since fold
-                // already returns individual rows when used with Return wrapping
-                Ok((input, None))
+                let new_var = self.var_gen.next();
+                let plan = LogicalOperator::Unwind(UnwindOp {
+                    expression: LogicalExpression::Variable(current_var.to_string()),
+                    variable: new_var.clone(),
+                    ordinality_var: None,
+                    offset_var: None,
+                    input: Box::new(input),
+                });
+                Ok((plan, Some(new_var)))
             }
 
             // GroupCount: group by a key and count occurrences
@@ -1029,8 +1147,8 @@ impl GremlinTranslator {
             // Project: create named projections from properties
             ast::Step::Project(keys) => {
                 // Project creates a map: keys are the column names, values come
-                // from subsequent .by() steps. For now, project each key as a
-                // property access on current_var.
+                // from subsequent .by() steps. Each projection uses current_var
+                // as a placeholder; .by() replaces the expression.
                 let projections: Vec<Projection> = keys
                     .iter()
                     .map(|k| Projection {
@@ -1045,8 +1163,10 @@ impl GremlinTranslator {
                     projections,
                     input: Box::new(input),
                 });
-                let new_var = keys.first().cloned();
-                Ok((plan, new_var))
+                // Set first key as current_var so Return uses a valid column.
+                // The full Return items are set below.
+                let first_key = keys.first().cloned();
+                Ok((plan, first_key))
             }
 
             // and() filter: all sub-traversals must produce results
@@ -1242,50 +1362,22 @@ impl GremlinTranslator {
 
             // union(): merge results from multiple sub-traversals
             ast::Step::Union(traversals) => {
-                let mut branches = Vec::new();
-                let mut result_var = current_var.to_string();
-                for steps in traversals {
-                    let mut branch_plan = input.clone();
-                    let mut branch_var = current_var.to_string();
-                    for step in steps {
-                        let (new_plan, new_var) =
-                            self.translate_step(step, branch_plan, &branch_var)?;
-                        if let Some(v) = new_var {
-                            branch_var = v;
-                        }
-                        branch_plan = new_plan;
-                    }
-                    result_var = branch_var;
-                    branches.push(branch_plan);
-                }
+                let alias = self.var_gen.next();
+                let branches = self.translate_branches(traversals, &input, current_var, &alias)?;
                 let plan = LogicalOperator::Union(UnionOp { inputs: branches });
-                Ok((plan, Some(result_var)))
+                Ok((plan, Some(alias)))
             }
 
             // coalesce(): return first non-empty traversal
             ast::Step::Coalesce(traversals) => {
-                // For simplicity, translate as union since execution returns all
-                // matching rows. The first non-empty branch semantics would need a
-                // custom operator, but union gives correct results when only one
+                // Translate as union: each branch gets a common alias so the
+                // executor can merge rows. True first-non-empty semantics would
+                // need a custom operator, but union is correct when only one
                 // branch matches.
-                let mut branches = Vec::new();
-                let mut result_var = current_var.to_string();
-                for steps in traversals {
-                    let mut branch_plan = input.clone();
-                    let mut branch_var = current_var.to_string();
-                    for step in steps {
-                        let (new_plan, new_var) =
-                            self.translate_step(step, branch_plan, &branch_var)?;
-                        if let Some(v) = new_var {
-                            branch_var = v;
-                        }
-                        branch_plan = new_plan;
-                    }
-                    result_var = branch_var;
-                    branches.push(branch_plan);
-                }
+                let alias = self.var_gen.next();
+                let branches = self.translate_branches(traversals, &input, current_var, &alias)?;
                 let plan = LogicalOperator::Union(UnionOp { inputs: branches });
-                Ok((plan, Some(result_var)))
+                Ok((plan, Some(alias)))
             }
 
             // sideEffect(): perform inner traversal for side effects, pass
@@ -1506,6 +1598,39 @@ impl GremlinTranslator {
                 ))),
             }),
         }
+    }
+
+    /// Translate multiple sub-traversal branches, aligning each to a common
+    /// output alias so Union rows share one column name.
+    fn translate_branches(
+        &self,
+        traversals: &[Vec<ast::Step>],
+        input: &LogicalOperator,
+        current_var: &str,
+        alias: &str,
+    ) -> Result<Vec<LogicalOperator>> {
+        let mut branches = Vec::new();
+        for steps in traversals {
+            let mut branch_plan = input.clone();
+            let mut branch_var = current_var.to_string();
+            for step in steps {
+                let (new_plan, new_var) = self.translate_step(step, branch_plan, &branch_var)?;
+                if let Some(v) = new_var {
+                    branch_var = v;
+                }
+                branch_plan = new_plan;
+            }
+            // Wrap in a Project to align the branch result to the common alias
+            branch_plan = LogicalOperator::Project(ProjectOp {
+                projections: vec![Projection {
+                    expression: LogicalExpression::Variable(branch_var),
+                    alias: Some(alias.to_string()),
+                }],
+                input: Box::new(branch_plan),
+            });
+            branches.push(branch_plan);
+        }
+        Ok(branches)
     }
 
     fn translate_by_modifier(&self, by: &ast::ByModifier, current_var: &str) -> LogicalExpression {

@@ -559,14 +559,14 @@ impl GraphQLTranslator {
                 ast::Selection::InlineFragment(inline) => {
                     // Inline fragment with type condition
                     if let Some(type_cond) = &inline.type_condition {
-                        // Add type check filter
+                        // Add type check filter: type_cond IN labels(var)
                         plan = LogicalOperator::Filter(FilterOp {
                             predicate: LogicalExpression::Binary {
-                                left: Box::new(LogicalExpression::Labels(current_var.to_string())),
-                                op: BinaryOp::Eq,
-                                right: Box::new(LogicalExpression::Literal(
+                                left: Box::new(LogicalExpression::Literal(
                                     grafeo_common::types::Value::String(type_cond.clone().into()),
                                 )),
+                                op: BinaryOp::In,
+                                right: Box::new(LogicalExpression::Labels(current_var.to_string())),
                             },
                             input: Box::new(plan),
                         });

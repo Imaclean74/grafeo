@@ -577,10 +577,6 @@ class TestSPARQLSelectBasics:
     # Property Paths
     # =========================================================================
 
-    @pytest.mark.xfail(
-        reason="Complex property paths not yet supported",
-        strict=False,
-    )
     def test_property_path_sequence(self):
         """SPARQL: Property path with / (sequence)."""
         result = self._execute_sparql("""
