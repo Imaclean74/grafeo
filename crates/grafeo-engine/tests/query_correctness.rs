@@ -1492,6 +1492,179 @@ mod cypher_db_execute {
         assert_eq!(result.row_count(), 1);
         assert_eq!(result.rows[0][0], Value::String("Alice".into()));
     }
+
+    #[test]
+    fn test_cypher_exists_as_alias() {
+        let db = create_social_network();
+        let result = db
+            .execute_cypher("MATCH (n:Person) WHERE n.name = 'Alice' RETURN count(n) as exists")
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn test_cypher_multiple_match_clauses() {
+        let db = create_social_network();
+        let result = db
+            .execute_cypher(
+                "MATCH (a:Person) WHERE a.name = 'Alice' \
+                 MATCH (b:Person) WHERE b.name = 'Bob' \
+                 RETURN a.name, b.name",
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Alice".into()));
+        assert_eq!(result.rows[0][1], Value::String("Bob".into()));
+    }
+
+    #[test]
+    fn test_cypher_multiple_match_with_create() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.create_node_with_props(
+            &["Person"],
+            [
+                ("id", Value::String("src".into())),
+                ("name", Value::String("Src".into())),
+            ],
+        );
+        session.create_node_with_props(
+            &["Person"],
+            [
+                ("id", Value::String("dst".into())),
+                ("name", Value::String("Dst".into())),
+            ],
+        );
+
+        let mut params = HashMap::new();
+        params.insert("src_id".to_string(), Value::String("src".into()));
+        params.insert("dst_id".to_string(), Value::String("dst".into()));
+
+        let result = db
+            .execute_cypher_with_params(
+                "MATCH (src:Person) WHERE src.id = $src_id \
+                 MATCH (dst:Person) WHERE dst.id = $dst_id \
+                 CREATE (src)-[r:KNOWS]->(dst) \
+                 RETURN src.name, dst.name",
+                params,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn test_cypher_merge_relationship() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.create_node_with_props(
+            &["Person"],
+            [
+                ("id", Value::String("a".into())),
+                ("name", Value::String("Alice".into())),
+            ],
+        );
+        session.create_node_with_props(
+            &["Person"],
+            [
+                ("id", Value::String("b".into())),
+                ("name", Value::String("Bob".into())),
+            ],
+        );
+
+        // MERGE should create the relationship since it doesn't exist
+        let result = db
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+                 MERGE (a)-[r:KNOWS]->(b) \
+                 RETURN r",
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+
+        // Running MERGE again should return the same relationship (idempotent)
+        let result2 = db
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+                 MERGE (a)-[r:KNOWS]->(b) \
+                 RETURN r",
+            )
+            .unwrap();
+        assert_eq!(result2.row_count(), 1);
+    }
+
+    #[test]
+    fn test_cypher_merge_relationship_with_properties() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.create_node_with_props(&["Person"], [("name", Value::String("Alice".into()))]);
+        session.create_node_with_props(&["Person"], [("name", Value::String("Bob".into()))]);
+
+        // MERGE with match properties
+        let result = db
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+                 MERGE (a)-[r:KNOWS {id: 'edge1'}]->(b) \
+                 RETURN r",
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+
+        // Second MERGE with same id should not create duplicate
+        let result2 = db
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+                 MERGE (a)-[r:KNOWS {id: 'edge1'}]->(b) \
+                 RETURN r",
+            )
+            .unwrap();
+        assert_eq!(result2.row_count(), 1);
+    }
+
+    #[test]
+    fn test_cypher_merge_relationship_then_set() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.create_node_with_props(&["Person"], [("name", Value::String("Alice".into()))]);
+        session.create_node_with_props(&["Person"], [("name", Value::String("Bob".into()))]);
+
+        // MERGE relationship then SET a property on it
+        let result = db
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) \
+                 MERGE (a)-[r:KNOWS]->(b) \
+                 SET r.weight = 5 \
+                 RETURN r",
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn test_cypher_multi_match_with_merge_and_set() {
+        // This is the Deriva-style query pattern
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.create_node_with_props(&["Node"], [("id", Value::String("src".into()))]);
+        session.create_node_with_props(&["Node"], [("id", Value::String("dst".into()))]);
+
+        let mut params = HashMap::new();
+        params.insert("src_id".to_string(), Value::String("src".into()));
+        params.insert("dst_id".to_string(), Value::String("dst".into()));
+        params.insert("edge_id".to_string(), Value::String("e1".into()));
+        params.insert("props".to_string(), Value::String("{}".into()));
+
+        let result = db
+            .execute_cypher_with_params(
+                "MATCH (src:Node) WHERE src.id = $src_id \
+                 MATCH (dst:Node) WHERE dst.id = $dst_id \
+                 MERGE (src)-[r:INHERITS {id: $edge_id}]->(dst) \
+                 SET r.properties_json = $props \
+                 RETURN r",
+                params,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
 }
 
 #[cfg(feature = "sql-pgq")]

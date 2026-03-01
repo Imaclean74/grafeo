@@ -399,6 +399,44 @@ impl Binder {
                 );
                 Ok(())
             }
+            LogicalOperator::MergeRelationship(merge_rel) => {
+                self.bind_operator(&merge_rel.input)?;
+                // Validate source and target variables exist
+                if !self.context.contains(&merge_rel.source_variable) {
+                    return Err(undefined_variable_error(
+                        &merge_rel.source_variable,
+                        &self.context,
+                        " in MERGE relationship source",
+                    ));
+                }
+                if !self.context.contains(&merge_rel.target_variable) {
+                    return Err(undefined_variable_error(
+                        &merge_rel.target_variable,
+                        &self.context,
+                        " in MERGE relationship target",
+                    ));
+                }
+                for (_, expr) in &merge_rel.match_properties {
+                    self.validate_expression(expr)?;
+                }
+                for (_, expr) in &merge_rel.on_create {
+                    self.validate_expression(expr)?;
+                }
+                for (_, expr) in &merge_rel.on_match {
+                    self.validate_expression(expr)?;
+                }
+                // MERGE relationship introduces the edge variable
+                self.context.add_variable(
+                    merge_rel.variable.clone(),
+                    VariableInfo {
+                        name: merge_rel.variable.clone(),
+                        data_type: LogicalType::Edge,
+                        is_node: false,
+                        is_edge: true,
+                    },
+                );
+                Ok(())
+            }
             LogicalOperator::AddLabel(add_label) => {
                 self.bind_operator(&add_label.input)?;
                 // Validate that the variable exists
@@ -1445,6 +1483,7 @@ mod tests {
                 LogicalExpression::Literal(grafeo_common::types::Value::String("Alice".into())),
             )],
             replace: false,
+            is_edge: false,
             input: Box::new(LogicalOperator::NodeScan(NodeScanOp {
                 variable: "n".to_string(),
                 label: None,

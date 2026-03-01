@@ -241,6 +241,7 @@ impl GqlTranslator {
                                 variable: assignment.variable.clone(),
                                 properties: vec![(assignment.property.clone(), value)],
                                 replace: false,
+                                is_edge: false,
                                 input: Box::new(plan),
                             });
                         }
@@ -314,6 +315,7 @@ impl GqlTranslator {
                         variable: assignment.variable.clone(),
                         properties: vec![(assignment.property.clone(), value)],
                         replace: false,
+                        is_edge: false,
                         input: Box::new(plan),
                     });
                 }
@@ -355,6 +357,7 @@ impl GqlTranslator {
                     variable: variable.clone(),
                     properties: vec![(property.clone(), LogicalExpression::Literal(Value::Null))],
                     replace: false,
+                    is_edge: false,
                     input: Box::new(plan),
                 });
             }
@@ -1077,6 +1080,7 @@ impl GqlTranslator {
             variable: var.clone(),
             properties,
             replace: false,
+            is_edge: false,
             input: Box::new(scan),
         });
 

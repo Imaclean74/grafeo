@@ -68,7 +68,7 @@ pub use join::{
 };
 pub use leapfrog_join::LeapfrogJoinOperator;
 pub use limit::{LimitOperator, LimitSkipOperator, SkipOperator};
-pub use merge::MergeOperator;
+pub use merge::{MergeOperator, MergeRelationshipConfig, MergeRelationshipOperator};
 pub use mutation::{
     AddLabelOperator, CreateEdgeOperator, CreateNodeOperator, DeleteEdgeOperator,
     DeleteNodeOperator, PropertySource, RemoveLabelOperator, SetPropertyOperator,

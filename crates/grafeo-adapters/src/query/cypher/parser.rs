@@ -1278,6 +1278,7 @@ impl<'a> Parser<'a> {
                 | TokenKind::On
                 | TokenKind::Call
                 | TokenKind::Yield
+                | TokenKind::Exists
         )
     }
 
@@ -2211,5 +2212,37 @@ mod tests {
         // This is a valid Cypher query without RETURN (for side effects)
         // so we test something else
         parse_err("RETURN RETURN");
+    }
+
+    // ==================== Cypher Compatibility Tests ====================
+
+    #[test]
+    fn test_parse_exists_as_alias() {
+        // Issue: `exists` should be usable as an alias name
+        parse_ok("MATCH (n) RETURN count(n) as exists");
+    }
+
+    #[test]
+    fn test_parse_multiple_match_clauses() {
+        // Issue: sequential MATCH clauses should parse
+        let stmt = parse_ok("MATCH (a) WHERE a.id = 'x' MATCH (b) WHERE b.id = 'y' RETURN a, b");
+        if let Statement::Query(Query { clauses, .. }) = stmt {
+            assert!(matches!(&clauses[0], Clause::Match(_)));
+            assert!(matches!(&clauses[1], Clause::Where(_)));
+            assert!(matches!(&clauses[2], Clause::Match(_)));
+            assert!(matches!(&clauses[3], Clause::Where(_)));
+            assert!(matches!(&clauses[4], Clause::Return(_)));
+        }
+    }
+
+    #[test]
+    fn test_parse_merge_with_relationship() {
+        // Issue: MERGE with path patterns should parse
+        let stmt = parse_ok("MATCH (a {id: 'x'}), (b {id: 'y'}) MERGE (a)-[r:KNOWS]->(b) RETURN r");
+        if let Statement::Query(Query { clauses, .. }) = stmt {
+            assert!(matches!(&clauses[0], Clause::Match(_)));
+            assert!(matches!(&clauses[1], Clause::Merge(_)));
+            assert!(matches!(&clauses[2], Clause::Return(_)));
+        }
     }
 }

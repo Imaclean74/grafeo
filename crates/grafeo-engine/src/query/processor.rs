@@ -542,6 +542,18 @@ fn substitute_in_operator(op: &mut LogicalOperator, params: &QueryParams) -> Res
             }
             substitute_in_operator(&mut merge.input, params)?;
         }
+        LogicalOperator::MergeRelationship(merge_rel) => {
+            for (_, expr) in &mut merge_rel.match_properties {
+                substitute_in_expression(expr, params)?;
+            }
+            for (_, expr) in &mut merge_rel.on_create {
+                substitute_in_expression(expr, params)?;
+            }
+            for (_, expr) in &mut merge_rel.on_match {
+                substitute_in_expression(expr, params)?;
+            }
+            substitute_in_operator(&mut merge_rel.input, params)?;
+        }
         LogicalOperator::AddLabel(add_label) => {
             substitute_in_operator(&mut add_label.input, params)?;
         }

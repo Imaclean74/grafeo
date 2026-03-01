@@ -102,8 +102,11 @@ pub enum LogicalOperator {
     /// Unwind a list into individual rows.
     Unwind(UnwindOp),
 
-    /// Merge a pattern (match or create).
+    /// Merge a node pattern (match or create).
     Merge(MergeOp),
+
+    /// Merge a relationship pattern (match or create).
+    MergeRelationship(MergeRelationshipOp),
 
     /// Find shortest path between nodes.
     ShortestPath(ShortestPathOp),
@@ -456,6 +459,8 @@ pub struct SetPropertyOp {
     pub properties: Vec<(String, LogicalExpression)>,
     /// Whether to replace all properties (vs. merge).
     pub replace: bool,
+    /// Whether the target variable is an edge (vs. node).
+    pub is_edge: bool,
     /// Input operator.
     pub input: Box<LogicalOperator>,
 }
@@ -577,6 +582,32 @@ pub struct MergeOp {
     pub variable: String,
     /// Labels to match/create.
     pub labels: Vec<String>,
+    /// Properties that must match (used for both matching and creation).
+    pub match_properties: Vec<(String, LogicalExpression)>,
+    /// Properties to set on CREATE.
+    pub on_create: Vec<(String, LogicalExpression)>,
+    /// Properties to set on MATCH.
+    pub on_match: Vec<(String, LogicalExpression)>,
+    /// Input operator.
+    pub input: Box<LogicalOperator>,
+}
+
+/// Merge a relationship pattern (match or create between two bound nodes).
+///
+/// MERGE on a relationship tries to find an existing relationship of the given type
+/// between the source and target nodes. If found, returns the existing relationship
+/// (optionally applying ON MATCH SET). If not found, creates it (optionally applying
+/// ON CREATE SET).
+#[derive(Debug, Clone)]
+pub struct MergeRelationshipOp {
+    /// Variable to bind the relationship to.
+    pub variable: String,
+    /// Source node variable (must already be bound).
+    pub source_variable: String,
+    /// Target node variable (must already be bound).
+    pub target_variable: String,
+    /// Relationship type.
+    pub edge_type: String,
     /// Properties that must match (used for both matching and creation).
     pub match_properties: Vec<(String, LogicalExpression)>,
     /// Properties to set on CREATE.

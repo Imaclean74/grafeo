@@ -447,6 +447,103 @@ impl super::Planner {
         Ok((operator, columns))
     }
 
+    /// Plans a MERGE RELATIONSHIP operator.
+    pub(super) fn plan_merge_relationship(
+        &self,
+        merge_rel: &MergeRelationshipOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        let (input_op, mut columns) = self.plan_operator(&merge_rel.input)?;
+
+        // Find source and target node columns
+        let source_column = columns
+            .iter()
+            .position(|c| c == &merge_rel.source_variable)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "Source variable '{}' not found for MERGE relationship",
+                    merge_rel.source_variable
+                ))
+            })?;
+
+        let target_column = columns
+            .iter()
+            .position(|c| c == &merge_rel.target_variable)
+            .ok_or_else(|| {
+                Error::Internal(format!(
+                    "Target variable '{}' not found for MERGE relationship",
+                    merge_rel.target_variable
+                ))
+            })?;
+
+        // Convert match properties from LogicalExpression to Value
+        let match_properties: Vec<(String, grafeo_common::types::Value)> = merge_rel
+            .match_properties
+            .iter()
+            .filter_map(|(name, expr)| {
+                if let LogicalExpression::Literal(v) = expr {
+                    Some((name.clone(), v.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let on_create_properties: Vec<(String, grafeo_common::types::Value)> = merge_rel
+            .on_create
+            .iter()
+            .filter_map(|(name, expr)| {
+                if let LogicalExpression::Literal(v) = expr {
+                    Some((name.clone(), v.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let on_match_properties: Vec<(String, grafeo_common::types::Value)> = merge_rel
+            .on_match
+            .iter()
+            .filter_map(|(name, expr)| {
+                if let LogicalExpression::Literal(v) = expr {
+                    Some((name.clone(), v.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Add the edge variable to output columns and track it as an edge
+        let edge_output_column = columns.len();
+        columns.push(merge_rel.variable.clone());
+        self.edge_columns
+            .borrow_mut()
+            .insert(merge_rel.variable.clone());
+
+        // Build output schema: input columns + edge column
+        let mut output_schema: Vec<LogicalType> =
+            columns.iter().map(|_| LogicalType::Node).collect();
+        output_schema[edge_output_column] = LogicalType::Edge;
+
+        let config = MergeRelationshipConfig {
+            source_column,
+            target_column,
+            edge_type: merge_rel.edge_type.clone(),
+            match_properties,
+            on_create_properties,
+            on_match_properties,
+            output_schema,
+            edge_output_column,
+        };
+
+        let operator: Box<dyn Operator> = Box::new(MergeRelationshipOperator::new(
+            Arc::clone(&self.store),
+            input_op,
+            config,
+        ));
+
+        Ok((operator, columns))
+    }
+
     /// Plans a SHORTEST PATH operator.
     pub(super) fn plan_shortest_path(
         &self,
@@ -712,14 +809,25 @@ impl super::Planner {
         let output_schema: Vec<LogicalType> = columns.iter().map(|_| LogicalType::Node).collect();
         let output_columns = columns.clone();
 
-        // Determine if this is a node or edge (for now assume node, edge detection can be added later)
-        let operator = Box::new(SetPropertyOperator::new_for_node(
-            Arc::clone(&self.store),
-            input_op,
-            entity_column,
-            properties,
-            output_schema,
-        ));
+        // Determine if this is a node or edge using tracked edge columns
+        let is_edge = set_prop.is_edge || self.edge_columns.borrow().contains(&set_prop.variable);
+        let operator: Box<dyn Operator> = if is_edge {
+            Box::new(SetPropertyOperator::new_for_edge(
+                Arc::clone(&self.store),
+                input_op,
+                entity_column,
+                properties,
+                output_schema,
+            ))
+        } else {
+            Box::new(SetPropertyOperator::new_for_node(
+                Arc::clone(&self.store),
+                input_op,
+                entity_column,
+                properties,
+                output_schema,
+            ))
+        };
 
         Ok((operator, output_columns))
     }

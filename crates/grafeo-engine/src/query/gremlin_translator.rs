@@ -795,6 +795,7 @@ impl GremlinTranslator {
                                 LogicalExpression::Literal(prop_step.value.clone()),
                             )],
                             replace: false,
+                            is_edge: false,
                             input: Box::new(input),
                         });
                         Ok((plan, None))

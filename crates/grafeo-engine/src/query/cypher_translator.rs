@@ -6,9 +6,9 @@
 use crate::query::plan::{
     AggregateExpr, AggregateFunction, AggregateOp, BinaryOp, CallProcedureOp, CreateEdgeOp,
     CreateNodeOp, DeleteNodeOp, DistinctOp, ExpandDirection, ExpandOp, FilterOp, LeftJoinOp,
-    LimitOp, LogicalExpression, LogicalOperator, LogicalPlan, MergeOp, NodeScanOp, ProcedureYield,
-    ProjectOp, Projection, RemoveLabelOp, ReturnItem, ReturnOp, SetPropertyOp, ShortestPathOp,
-    SkipOp, SortKey, SortOp, SortOrder, UnaryOp, UnwindOp,
+    LimitOp, LogicalExpression, LogicalOperator, LogicalPlan, MergeOp, MergeRelationshipOp,
+    NodeScanOp, ProcedureYield, ProjectOp, Projection, RemoveLabelOp, ReturnItem, ReturnOp,
+    SetPropertyOp, ShortestPathOp, SkipOp, SortKey, SortOp, SortOrder, UnaryOp, UnwindOp,
 };
 use crate::query::translator_common::{
     combine_with_and, is_aggregate_function, to_aggregate_function,
@@ -564,12 +564,23 @@ impl CypherTranslator {
         input: Option<LogicalOperator>,
     ) -> Result<LogicalOperator> {
         let input = input.unwrap_or(LogicalOperator::Empty);
-
-        // Extract node information from the pattern
-        // For now, we only support simple single-node patterns: (n:Label {props})
         let pattern = &merge_clause.pattern;
 
-        // Extract node from the pattern
+        // Check if this is a relationship (path) pattern
+        let path = match pattern {
+            ast::Pattern::Path(path) if !path.chain.is_empty() => Some(path),
+            ast::Pattern::NamedPath { pattern: inner, .. } => match inner.as_ref() {
+                ast::Pattern::Path(path) if !path.chain.is_empty() => Some(path),
+                _ => None,
+            },
+            _ => None,
+        };
+
+        if let Some(path) = path {
+            return self.translate_merge_relationship(path, merge_clause, input);
+        }
+
+        // Node-only MERGE
         let node = match pattern {
             ast::Pattern::Node(n) => n,
             ast::Pattern::Path(path) => &path.start,
@@ -579,7 +590,7 @@ impl CypherTranslator {
                 _ => {
                     return Err(Error::Query(QueryError::new(
                         QueryErrorKind::Semantic,
-                        "MERGE NamedPath must contain a node",
+                        "MERGE NamedPath must contain a node or path",
                     )));
                 }
             },
@@ -591,14 +602,12 @@ impl CypherTranslator {
             .unwrap_or_else(|| format!("_merge_{}", 0));
         let labels: Vec<String> = node.labels.clone();
 
-        // Extract properties from the node pattern
         let match_properties: Vec<(String, LogicalExpression)> = node
             .properties
             .iter()
             .map(|(k, v)| Ok((k.clone(), self.translate_expression(v)?)))
             .collect::<Result<Vec<_>>>()?;
 
-        // Extract ON CREATE properties
         let on_create: Vec<(String, LogicalExpression)> =
             if let Some(set_clause) = &merge_clause.on_create {
                 self.extract_set_properties(set_clause)?
@@ -606,7 +615,6 @@ impl CypherTranslator {
                 Vec::new()
             };
 
-        // Extract ON MATCH properties
         let on_match: Vec<(String, LogicalExpression)> =
             if let Some(set_clause) = &merge_clause.on_match {
                 self.extract_set_properties(set_clause)?
@@ -617,6 +625,83 @@ impl CypherTranslator {
         Ok(LogicalOperator::Merge(MergeOp {
             variable,
             labels,
+            match_properties,
+            on_create,
+            on_match,
+            input: Box::new(input),
+        }))
+    }
+
+    fn translate_merge_relationship(
+        &self,
+        path: &ast::PathPattern,
+        merge_clause: &ast::MergeClause,
+        input: LogicalOperator,
+    ) -> Result<LogicalOperator> {
+        // Extract source node variable
+        let source_variable = path.start.variable.clone().ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "MERGE relationship pattern requires a source node variable",
+            ))
+        })?;
+
+        // Extract the first (and only) relationship segment
+        let rel = path.chain.first().ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "MERGE relationship pattern is empty",
+            ))
+        })?;
+
+        // Extract relationship variable
+        let variable = rel
+            .variable
+            .clone()
+            .unwrap_or_else(|| "_merge_rel_0".to_string());
+
+        // Extract relationship type
+        let edge_type = rel.types.first().cloned().ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "MERGE relationship pattern requires a relationship type",
+            ))
+        })?;
+
+        // Extract target node variable
+        let target_variable = rel.target.variable.clone().ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "MERGE relationship pattern requires a target node variable",
+            ))
+        })?;
+
+        // Extract relationship properties
+        let match_properties: Vec<(String, LogicalExpression)> = rel
+            .properties
+            .iter()
+            .map(|(k, v)| Ok((k.clone(), self.translate_expression(v)?)))
+            .collect::<Result<Vec<_>>>()?;
+
+        let on_create: Vec<(String, LogicalExpression)> =
+            if let Some(set_clause) = &merge_clause.on_create {
+                self.extract_set_properties(set_clause)?
+            } else {
+                Vec::new()
+            };
+
+        let on_match: Vec<(String, LogicalExpression)> =
+            if let Some(set_clause) = &merge_clause.on_match {
+                self.extract_set_properties(set_clause)?
+            } else {
+                Vec::new()
+            };
+
+        Ok(LogicalOperator::MergeRelationship(MergeRelationshipOp {
+            variable,
+            source_variable,
+            target_variable,
+            edge_type,
             match_properties,
             on_create,
             on_match,
@@ -1055,6 +1140,7 @@ impl CypherTranslator {
                         variable: variable.clone(),
                         properties: vec![(property.clone(), value_expr)],
                         replace: false,
+                        is_edge: false,
                         input: Box::new(plan),
                     });
                 }
@@ -1068,6 +1154,7 @@ impl CypherTranslator {
                         variable: variable.clone(),
                         properties: vec![("*".to_string(), value_expr)],
                         replace: true,
+                        is_edge: false,
                         input: Box::new(plan),
                     });
                 }
@@ -1081,6 +1168,7 @@ impl CypherTranslator {
                         variable: variable.clone(),
                         properties: vec![("*".to_string(), value_expr)],
                         replace: false,
+                        is_edge: false,
                         input: Box::new(plan),
                     });
                 }
@@ -1121,6 +1209,7 @@ impl CypherTranslator {
                             LogicalExpression::Literal(Value::Null),
                         )],
                         replace: false,
+                        is_edge: false,
                         input: Box::new(plan),
                     });
                 }
@@ -2060,6 +2149,38 @@ mod tests {
             assert!((f - std::f64::consts::PI).abs() < 0.001);
         } else {
             panic!("Expected Float64");
+        }
+    }
+
+    #[test]
+    fn test_translate_multiple_match_clauses() {
+        // Two independent MATCH clauses should produce a valid plan
+        let plan = translate(
+            "MATCH (a:Person) WHERE a.name = 'Alice' MATCH (b:Person) WHERE b.name = 'Bob' RETURN a.name, b.name",
+        )
+        .unwrap();
+
+        // The plan should have a Return at the root
+        assert!(matches!(&plan.root, LogicalOperator::Return(_)));
+    }
+
+    #[test]
+    fn test_translate_merge_with_relationship() {
+        // MERGE with a relationship pattern should produce MergeRelationship operator
+        let plan =
+            translate("MATCH (a {id: 'x'}), (b {id: 'y'}) MERGE (a)-[r:KNOWS]->(b) RETURN r")
+                .unwrap();
+
+        // The plan root should be a Return
+        if let LogicalOperator::Return(ret) = &plan.root {
+            // The input to Return should be MergeRelationship
+            assert!(
+                matches!(ret.input.as_ref(), LogicalOperator::MergeRelationship(_)),
+                "Expected MergeRelationship, got: {:?}",
+                std::mem::discriminant(ret.input.as_ref())
+            );
+        } else {
+            panic!("Expected Return at root");
         }
     }
 }
