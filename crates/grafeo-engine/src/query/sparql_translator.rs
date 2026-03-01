@@ -94,7 +94,7 @@ impl SparqlTranslator {
             // to the computed aggregate column aliases
             let having_expr = if let Some(having) = &select.solution_modifiers.having {
                 let raw = self.translate_expression(having)?;
-                Some(self.rewrite_aggregates_as_refs(&raw, &aggregates))
+                Some(Self::rewrite_aggregates_as_refs(&raw, &aggregates))
             } else {
                 None
             };
@@ -1155,7 +1155,6 @@ impl SparqlTranslator {
     /// Rewrites aggregate function calls in a HAVING expression as variable
     /// references to the already-computed aggregate column aliases.
     fn rewrite_aggregates_as_refs(
-        &self,
         expr: &LogicalExpression,
         aggregates: &[AggregateExpr],
     ) -> LogicalExpression {
@@ -1178,13 +1177,13 @@ impl SparqlTranslator {
                 expr.clone()
             }
             LogicalExpression::Binary { left, op, right } => LogicalExpression::Binary {
-                left: Box::new(self.rewrite_aggregates_as_refs(left, aggregates)),
+                left: Box::new(Self::rewrite_aggregates_as_refs(left, aggregates)),
                 op: *op,
-                right: Box::new(self.rewrite_aggregates_as_refs(right, aggregates)),
+                right: Box::new(Self::rewrite_aggregates_as_refs(right, aggregates)),
             },
             LogicalExpression::Unary { op, operand } => LogicalExpression::Unary {
                 op: *op,
-                operand: Box::new(self.rewrite_aggregates_as_refs(operand, aggregates)),
+                operand: Box::new(Self::rewrite_aggregates_as_refs(operand, aggregates)),
             },
             _ => expr.clone(),
         }
