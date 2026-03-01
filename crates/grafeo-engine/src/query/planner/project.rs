@@ -152,8 +152,7 @@ impl super::Planner {
                                     } else {
                                         "edges"
                                     };
-                                    let path_col =
-                                        format!("_path_{suffix}_{var_name}");
+                                    let path_col = format!("_path_{suffix}_{var_name}");
                                     let col_idx = variable_columns
                                         .get(var_name)
                                         .or_else(|| variable_columns.get(&path_col))

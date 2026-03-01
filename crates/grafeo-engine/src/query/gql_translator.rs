@@ -83,8 +83,30 @@ impl GqlTranslator {
         }
 
         // Apply RETURN clause (with ORDER BY, SKIP, LIMIT)
+        // Order: RETURN first (closest to input), then Sort, Skip, Limit wrap it.
+        // This ensures RETURN aliases are visible to ORDER BY in the binder.
         if let Some(return_clause) = &call.return_clause {
-            // Apply ORDER BY
+            // Apply RETURN projection first (only when explicit items are present)
+            if !return_clause.items.is_empty() {
+                let return_items = return_clause
+                    .items
+                    .iter()
+                    .map(|item| {
+                        Ok(ReturnItem {
+                            expression: self.translate_expression(&item.expression)?,
+                            alias: item.alias.clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                plan = LogicalOperator::Return(ReturnOp {
+                    items: return_items,
+                    distinct: return_clause.distinct,
+                    input: Box::new(plan),
+                });
+            }
+
+            // Apply ORDER BY (wraps Return so aliases are visible)
             if let Some(order_by) = &return_clause.order_by {
                 let keys = order_by
                     .items
@@ -122,26 +144,6 @@ impl GqlTranslator {
             {
                 plan = LogicalOperator::Limit(LimitOp {
                     count: *n as usize,
-                    input: Box::new(plan),
-                });
-            }
-
-            // Apply RETURN projection (only when explicit items are present)
-            if !return_clause.items.is_empty() {
-                let return_items = return_clause
-                    .items
-                    .iter()
-                    .map(|item| {
-                        Ok(ReturnItem {
-                            expression: self.translate_expression(&item.expression)?,
-                            alias: item.alias.clone(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                plan = LogicalOperator::Return(ReturnOp {
-                    items: return_items,
-                    distinct: return_clause.distinct,
                     input: Box::new(plan),
                 });
             }
@@ -485,7 +487,27 @@ impl GqlTranslator {
             // Note: For aggregate queries, we don't add a Return operator
             // because Aggregate already produces the final output
         } else {
-            // Apply ORDER BY
+            // Apply RETURN first (closest to input), then Sort wraps it.
+            // This ensures RETURN aliases are visible to ORDER BY in the binder.
+            let return_items = query
+                .return_clause
+                .items
+                .iter()
+                .map(|item| {
+                    Ok(ReturnItem {
+                        expression: self.translate_expression(&item.expression)?,
+                        alias: item.alias.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            plan = LogicalOperator::Return(ReturnOp {
+                items: return_items,
+                distinct: query.return_clause.distinct,
+                input: Box::new(plan),
+            });
+
+            // Apply ORDER BY (wraps Return so aliases are visible)
             if let Some(order_by) = &query.return_clause.order_by {
                 let keys = order_by
                     .items
@@ -506,25 +528,6 @@ impl GqlTranslator {
                     input: Box::new(plan),
                 });
             }
-
-            // Apply RETURN
-            let return_items = query
-                .return_clause
-                .items
-                .iter()
-                .map(|item| {
-                    Ok(ReturnItem {
-                        expression: self.translate_expression(&item.expression)?,
-                        alias: item.alias.clone(),
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            plan = LogicalOperator::Return(ReturnOp {
-                items: return_items,
-                distinct: query.return_clause.distinct,
-                input: Box::new(plan),
-            });
         }
 
         Ok(LogicalPlan::new(plan))
@@ -1838,15 +1841,17 @@ mod tests {
         assert!(result.is_ok());
 
         let plan = result.unwrap();
-        if let LogicalOperator::Return(ret) = &plan.root {
-            if let LogicalOperator::Sort(sort) = ret.input.as_ref() {
-                assert_eq!(sort.keys.len(), 1);
-                assert_eq!(sort.keys[0].order, SortOrder::Ascending);
+        // Sort wraps Return so that RETURN aliases are visible to ORDER BY
+        if let LogicalOperator::Sort(sort) = &plan.root {
+            assert_eq!(sort.keys.len(), 1);
+            assert_eq!(sort.keys[0].order, SortOrder::Ascending);
+            if let LogicalOperator::Return(_ret) = sort.input.as_ref() {
+                // Return is the inner operator, as expected
             } else {
-                panic!("Expected Sort operator");
+                panic!("Expected Return operator inside Sort");
             }
         } else {
-            panic!("Expected Return operator");
+            panic!("Expected Sort operator");
         }
     }
 

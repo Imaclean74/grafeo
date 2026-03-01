@@ -85,9 +85,16 @@ impl super::Planner {
 
         // If a path alias is set, add columns for path length, nodes, and edges
         if let Some(ref path_alias) = expand.path_alias {
-            columns.push(format!("_path_length_{}", path_alias));
-            columns.push(format!("_path_nodes_{}", path_alias));
-            columns.push(format!("_path_edges_{}", path_alias));
+            let length_col = format!("_path_length_{}", path_alias);
+            let nodes_col = format!("_path_nodes_{}", path_alias);
+            let edges_col = format!("_path_edges_{}", path_alias);
+            // Mark as scalar so plan_return uses Column pass-through, not NodeResolve
+            self.scalar_columns.borrow_mut().insert(length_col.clone());
+            self.scalar_columns.borrow_mut().insert(nodes_col.clone());
+            self.scalar_columns.borrow_mut().insert(edges_col.clone());
+            columns.push(length_col);
+            columns.push(nodes_col);
+            columns.push(edges_col);
         }
 
         Ok((operator, columns))
