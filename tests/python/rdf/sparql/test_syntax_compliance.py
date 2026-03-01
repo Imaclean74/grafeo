@@ -630,10 +630,6 @@ class TestSPARQLSelectBasics:
         # Includes reflexive (zero-length) paths plus transitive
         assert len(rows) >= 4
 
-    @pytest.mark.xfail(
-        reason="Complex property paths not yet supported",
-        strict=False,
-    )
     def test_property_path_alternative(self):
         """SPARQL: Property path with | (alternative)."""
         result = self._execute_sparql("""

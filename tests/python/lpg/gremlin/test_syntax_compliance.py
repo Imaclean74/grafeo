@@ -154,9 +154,6 @@ class TestGremlinSourceSteps:
         rows = _rows(db, "g.V().has('name', 'Charlie').out('knows')")
         assert len(rows) >= 1
 
-    @pytest.mark.xfail(
-        reason="Edge property set via addE().property() not persisted for query"
-    )
     def test_add_e_with_property(self, social_graph):
         """g.addE with .property(k,v) stores edge properties."""
         db, _ = social_graph
@@ -249,7 +246,6 @@ class TestGremlinNavigation:
         rows = _rows(db, "g.V().has('name', 'Alice').outE('knows').inV()")
         assert len(rows) == 2  # Bob and Charlie
 
-    @pytest.mark.xfail(reason="bothV() returns only one endpoint instead of both")
     def test_both_v(self, social_graph):
         """bothV() returns both endpoints of an edge."""
         db, ids = social_graph
@@ -422,7 +418,6 @@ class TestGremlinMap:
         val = rows[0] if not isinstance(rows[0], dict) else next(iter(rows[0].values()))
         assert val == ids["alice"]
 
-    @pytest.mark.xfail(reason="label() map step not supported in RETURN expression")
     def test_label_step(self, social_graph):
         """label() extracts vertex labels."""
         db, _ = social_graph
@@ -889,9 +884,6 @@ class TestGremlinPredicates:
         # since=2020 (Alice->Charlie), since=2021 (Bob->Diana)
         assert len(rows) == 2
 
-    @pytest.mark.xfail(
-        reason="Chained edge-to-vertex navigation with predicate loses value projection"
-    )
     def test_predicate_with_navigation(self, social_graph):
         """Predicates compose naturally with navigation steps."""
         db, _ = social_graph

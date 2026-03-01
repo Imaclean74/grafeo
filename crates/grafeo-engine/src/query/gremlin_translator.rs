@@ -38,6 +38,17 @@ struct PendingEdge {
     properties: Vec<(String, LogicalExpression)>,
 }
 
+/// Tracks edge expansion context for InV/OutV/BothV resolution.
+///
+/// When an edge traversal step (OutE/InE/BothE) is processed, this stores
+/// the source and target vertex variables so subsequent vertex steps can
+/// switch to the correct endpoint.
+struct EdgeContext {
+    source_var: String,
+    target_var: String,
+    direction: ExpandDirection,
+}
+
 impl GremlinTranslator {
     fn new() -> Self {
         Self {
@@ -60,6 +71,14 @@ impl GremlinTranslator {
         // Track edge context for step-level addE
         let mut pending_edge: Option<PendingEdge> = None;
 
+        // Track edge expansion context for InV/OutV/BothV resolution
+        let mut edge_ctx: Option<EdgeContext> = None;
+
+        // For g.E(), initialize edge context from the source Expand
+        if matches!(&stmt.source, ast::TraversalSource::E(_)) {
+            edge_ctx = Self::extract_edge_context(&plan);
+        }
+
         // Process each step
         for step in &stmt.steps {
             // Handle edge creation steps specially
@@ -77,20 +96,9 @@ impl GremlinTranslator {
                             self.extract_from_to_with_plan(from_to, plan, &current_var)?;
                         plan = new_plan;
                         edge.to_var = Some(var);
-                        // If we have both from and to, create the edge
-                        if edge.from_var.is_some() && edge.to_var.is_some() {
-                            let edge_var = self.var_gen.next();
-                            plan = LogicalOperator::CreateEdge(CreateEdgeOp {
-                                variable: Some(edge_var.clone()),
-                                from_variable: edge.from_var.take().unwrap(),
-                                to_variable: edge.to_var.take().unwrap(),
-                                edge_type: edge.edge_type.clone(),
-                                properties: std::mem::take(&mut edge.properties),
-                                input: Box::new(plan),
-                            });
-                            current_var = edge_var;
-                            pending_edge = None;
-                        }
+                        // Don't create edge yet: wait for subsequent .property()
+                        // steps to be collected. Edge creation happens when a
+                        // non-edge step is encountered or at finalization.
                         continue;
                     }
                     ast::Step::Property(prop_step) => {
@@ -119,8 +127,60 @@ impl GremlinTranslator {
                 }
             }
 
+            // Handle edge vertex steps (InV, OutV, BothV) using edge context
+            match step {
+                ast::Step::InV => {
+                    if let Some(ctx) = edge_ctx.take() {
+                        // inV = the vertex the edge points TO (the target)
+                        current_var = match ctx.direction {
+                            ExpandDirection::Outgoing | ExpandDirection::Both => ctx.target_var,
+                            ExpandDirection::Incoming => ctx.source_var,
+                        };
+                    }
+                    continue;
+                }
+                ast::Step::OutV => {
+                    if let Some(ctx) = edge_ctx.take() {
+                        // outV = the vertex the edge comes FROM (the source)
+                        current_var = match ctx.direction {
+                            ExpandDirection::Outgoing | ExpandDirection::Both => ctx.source_var,
+                            ExpandDirection::Incoming => ctx.target_var,
+                        };
+                    }
+                    continue;
+                }
+                ast::Step::BothV => {
+                    if let Some(ctx) = edge_ctx.take() {
+                        // bothV = emit both endpoints via Union
+                        let alias = self.var_gen.next();
+                        plan = LogicalOperator::Union(UnionOp {
+                            inputs: vec![
+                                LogicalOperator::Project(ProjectOp {
+                                    projections: vec![Projection {
+                                        expression: LogicalExpression::Variable(ctx.source_var),
+                                        alias: Some(alias.clone()),
+                                    }],
+                                    input: Box::new(plan.clone()),
+                                }),
+                                LogicalOperator::Project(ProjectOp {
+                                    projections: vec![Projection {
+                                        expression: LogicalExpression::Variable(ctx.target_var),
+                                        alias: Some(alias.clone()),
+                                    }],
+                                    input: Box::new(plan),
+                                }),
+                            ],
+                        });
+                        current_var = alias;
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+
             // Check if this is a step-level addE
             if let ast::Step::AddE(edge_type) = step {
+                edge_ctx = None;
                 // For step-level addE, the current context is the source by default
                 pending_edge = Some(PendingEdge {
                     edge_type: edge_type.clone(),
@@ -133,6 +193,24 @@ impl GremlinTranslator {
 
             let (new_plan, new_var) = self.translate_step(step, plan, &current_var)?;
             plan = new_plan;
+
+            // Update edge context after step translation
+            match step {
+                ast::Step::OutE(_) | ast::Step::InE(_) | ast::Step::BothE(_) => {
+                    edge_ctx = Self::extract_edge_context(&plan);
+                }
+                // Filter steps preserve edge context
+                ast::Step::Has(_)
+                | ast::Step::HasLabel(_)
+                | ast::Step::HasId(_)
+                | ast::Step::HasNot(_)
+                | ast::Step::Filter(_) => {}
+                // All other steps clear edge context
+                _ => {
+                    edge_ctx = None;
+                }
+            }
+
             if let Some(v) = new_var {
                 current_var = v;
             }
@@ -635,9 +713,14 @@ impl GremlinTranslator {
                 Ok((plan, Some("id".to_string())))
             }
             ast::Step::Label => {
+                // Gremlin label() returns the first label as a scalar string,
+                // not a list. Use IndexAccess to extract element [0].
                 let plan = LogicalOperator::Project(ProjectOp {
                     projections: vec![Projection {
-                        expression: LogicalExpression::Labels(current_var.to_string()),
+                        expression: LogicalExpression::IndexAccess {
+                            base: Box::new(LogicalExpression::Labels(current_var.to_string())),
+                            index: Box::new(LogicalExpression::Literal(Value::Int64(0))),
+                        },
                         alias: Some("label".to_string()),
                     }],
                     input: Box::new(input),
@@ -1583,6 +1666,20 @@ impl GremlinTranslator {
             }
         }
     }
+
+    /// Walk a logical plan to find the nearest Expand operator and extract
+    /// its source/target/direction as an `EdgeContext`.
+    fn extract_edge_context(plan: &LogicalOperator) -> Option<EdgeContext> {
+        match plan {
+            LogicalOperator::Expand(e) => Some(EdgeContext {
+                source_var: e.from_variable.clone(),
+                target_var: e.to_variable.clone(),
+                direction: e.direction,
+            }),
+            LogicalOperator::Filter(f) => Self::extract_edge_context(&f.input),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1885,15 +1982,16 @@ mod tests {
         assert!(result.is_ok());
         let plan = result.unwrap();
 
-        // Label step produces Project(Labels), which gets wrapped in Return
+        // Label step produces Project(IndexAccess(Labels, 0)), wrapped in Return
         if let LogicalOperator::Return(ret) = &plan.root {
             if let LogicalOperator::Project(proj) = ret.input.as_ref() {
                 assert!(
                     matches!(
                         &proj.projections[0].expression,
-                        LogicalExpression::Labels(_)
+                        LogicalExpression::IndexAccess { base, .. }
+                            if matches!(base.as_ref(), LogicalExpression::Labels(_))
                     ),
-                    "Expected Labels projection"
+                    "Expected IndexAccess(Labels) projection"
                 );
             } else {
                 panic!("Expected Project under Return");

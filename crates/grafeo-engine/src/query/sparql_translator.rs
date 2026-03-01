@@ -751,6 +751,27 @@ impl SparqlTranslator {
     }
 
     fn translate_triple_pattern(&mut self, triple: &ast::TriplePattern) -> Result<LogicalOperator> {
+        // Handle Alternative property paths: translate as Union of triple scans
+        if let ast::PropertyPath::Alternative(alternatives) = &triple.predicate {
+            let subject = self.translate_triple_term(&triple.subject)?;
+            let object = self.translate_triple_term(&triple.object)?;
+            let graph = self.graph_context_stack.last().cloned();
+
+            let mut branches = Vec::new();
+            for alt_path in alternatives {
+                let pred = self.translate_property_path(alt_path)?;
+                branches.push(LogicalOperator::TripleScan(TripleScanOp {
+                    subject: subject.clone(),
+                    predicate: pred,
+                    object: object.clone(),
+                    graph: graph.clone(),
+                    input: None,
+                }));
+            }
+
+            return Ok(LogicalOperator::Union(UnionOp { inputs: branches }));
+        }
+
         let subject = self.translate_triple_term(&triple.subject)?;
         let predicate = self.translate_property_path(&triple.predicate)?;
         let object = self.translate_triple_term(&triple.object)?;
