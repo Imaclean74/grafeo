@@ -17,15 +17,42 @@ use grafeo_adapters::query::gql::{self, ast};
 use grafeo_common::types::Value;
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
 
+/// Result of translating a GQL query: either a logical plan or a session command.
+#[derive(Debug)]
+pub enum GqlTranslationResult {
+    /// A query plan to execute.
+    Plan(LogicalPlan),
+    /// A session or transaction command (not a query plan).
+    SessionCommand(ast::SessionCommand),
+}
+
 /// Translates a GQL query string to a logical plan.
+///
+/// Session/transaction commands (USE GRAPH, COMMIT, etc.) return an error.
+/// Use [`translate_full`] to handle both plans and session commands.
 ///
 /// # Errors
 ///
 /// Returns an error if the query cannot be parsed or translated.
 pub fn translate(query: &str) -> Result<LogicalPlan> {
+    match translate_full(query)? {
+        GqlTranslationResult::Plan(plan) => Ok(plan),
+        GqlTranslationResult::SessionCommand(_) => Err(Error::Query(QueryError::new(
+            QueryErrorKind::Semantic,
+            "Session commands cannot be executed as queries",
+        ))),
+    }
+}
+
+/// Translates a GQL query string, returning either a logical plan or session command.
+///
+/// # Errors
+///
+/// Returns an error if the query cannot be parsed or translated.
+pub fn translate_full(query: &str) -> Result<GqlTranslationResult> {
     let statement = gql::parse(query)?;
     let translator = GqlTranslator::new();
-    translator.translate_statement(&statement)
+    translator.translate_statement_full(&statement)
 }
 
 /// Translator from GQL AST to LogicalPlan.
@@ -34,6 +61,17 @@ struct GqlTranslator;
 impl GqlTranslator {
     fn new() -> Self {
         Self
+    }
+
+    fn translate_statement_full(&self, stmt: &ast::Statement) -> Result<GqlTranslationResult> {
+        match stmt {
+            ast::Statement::SessionCommand(cmd) => {
+                Ok(GqlTranslationResult::SessionCommand(cmd.clone()))
+            }
+            other => self
+                .translate_statement(other)
+                .map(GqlTranslationResult::Plan),
+        }
     }
 
     fn translate_statement(&self, stmt: &ast::Statement) -> Result<LogicalPlan> {
@@ -51,6 +89,10 @@ impl GqlTranslator {
             ast::Statement::CompositeQuery { left, op, right } => {
                 self.translate_composite_query(left, *op, right)
             }
+            ast::Statement::SessionCommand(_) => Err(Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "Session commands cannot be executed as queries",
+            ))),
         }
     }
 

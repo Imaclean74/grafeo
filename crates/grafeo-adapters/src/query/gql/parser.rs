@@ -225,22 +225,48 @@ impl<'a> Parser<'a> {
                 .parse_delete()
                 .map(|s| Statement::DataModification(DataModificationStatement::Delete(s))),
             TokenKind::Create => {
-                // Check if CREATE is followed by a pattern (Cypher-style) or NODE/EDGE (GQL schema)
+                // Check if CREATE is followed by a pattern (Cypher-style) or a DDL keyword
                 let next = self.peek_kind();
                 if next == TokenKind::LParen {
                     // Cypher-style: CREATE (n:Label {...}) - treat as INSERT
                     self.parse_create_as_insert()
                         .map(|s| Statement::DataModification(DataModificationStatement::Insert(s)))
+                } else if self.peek_is_graph_keyword() {
+                    // CREATE [PROPERTY] GRAPH <name>
+                    self.parse_create_graph().map(Statement::SessionCommand)
                 } else {
-                    // GQL schema: CREATE NODE TYPE / CREATE EDGE TYPE
+                    // GQL schema: CREATE NODE TYPE / CREATE EDGE TYPE / CREATE VECTOR INDEX
                     self.parse_create_schema().map(Statement::Schema)
                 }
             }
             TokenKind::Call => self.parse_call_statement().map(Statement::Call),
-            _ => {
-                Err(self
-                    .error("Expected MATCH, INSERT, DELETE, MERGE, UNWIND, FOR, CREATE, or CALL"))
+            _ if self.is_identifier() => {
+                let name = self.get_identifier_name();
+                match name.to_uppercase().as_str() {
+                    "DROP" => self.parse_drop_graph().map(Statement::SessionCommand),
+                    "USE" => self.parse_use_graph().map(Statement::SessionCommand),
+                    "SESSION" => self.parse_session_command().map(Statement::SessionCommand),
+                    "START" => self
+                        .parse_start_transaction()
+                        .map(Statement::SessionCommand),
+                    "COMMIT" => {
+                        self.advance();
+                        Ok(Statement::SessionCommand(SessionCommand::Commit))
+                    }
+                    "ROLLBACK" => {
+                        self.advance();
+                        Ok(Statement::SessionCommand(SessionCommand::Rollback))
+                    }
+                    _ => Err(self.error(
+                        "Expected MATCH, INSERT, DELETE, MERGE, UNWIND, FOR, CREATE, CALL, \
+                         DROP, USE, SESSION, START, COMMIT, or ROLLBACK",
+                    )),
+                }
             }
+            _ => Err(self.error(
+                "Expected MATCH, INSERT, DELETE, MERGE, UNWIND, FOR, CREATE, CALL, \
+                 DROP, USE, SESSION, START, COMMIT, or ROLLBACK",
+            )),
         }
     }
 
@@ -2900,6 +2926,244 @@ impl<'a> Parser<'a> {
             self.peeked = Some(self.lexer.next_token());
         }
         self.peeked.as_ref().unwrap().kind
+    }
+
+    /// Returns the uppercased text of the peeked token.
+    /// Must call `peek_kind()` first.
+    fn peek_text_upper(&self) -> String {
+        self.peeked
+            .as_ref()
+            .map(|t| t.text.to_uppercase())
+            .unwrap_or_default()
+    }
+
+    /// Checks whether CREATE is followed by [PROPERTY] GRAPH.
+    fn peek_is_graph_keyword(&mut self) -> bool {
+        let pk = self.peek_kind();
+        if pk == TokenKind::Identifier {
+            let text = self.peek_text_upper();
+            text == "GRAPH" || text == "PROPERTY"
+        } else {
+            false
+        }
+    }
+
+    /// Parses `CREATE [PROPERTY] GRAPH [IF NOT EXISTS] <name>`.
+    fn parse_create_graph(&mut self) -> Result<SessionCommand> {
+        self.expect(TokenKind::Create)?;
+
+        // Skip optional PROPERTY keyword
+        if self.is_identifier() && self.get_identifier_name().eq_ignore_ascii_case("PROPERTY") {
+            self.advance();
+        }
+
+        // Expect GRAPH
+        if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("GRAPH") {
+            return Err(self.error("Expected GRAPH after CREATE"));
+        }
+        self.advance();
+
+        // Optional IF NOT EXISTS
+        let if_not_exists = if self.is_identifier()
+            && self.get_identifier_name().eq_ignore_ascii_case("IF")
+        {
+            self.advance();
+            if !(self.current.kind == TokenKind::Not
+                || (self.is_identifier() && self.get_identifier_name().eq_ignore_ascii_case("NOT")))
+            {
+                return Err(self.error("Expected NOT after IF"));
+            }
+            self.advance();
+            if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("EXISTS") {
+                return Err(self.error("Expected EXISTS after IF NOT"));
+            }
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // Parse graph name
+        if !self.is_identifier() {
+            return Err(self.error("Expected graph name"));
+        }
+        let name = self.get_identifier_name();
+        self.advance();
+
+        Ok(SessionCommand::CreateGraph {
+            name,
+            if_not_exists,
+        })
+    }
+
+    /// Parses `DROP [PROPERTY] GRAPH [IF EXISTS] <name>`.
+    fn parse_drop_graph(&mut self) -> Result<SessionCommand> {
+        self.advance(); // consume DROP
+
+        // Skip optional PROPERTY keyword
+        if self.is_identifier() && self.get_identifier_name().eq_ignore_ascii_case("PROPERTY") {
+            self.advance();
+        }
+
+        // Expect GRAPH
+        if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("GRAPH") {
+            return Err(self.error("Expected GRAPH after DROP"));
+        }
+        self.advance();
+
+        // Optional IF EXISTS
+        let if_exists = if self.is_identifier()
+            && self.get_identifier_name().eq_ignore_ascii_case("IF")
+        {
+            self.advance();
+            if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("EXISTS") {
+                return Err(self.error("Expected EXISTS after IF"));
+            }
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // Parse graph name
+        if !self.is_identifier() {
+            return Err(self.error("Expected graph name"));
+        }
+        let name = self.get_identifier_name();
+        self.advance();
+
+        Ok(SessionCommand::DropGraph { name, if_exists })
+    }
+
+    /// Parses `USE GRAPH <name>`.
+    fn parse_use_graph(&mut self) -> Result<SessionCommand> {
+        self.advance(); // consume USE
+
+        // Expect GRAPH
+        if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("GRAPH") {
+            return Err(self.error("Expected GRAPH after USE"));
+        }
+        self.advance();
+
+        // Parse graph name
+        if !self.is_identifier() {
+            return Err(self.error("Expected graph name"));
+        }
+        let name = self.get_identifier_name();
+        self.advance();
+
+        Ok(SessionCommand::UseGraph(name))
+    }
+
+    /// Parses SESSION commands: SET, RESET, CLOSE.
+    fn parse_session_command(&mut self) -> Result<SessionCommand> {
+        self.advance(); // consume SESSION
+
+        if !self.is_identifier() {
+            return Err(self.error("Expected SET, RESET, or CLOSE after SESSION"));
+        }
+
+        let action = self.get_identifier_name();
+        match action.to_uppercase().as_str() {
+            "SET" => {
+                self.advance(); // consume SET
+                self.parse_session_set()
+            }
+            "RESET" => {
+                self.advance(); // consume RESET
+                // Optional ALL (treated same as bare RESET)
+                if self.current.kind == TokenKind::All {
+                    self.advance();
+                }
+                Ok(SessionCommand::SessionReset)
+            }
+            "CLOSE" => {
+                self.advance(); // consume CLOSE
+                Ok(SessionCommand::SessionClose)
+            }
+            _ => Err(self.error("Expected SET, RESET, or CLOSE after SESSION")),
+        }
+    }
+
+    /// Parses SESSION SET variants: GRAPH, TIME ZONE, PARAMETER.
+    fn parse_session_set(&mut self) -> Result<SessionCommand> {
+        if !self.is_identifier() {
+            return Err(self.error("Expected GRAPH, TIME, SCHEMA, or PARAMETER after SESSION SET"));
+        }
+
+        let keyword = self.get_identifier_name();
+        match keyword.to_uppercase().as_str() {
+            "GRAPH" => {
+                self.advance(); // consume GRAPH
+                if !self.is_identifier() {
+                    return Err(self.error("Expected graph name"));
+                }
+                let name = self.get_identifier_name();
+                self.advance();
+                Ok(SessionCommand::SessionSetGraph(name))
+            }
+            "TIME" => {
+                self.advance(); // consume TIME
+                // Expect ZONE
+                if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("ZONE")
+                {
+                    return Err(self.error("Expected ZONE after TIME"));
+                }
+                self.advance();
+                // Expect timezone string
+                if self.current.kind != TokenKind::String {
+                    return Err(self.error("Expected timezone string after TIME ZONE"));
+                }
+                let tz = self.current.text[1..self.current.text.len() - 1].to_string();
+                self.advance();
+                Ok(SessionCommand::SessionSetTimeZone(tz))
+            }
+            "SCHEMA" => {
+                self.advance(); // consume SCHEMA
+                if !self.is_identifier() {
+                    return Err(self.error("Expected schema name"));
+                }
+                let name = self.get_identifier_name();
+                self.advance();
+                // SESSION SET SCHEMA maps to SessionSetGraph (schema = graph in GQL)
+                Ok(SessionCommand::SessionSetGraph(name))
+            }
+            "PARAMETER" => {
+                self.advance(); // consume PARAMETER
+                // Expect $name or identifier
+                let param_name = if self.current.kind == TokenKind::Parameter {
+                    let name = self.current.text[1..].to_string();
+                    self.advance();
+                    name
+                } else if self.is_identifier() {
+                    let name = self.get_identifier_name();
+                    self.advance();
+                    name
+                } else {
+                    return Err(self.error("Expected parameter name"));
+                };
+                // Expect =
+                self.expect(TokenKind::Eq)?;
+                // Parse value expression
+                let value = self.parse_expression()?;
+                Ok(SessionCommand::SessionSetParameter(param_name, value))
+            }
+            _ => Err(self.error("Expected GRAPH, TIME, SCHEMA, or PARAMETER after SESSION SET")),
+        }
+    }
+
+    /// Parses `START TRANSACTION`.
+    fn parse_start_transaction(&mut self) -> Result<SessionCommand> {
+        self.advance(); // consume START
+        if !self.is_identifier()
+            || !self
+                .get_identifier_name()
+                .eq_ignore_ascii_case("TRANSACTION")
+        {
+            return Err(self.error("Expected TRANSACTION after START"));
+        }
+        self.advance();
+        Ok(SessionCommand::StartTransaction)
     }
 
     fn error(&self, message: &str) -> Error {

@@ -2,15 +2,60 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.13] - Unreleased
+## [0.5.13] - 2026-03-03
 
-Full syntax support for GQL, SPARQL and Cypher
+Full spec compliance for GQL (ISO 39075:2024), Cypher (openCypher), and SPARQL (W3C 1.1).
 
 ### Added
 
+#### SPARQL
+
+- **Inverse property paths**: `^foaf:knows` swaps subject/object for reverse traversal
+- **ZeroOrOne property paths**: `foaf:knows?` matches zero or one hops via union of reflexive and inner path
+
+#### Cypher
+
+- **Pattern comprehension**: `[(a)-->(b) | b.prop]` via Apply + Collect aggregate
+- **COUNT subquery**: `COUNT { MATCH ... }` expression with full subplan execution
+- **Map projections**: `node { .prop1, .prop2, .* }` for selective property extraction
+- **CALL { subquery }**: inline subqueries via Apply operator for correlated execution
+- **FOREACH loop**: `FOREACH (var IN list | SET ...)` desugared to Unwind + inner mutation
+- **reduce() function**: `reduce(acc = init, x IN list | expr)` for list folding
+
+#### GQL
+
+- **Set operations** (ISO sec 14.2): EXCEPT (hash-based set difference), INTERSECT (hash-based set intersection), OTHERWISE (fallback if left is empty) with full execution
+- **COUNT { pattern } subquery**: inline count expression with subplan execution
+- **VALUE { subquery }**: scalar subquery expression via Apply operator
+- **Element pattern WHERE**: `(n WHERE n.age > 30)` and `-[e WHERE e.weight > 5]->` inline predicates
+- **ISO path search prefixes**: ANY, ANY k, ALL SHORTEST, ANY SHORTEST, SHORTEST k, SHORTEST k GROUPS
+- **Questioned paths**: `(a)-[e]->?(b)` optional edges via LeftJoin
+- **Match modes** (ISO sec 16.5): DIFFERENT EDGES (Trail) and REPEATABLE ELEMENTS (Walk)
+- **IS predicates** (ISO sec 20.15): IS TYPED, IS DIRECTED, IS LABELED, IS SOURCE OF, IS DESTINATION OF
+- **Predicate functions**: ALL_DIFFERENT, SAME, PROPERTY_EXISTS
+- **NULLIF function**: desugars to CASE WHEN a = b THEN NULL ELSE a END
+- **nodes(path), edges(path) functions**: extract node/edge sequences from path values
+- **LET statement**: variable bindings as query clause
+- **LET ... IN ... END expression**: scoped bindings in expression context
+- **FINISH statement** (ISO sec 14.10): consume input, return empty result
+- **SELECT statement**: SQL-style projection (same semantics as RETURN)
+- **NEXT statement** (ISO sec 14.3): linear composition, output of left feeds into right via Apply
+- **Path INSERT**: path patterns in CREATE decomposed into CreateNode + CreateEdge chain
+- **DDL**: CREATE [PROPERTY] GRAPH, DROP [PROPERTY] GRAPH with IF [NOT] EXISTS
+- **Session commands**: USE GRAPH, SESSION SET GRAPH/TIME ZONE/PARAMETER, SESSION RESET, SESSION CLOSE
+- **Transaction commands**: START TRANSACTION, COMMIT, ROLLBACK (routed to session API)
+
+#### Infrastructure
+
+- **LPG named graphs**: multi-graph support mirroring the RDF named graph architecture, with per-graph independent storage, labels, indexes, and MVCC versioning
+- **Session state management**: current graph, time zone, and session parameters with interior mutability
+- **Database-level graph management**: `create_graph()`, `drop_graph()`, `list_graphs()` public API
+- **Apply operator**: correlated subquery execution (per-row subplan evaluation) for CALL, VALUE, NEXT, and pattern comprehensions
+
+#### Previous (pre-spec-compliance)
+
 - **GQL label expressions** (ISO sec 16.8): `IS` syntax with conjunction (`&`), disjunction (`|`), negation (`!`), and wildcard (`%`) operators for pattern matching, e.g. `MATCH (n IS Person | Company)`
 - **GQL path modes** (ISO sec 16.6): WALK, TRAIL (no repeated edges), SIMPLE (no repeated nodes except endpoints), ACYCLIC (no repeated nodes) for variable-length traversals
-- **GQL composite queries** (ISO sec 14.2): UNION, UNION ALL with full execution; EXCEPT, INTERSECT, OTHERWISE parsed and accepted
 - **GQL ISO path quantifiers**: `{m,n}` curly-brace syntax alongside existing `*m..n` star syntax
 - **GQL CAST expressions** (ISO sec 20.8): `CAST(expr AS INTEGER/FLOAT/STRING/BOOLEAN)` desugars to existing type conversion functions
 - **GQL FILTER statement**: accepted as synonym for WHERE clause
@@ -37,6 +82,7 @@ Full syntax support for GQL, SPARQL and Cypher
 
 ### Fixed
 
+- **Cypher standalone DELETE/SET/REMOVE errors**: error messages now correctly indicate a preceding MATCH clause is required
 - **Cypher power operator**: `^` no longer returns an error in the translator
 - **Cypher anonymous variable collisions**: anonymous nodes/edges now use unique counter-based names instead of a bare `"_anon"` string
 - **Temporal comparison in optimized paths**: 10 `compare_values` functions across zone maps, property columns, factorized filters, sort operators, and statistics now handle Date/Time/Timestamp (previously silently returned false for ordering operators)

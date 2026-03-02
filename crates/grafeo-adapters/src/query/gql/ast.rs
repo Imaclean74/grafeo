@@ -22,6 +22,45 @@ pub enum Statement {
         /// The right query.
         right: Box<Statement>,
     },
+    /// A session or transaction command.
+    SessionCommand(SessionCommand),
+}
+
+/// Session and transaction commands.
+#[derive(Debug, Clone)]
+pub enum SessionCommand {
+    /// USE GRAPH <name>
+    UseGraph(String),
+    /// CREATE [PROPERTY] GRAPH <name>
+    CreateGraph {
+        /// Graph name.
+        name: String,
+        /// IF NOT EXISTS flag.
+        if_not_exists: bool,
+    },
+    /// DROP [PROPERTY] GRAPH [IF EXISTS] <name>
+    DropGraph {
+        /// Graph name.
+        name: String,
+        /// IF EXISTS flag.
+        if_exists: bool,
+    },
+    /// SESSION SET GRAPH <name>
+    SessionSetGraph(String),
+    /// SESSION SET TIME ZONE <tz>
+    SessionSetTimeZone(String),
+    /// SESSION SET PARAMETER $name = value
+    SessionSetParameter(String, Expression),
+    /// SESSION RESET [ALL]
+    SessionReset,
+    /// SESSION CLOSE
+    SessionClose,
+    /// START TRANSACTION
+    StartTransaction,
+    /// COMMIT
+    Commit,
+    /// ROLLBACK
+    Rollback,
 }
 
 /// Composite query operation.

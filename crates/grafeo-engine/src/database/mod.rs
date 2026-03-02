@@ -473,6 +473,24 @@ impl GrafeoDB {
         &self.store
     }
 
+    // === Named Graph Management ===
+
+    /// Creates a named graph. Returns `true` if created, `false` if it already exists.
+    pub fn create_graph(&self, name: &str) -> bool {
+        self.store.create_graph(name)
+    }
+
+    /// Drops a named graph. Returns `true` if dropped, `false` if it did not exist.
+    pub fn drop_graph(&self, name: &str) -> bool {
+        self.store.drop_graph(name)
+    }
+
+    /// Returns all named graph names.
+    #[must_use]
+    pub fn list_graphs(&self) -> Vec<String> {
+        self.store.graph_names()
+    }
+
     /// Returns the graph store as a trait object.
     ///
     /// This provides the [`GraphStoreMut`] interface for code that should work
@@ -651,6 +669,18 @@ pub struct QueryResult {
 }
 
 impl QueryResult {
+    /// Creates a fully empty query result (no columns, no rows).
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            columns: Vec::new(),
+            column_types: Vec::new(),
+            rows: Vec::new(),
+            execution_time_ms: None,
+            rows_scanned: None,
+        }
+    }
+
     /// Creates a new empty query result.
     #[must_use]
     pub fn new(columns: Vec<String>) -> Self {

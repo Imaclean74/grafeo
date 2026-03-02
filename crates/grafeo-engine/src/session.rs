@@ -62,6 +62,13 @@ pub struct Session {
     /// CDC log for change tracking.
     #[cfg(feature = "cdc")]
     cdc_log: Arc<crate::cdc::CdcLog>,
+    /// Current graph name (for multi-graph USE GRAPH support). None = default graph.
+    current_graph: parking_lot::Mutex<Option<String>>,
+    /// Session time zone override.
+    time_zone: parking_lot::Mutex<Option<String>>,
+    /// Session-level parameters (SET PARAMETER).
+    session_params:
+        parking_lot::Mutex<std::collections::HashMap<String, grafeo_common::types::Value>>,
 }
 
 impl Session {
@@ -98,6 +105,9 @@ impl Session {
             tx_start_edge_count: 0,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
+            current_graph: parking_lot::Mutex::new(None),
+            time_zone: parking_lot::Mutex::new(None),
+            session_params: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -141,6 +151,9 @@ impl Session {
             tx_start_edge_count: 0,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
+            current_graph: parking_lot::Mutex::new(None),
+            time_zone: parking_lot::Mutex::new(None),
+            session_params: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -179,6 +192,9 @@ impl Session {
             tx_start_edge_count: 0,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
+            current_graph: parking_lot::Mutex::new(None),
+            time_zone: parking_lot::Mutex::new(None),
+            session_params: parking_lot::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -186,6 +202,48 @@ impl Session {
     #[must_use]
     pub fn graph_model(&self) -> GraphModel {
         self.graph_model
+    }
+
+    // === Session State Management ===
+
+    /// Sets the current graph for this session (USE GRAPH).
+    pub fn use_graph(&self, name: &str) {
+        *self.current_graph.lock() = Some(name.to_string());
+    }
+
+    /// Returns the current graph name, if any.
+    #[must_use]
+    pub fn current_graph(&self) -> Option<String> {
+        self.current_graph.lock().clone()
+    }
+
+    /// Sets the session time zone.
+    pub fn set_time_zone(&self, tz: &str) {
+        *self.time_zone.lock() = Some(tz.to_string());
+    }
+
+    /// Returns the session time zone, if set.
+    #[must_use]
+    pub fn time_zone(&self) -> Option<String> {
+        self.time_zone.lock().clone()
+    }
+
+    /// Sets a session parameter.
+    pub fn set_parameter(&self, key: &str, value: grafeo_common::types::Value) {
+        self.session_params.lock().insert(key.to_string(), value);
+    }
+
+    /// Gets a session parameter by cloning it.
+    #[must_use]
+    pub fn get_parameter(&self, key: &str) -> Option<grafeo_common::types::Value> {
+        self.session_params.lock().get(key).cloned()
+    }
+
+    /// Resets all session state to defaults.
+    pub fn reset_session(&self) {
+        *self.current_graph.lock() = None;
+        *self.time_zone.lock() = None;
+        self.session_params.lock().clear();
     }
 
     /// Checks that the session's graph model supports LPG operations.
@@ -196,6 +254,87 @@ impl Session {
             )));
         }
         Ok(())
+    }
+
+    /// Executes a session or transaction command, returning an empty result.
+    #[cfg(feature = "gql")]
+    fn execute_session_command(
+        &self,
+        cmd: grafeo_adapters::query::gql::ast::SessionCommand,
+    ) -> Result<QueryResult> {
+        use grafeo_adapters::query::gql::ast::SessionCommand;
+        use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind};
+
+        match cmd {
+            SessionCommand::CreateGraph {
+                name,
+                if_not_exists,
+            } => {
+                let created = self.store.create_graph(&name);
+                if !created && !if_not_exists {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        format!("Graph '{name}' already exists"),
+                    )));
+                }
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::DropGraph { name, if_exists } => {
+                let dropped = self.store.drop_graph(&name);
+                if !dropped && !if_exists {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        format!("Graph '{name}' does not exist"),
+                    )));
+                }
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::UseGraph(name) => {
+                // Verify graph exists (default graph is always valid)
+                if !name.eq_ignore_ascii_case("default") && self.store.graph(&name).is_none() {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        format!("Graph '{name}' does not exist"),
+                    )));
+                }
+                self.use_graph(&name);
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionSetGraph(name) => {
+                self.use_graph(&name);
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionSetTimeZone(tz) => {
+                self.set_time_zone(&tz);
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionSetParameter(key, _expr) => {
+                // For now, store parameter name with Null value.
+                // Full expression evaluation would require building and executing a plan.
+                self.set_parameter(&key, Value::Null);
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionReset => {
+                self.reset_session();
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionClose => {
+                self.reset_session();
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::StartTransaction => Err(Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "Use session.begin_tx() for transaction management",
+            ))),
+            SessionCommand::Commit => Err(Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "Use session.commit() for transaction management",
+            ))),
+            SessionCommand::Rollback => Err(Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "Use session.rollback() for transaction management",
+            ))),
+        }
     }
 
     /// Executes a GQL query.
@@ -235,19 +374,22 @@ impl Session {
 
         let start_time = std::time::Instant::now();
 
+        // Parse and translate, checking for session commands first
+        let translation = gql_translator::translate_full(query)?;
+        let logical_plan = match translation {
+            gql_translator::GqlTranslationResult::SessionCommand(cmd) => {
+                return self.execute_session_command(cmd);
+            }
+            gql_translator::GqlTranslationResult::Plan(plan) => plan,
+        };
+
         // Create cache key for this query
         let cache_key = CacheKey::new(query, QueryLanguage::Gql);
 
-        // Try to get cached optimized plan
+        // Try to get cached optimized plan, or use the plan we just translated
         let optimized_plan = if let Some(cached_plan) = self.query_cache.get_optimized(&cache_key) {
-            // Cache hit - skip parsing, translation, binding, and optimization
             cached_plan
         } else {
-            // Cache miss - run full pipeline
-
-            // Parse and translate the query to a logical plan
-            let logical_plan = gql_translator::translate(query)?;
-
             // Semantic validation
             let mut binder = Binder::new();
             let _binding_context = binder.bind(&logical_plan)?;
