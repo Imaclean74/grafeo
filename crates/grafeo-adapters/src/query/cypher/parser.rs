@@ -247,6 +247,29 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parses the inner query of an EXISTS subquery.
+    /// Accepts one or more MATCH clauses and an optional WHERE clause.
+    fn parse_exists_inner_query(&mut self) -> Result<Query> {
+        let mut clauses = Vec::new();
+
+        while self.current.kind == TokenKind::Match || self.current.kind == TokenKind::Optional {
+            clauses.push(Clause::Match(self.parse_match_clause()?));
+        }
+
+        if clauses.is_empty() {
+            return Err(self.error("EXISTS subquery requires at least one MATCH clause"));
+        }
+
+        if self.current.kind == TokenKind::Where {
+            clauses.push(Clause::Where(self.parse_where_clause()?));
+        }
+
+        Ok(Query {
+            clauses,
+            span: None,
+        })
+    }
+
     fn parse_where_clause(&mut self) -> Result<WhereClause> {
         self.expect(TokenKind::Where)?;
         let predicate = self.parse_expression()?;
@@ -1171,6 +1194,14 @@ impl<'a> Parser<'a> {
                 }
 
                 self.advance();
+
+                // EXISTS { MATCH ... WHERE ... } subquery form
+                if lower == "exists" && self.current.kind == TokenKind::LBrace {
+                    self.advance(); // consume {
+                    let inner_query = self.parse_exists_inner_query()?;
+                    self.expect(TokenKind::RBrace)?;
+                    return Ok(Expression::Exists(Box::new(inner_query)));
+                }
 
                 // Check if function call
                 if self.current.kind == TokenKind::LParen {
@@ -2330,6 +2361,58 @@ mod tests {
             assert!(matches!(&clauses[0], Clause::Match(_)));
             assert!(matches!(&clauses[1], Clause::Merge(_)));
             assert!(matches!(&clauses[2], Clause::Return(_)));
+        }
+    }
+
+    // ==================== EXISTS Subquery Tests ====================
+
+    #[test]
+    fn test_parse_exists_subquery() {
+        let stmt = parse_ok("MATCH (n) WHERE EXISTS { MATCH (n)-[:KNOWS]->() } RETURN n");
+        if let Statement::Query(Query { clauses, .. }) = stmt {
+            assert!(matches!(&clauses[0], Clause::Match(_)));
+            // WHERE clause should contain an Exists expression
+            if let Clause::Where(w) = &clauses[1] {
+                assert!(matches!(&w.predicate, Expression::Exists(_)));
+            } else {
+                panic!("expected WHERE clause");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_not_exists_subquery() {
+        let stmt = parse_ok("MATCH (n) WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->() } RETURN n");
+        if let Statement::Query(Query { clauses, .. }) = stmt {
+            if let Clause::Where(w) = &clauses[1] {
+                assert!(matches!(
+                    &w.predicate,
+                    Expression::Unary {
+                        op: UnaryOp::Not,
+                        ..
+                    }
+                ));
+            } else {
+                panic!("expected WHERE clause");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_exists_with_inner_where() {
+        parse_ok("MATCH (n) WHERE EXISTS { MATCH (n)-[:KNOWS]->(m) WHERE m.age > 30 } RETURN n");
+    }
+
+    #[test]
+    fn test_parse_exists_function_still_works() {
+        // exists(n.prop) should still parse as a function call
+        let stmt = parse_ok("MATCH (n) WHERE exists(n.name) RETURN n");
+        if let Statement::Query(Query { clauses, .. }) = stmt {
+            if let Clause::Where(w) = &clauses[1] {
+                assert!(matches!(&w.predicate, Expression::FunctionCall { .. }));
+            } else {
+                panic!("expected WHERE clause");
+            }
         }
     }
 }

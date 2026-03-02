@@ -7,11 +7,21 @@ impl super::Planner {
     ///
     /// Uses zone map pre-filtering to potentially skip scans when predicates
     /// definitely won't match any data. Also uses property indexes when available
-    /// for O(1) lookups instead of full scans.
+    /// for O(1) lookups instead of full scans. Complex EXISTS/NOT EXISTS subqueries
+    /// are rewritten as semi-joins or anti-joins.
     pub(super) fn plan_filter(
         &self,
         filter: &FilterOp,
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        // Check for complex EXISTS/NOT EXISTS patterns and rewrite as semi/anti join.
+        // Simple single-hop EXISTS patterns are handled by the fast path in
+        // convert_expression() -> extract_exists_pattern().
+        if let Some((subquery, is_negated, remaining)) =
+            self.extract_complex_exists(&filter.predicate)
+        {
+            return self.plan_exists_as_semi_join(&filter.input, subquery, is_negated, remaining);
+        }
+
         // Check zone maps for simple property predicates before scanning
         // If zone map says "definitely no matches", we can short-circuit
         if let Some(false) = self.check_zone_map_for_predicate(&filter.predicate) {
@@ -56,6 +66,150 @@ impl super::Planner {
         let operator = Box::new(FilterOperator::new(input_op, Box::new(predicate)));
 
         Ok((operator, columns))
+    }
+
+    /// Extracts a complex EXISTS or NOT EXISTS pattern from a filter predicate.
+    ///
+    /// Returns `(subquery, is_negated, remaining_predicate)` only when the subplan
+    /// is too complex for the simple single-hop fast path in `extract_exists_pattern()`.
+    ///
+    /// Handles these predicate shapes:
+    /// - Top-level: `ExistsSubquery(plan)`
+    /// - Negated: `Not(ExistsSubquery(plan))`
+    /// - AND-combined: `And(ExistsSubquery(plan), other)` (either side)
+    /// - AND + negated: `And(Not(ExistsSubquery(plan)), other)` (either side)
+    fn extract_complex_exists<'a>(
+        &self,
+        predicate: &'a LogicalExpression,
+    ) -> Option<(&'a LogicalOperator, bool, Option<&'a LogicalExpression>)> {
+        match predicate {
+            LogicalExpression::ExistsSubquery(subplan) => {
+                // Only use semi-join for complex patterns; simple ones use the fast path
+                if self.extract_exists_pattern(subplan).is_err() {
+                    Some((subplan.as_ref(), false, None))
+                } else {
+                    None
+                }
+            }
+            LogicalExpression::Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => {
+                if let LogicalExpression::ExistsSubquery(subplan) = operand.as_ref() {
+                    if self.extract_exists_pattern(subplan).is_err() {
+                        Some((subplan.as_ref(), true, None))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            LogicalExpression::Binary {
+                op: BinaryOp::And,
+                left,
+                right,
+            } => {
+                // Check left side for EXISTS
+                if let Some((subplan, negated)) = Self::extract_exists_from_expr(left)
+                    && self.extract_exists_pattern(subplan).is_err()
+                {
+                    return Some((subplan, negated, Some(right)));
+                }
+                // Check right side for EXISTS
+                if let Some((subplan, negated)) = Self::extract_exists_from_expr(right)
+                    && self.extract_exists_pattern(subplan).is_err()
+                {
+                    return Some((subplan, negated, Some(left)));
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Helper: extracts EXISTS or NOT EXISTS from a single expression node.
+    /// Returns `(subplan, is_negated)`.
+    fn extract_exists_from_expr(expr: &LogicalExpression) -> Option<(&LogicalOperator, bool)> {
+        match expr {
+            LogicalExpression::ExistsSubquery(subplan) => Some((subplan.as_ref(), false)),
+            LogicalExpression::Unary {
+                op: UnaryOp::Not,
+                operand,
+            } => {
+                if let LogicalExpression::ExistsSubquery(subplan) = operand.as_ref() {
+                    Some((subplan.as_ref(), true))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Plans a complex EXISTS/NOT EXISTS as a hash-based semi-join or anti-join.
+    ///
+    /// The inner subquery is planned as a full operator tree via `plan_operator()`.
+    /// Variables shared between the outer input and inner subquery become equi-join
+    /// keys. Uses `HashJoinOperator` for efficient O(N + M) evaluation.
+    fn plan_exists_as_semi_join(
+        &self,
+        outer_input: &LogicalOperator,
+        subquery: &LogicalOperator,
+        is_negated: bool,
+        remaining_predicate: Option<&LogicalExpression>,
+    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        let (left_op, left_columns) = self.plan_operator(outer_input)?;
+        let (right_op, right_columns) = self.plan_operator(subquery)?;
+
+        // Semi/anti join only outputs left (outer) columns
+        let output_columns = left_columns.clone();
+
+        // Find shared variables for equi-join keys
+        let mut probe_keys = Vec::new();
+        let mut build_keys = Vec::new();
+        for (right_idx, right_col) in right_columns.iter().enumerate() {
+            if let Some(left_idx) = left_columns.iter().position(|c| c == right_col) {
+                probe_keys.push(left_idx);
+                build_keys.push(right_idx);
+            }
+        }
+
+        let output_schema = self.derive_schema_from_columns(&output_columns);
+
+        let join_type = if is_negated {
+            PhysicalJoinType::Anti
+        } else {
+            PhysicalJoinType::Semi
+        };
+
+        let join_op: Box<dyn Operator> = Box::new(HashJoinOperator::new(
+            left_op,
+            right_op,
+            probe_keys,
+            build_keys,
+            join_type,
+            output_schema,
+        ));
+
+        // If there's a remaining predicate (from AND splitting), wrap with a filter
+        if let Some(remaining) = remaining_predicate {
+            let variable_columns: HashMap<String, usize> = output_columns
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.clone(), i))
+                .collect();
+            let filter_expr = self.convert_expression(remaining)?;
+            let predicate = ExpressionPredicate::new(
+                filter_expr,
+                variable_columns,
+                Arc::clone(&self.store) as Arc<dyn GraphStore>,
+            );
+            let filter_op = Box::new(FilterOperator::new(join_op, Box::new(predicate)));
+            return Ok((filter_op, output_columns));
+        }
+
+        Ok((join_op, output_columns))
     }
 
     /// Checks zone maps for a predicate to see if we can skip the scan entirely.

@@ -147,6 +147,110 @@ mod tests {
         assert_eq!(vg.current(), 2);
     }
 
+    // --- is_aggregate_function ---
+
+    #[test]
+    fn aggregate_functions_recognized() {
+        for name in [
+            "count",
+            "COUNT",
+            "sum",
+            "avg",
+            "min",
+            "max",
+            "collect",
+            "stdev",
+            "stddev",
+            "stdevp",
+            "stddevp",
+            "percentile_disc",
+            "percentiledisc",
+            "percentile_cont",
+            "percentilecont",
+        ] {
+            assert!(is_aggregate_function(name), "{name} should be aggregate");
+        }
+    }
+
+    #[test]
+    fn non_aggregate_functions_rejected() {
+        for name in ["toString", "toUpper", "size", "rand", "abs", "coalesce", ""] {
+            assert!(
+                !is_aggregate_function(name),
+                "{name} should not be aggregate"
+            );
+        }
+    }
+
+    // --- to_aggregate_function ---
+
+    #[test]
+    fn to_aggregate_all_variants() {
+        assert!(matches!(
+            to_aggregate_function("count"),
+            Some(AggregateFunction::Count)
+        ));
+        assert!(matches!(
+            to_aggregate_function("SUM"),
+            Some(AggregateFunction::Sum)
+        ));
+        assert!(matches!(
+            to_aggregate_function("Avg"),
+            Some(AggregateFunction::Avg)
+        ));
+        assert!(matches!(
+            to_aggregate_function("MIN"),
+            Some(AggregateFunction::Min)
+        ));
+        assert!(matches!(
+            to_aggregate_function("max"),
+            Some(AggregateFunction::Max)
+        ));
+        assert!(matches!(
+            to_aggregate_function("collect"),
+            Some(AggregateFunction::Collect)
+        ));
+        assert!(matches!(
+            to_aggregate_function("stdev"),
+            Some(AggregateFunction::StdDev)
+        ));
+        assert!(matches!(
+            to_aggregate_function("stddev"),
+            Some(AggregateFunction::StdDev)
+        ));
+        assert!(matches!(
+            to_aggregate_function("stdevp"),
+            Some(AggregateFunction::StdDevPop)
+        ));
+        assert!(matches!(
+            to_aggregate_function("stddevp"),
+            Some(AggregateFunction::StdDevPop)
+        ));
+        assert!(matches!(
+            to_aggregate_function("percentile_disc"),
+            Some(AggregateFunction::PercentileDisc)
+        ));
+        assert!(matches!(
+            to_aggregate_function("percentiledisc"),
+            Some(AggregateFunction::PercentileDisc)
+        ));
+        assert!(matches!(
+            to_aggregate_function("percentile_cont"),
+            Some(AggregateFunction::PercentileCont)
+        ));
+        assert!(matches!(
+            to_aggregate_function("percentilecont"),
+            Some(AggregateFunction::PercentileCont)
+        ));
+    }
+
+    #[test]
+    fn to_aggregate_unknown_returns_none() {
+        assert!(to_aggregate_function("unknown").is_none());
+        assert!(to_aggregate_function("").is_none());
+        assert!(to_aggregate_function("size").is_none());
+    }
+
     // --- combine_with_and ---
 
     #[test]

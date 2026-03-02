@@ -401,8 +401,8 @@ fn test_cypher_unsupported_feature_error_is_query_error() {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
 
-    // EXISTS subquery is not yet supported in Cypher translator
-    let result = session.execute_cypher("MATCH (n) WHERE EXISTS { (n)-[:KNOWS]->() } RETURN n");
+    // Pattern comprehension is not yet supported in Cypher translator
+    let result = session.execute_cypher("MATCH (n) RETURN [(n)-[:KNOWS]->(m) | m.name] AS friends");
     assert!(result.is_err());
     let err_str = result.unwrap_err().to_string();
     // Should be GRAFEO-Q (query error), not GRAFEO-X (internal error)

@@ -55,6 +55,10 @@ pub struct Session {
     commit_counter: Arc<AtomicUsize>,
     /// GC every N commits (0 = disabled).
     gc_interval: usize,
+    /// Node count at the start of the current transaction (for PreparedCommit stats).
+    tx_start_node_count: usize,
+    /// Edge count at the start of the current transaction (for PreparedCommit stats).
+    tx_start_edge_count: usize,
     /// CDC log for change tracking.
     #[cfg(feature = "cdc")]
     cdc_log: Arc<crate::cdc::CdcLog>,
@@ -90,6 +94,8 @@ impl Session {
             query_timeout,
             commit_counter,
             gc_interval,
+            tx_start_node_count: 0,
+            tx_start_edge_count: 0,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
         }
@@ -131,6 +137,8 @@ impl Session {
             query_timeout,
             commit_counter,
             gc_interval,
+            tx_start_node_count: 0,
+            tx_start_edge_count: 0,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
         }
@@ -167,6 +175,8 @@ impl Session {
             query_timeout,
             commit_counter,
             gc_interval,
+            tx_start_node_count: 0,
+            tx_start_edge_count: 0,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
         }
@@ -862,6 +872,8 @@ impl Session {
             ));
         }
 
+        self.tx_start_node_count = self.store.node_count();
+        self.tx_start_edge_count = self.store.edge_count();
         let tx_id = self.tx_manager.begin();
         self.current_tx = Some(tx_id);
         Ok(())
@@ -886,6 +898,8 @@ impl Session {
             ));
         }
 
+        self.tx_start_node_count = self.store.node_count();
+        self.tx_start_edge_count = self.store.edge_count();
         let tx_id = self.tx_manager.begin_with_isolation(isolation_level);
         self.current_tx = Some(tx_id);
         Ok(())
@@ -978,6 +992,67 @@ impl Session {
     #[must_use]
     pub fn in_transaction(&self) -> bool {
         self.current_tx.is_some()
+    }
+
+    /// Returns the current transaction ID, if any.
+    #[must_use]
+    pub(crate) fn current_tx_id(&self) -> Option<TxId> {
+        self.current_tx
+    }
+
+    /// Returns a reference to the transaction manager.
+    #[must_use]
+    pub(crate) fn tx_manager(&self) -> &TransactionManager {
+        &self.tx_manager
+    }
+
+    /// Returns the store's current node count and the count at transaction start.
+    #[must_use]
+    pub(crate) fn node_count_delta(&self) -> (usize, usize) {
+        (self.tx_start_node_count, self.store.node_count())
+    }
+
+    /// Returns the store's current edge count and the count at transaction start.
+    #[must_use]
+    pub(crate) fn edge_count_delta(&self) -> (usize, usize) {
+        (self.tx_start_edge_count, self.store.edge_count())
+    }
+
+    /// Prepares the current transaction for a two-phase commit.
+    ///
+    /// Returns a [`PreparedCommit`](crate::transaction::PreparedCommit) that
+    /// lets you inspect pending changes and attach metadata before finalizing.
+    /// The mutable borrow prevents concurrent operations while the commit is
+    /// pending.
+    ///
+    /// If the `PreparedCommit` is dropped without calling `commit()` or
+    /// `abort()`, the transaction is automatically rolled back.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no transaction is active.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use grafeo_engine::GrafeoDB;
+    ///
+    /// let db = GrafeoDB::new_in_memory();
+    /// let mut session = db.session();
+    ///
+    /// session.begin_tx()?;
+    /// session.execute("INSERT (:Person {name: 'Alice'})")?;
+    ///
+    /// let mut prepared = session.prepare_commit()?;
+    /// println!("Nodes written: {}", prepared.info().nodes_written);
+    /// prepared.set_metadata("audit_user", "admin");
+    /// prepared.commit()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn prepare_commit(&mut self) -> Result<crate::transaction::PreparedCommit<'_>> {
+        crate::transaction::PreparedCommit::new(self)
     }
 
     /// Sets auto-commit mode.
@@ -2029,5 +2104,79 @@ mod tests {
                     .is_empty()
             );
         }
+    }
+
+    #[test]
+    fn test_auto_gc_triggers_on_commit_interval() {
+        use crate::config::Config;
+
+        let config = Config::in_memory().with_gc_interval(2);
+        let db = GrafeoDB::with_config(config).unwrap();
+        let mut session = db.session();
+
+        // First commit: counter = 1, no GC (not a multiple of 2)
+        session.begin_tx().unwrap();
+        session.create_node(&["A"]);
+        session.commit().unwrap();
+
+        // Second commit: counter = 2, GC should trigger (multiple of 2)
+        session.begin_tx().unwrap();
+        session.create_node(&["B"]);
+        session.commit().unwrap();
+
+        // Verify the database is still functional after GC
+        assert_eq!(db.node_count(), 2);
+    }
+
+    #[test]
+    fn test_query_timeout_config_propagates_to_session() {
+        use crate::config::Config;
+        use std::time::Duration;
+
+        let config = Config::in_memory().with_query_timeout(Duration::from_secs(5));
+        let db = GrafeoDB::with_config(config).unwrap();
+        let session = db.session();
+
+        // Verify the session has a query deadline (timeout was set)
+        assert!(session.query_deadline().is_some());
+    }
+
+    #[test]
+    fn test_no_query_timeout_returns_no_deadline() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        // Default config has no timeout
+        assert!(session.query_deadline().is_none());
+    }
+
+    #[test]
+    fn test_graph_model_accessor() {
+        use crate::config::GraphModel;
+
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        assert_eq!(session.graph_model(), GraphModel::Lpg);
+    }
+
+    #[cfg(feature = "gql")]
+    #[test]
+    fn test_external_store_session() {
+        use grafeo_core::graph::GraphStoreMut;
+        use std::sync::Arc;
+
+        let config = crate::config::Config::in_memory();
+        let store = Arc::new(grafeo_core::graph::lpg::LpgStore::new()) as Arc<dyn GraphStoreMut>;
+        let db = GrafeoDB::with_store(store, config).unwrap();
+
+        let session = db.session();
+
+        // Create data through a query (goes through the external graph_store)
+        session.execute("INSERT (:Test {name: 'hello'})").unwrap();
+
+        // Verify we can query through it
+        let result = session.execute("MATCH (n:Test) RETURN n.name").unwrap();
+        assert_eq!(result.row_count(), 1);
     }
 }

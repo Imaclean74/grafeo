@@ -655,6 +655,90 @@ mod cypher_tests {
             "Should find at least one 2-hop path"
         );
     }
+
+    // === EXISTS Subquery Tests ===
+
+    #[test]
+    fn test_cypher_exists_subquery_basic() {
+        // Alice-[:KNOWS]->Bob, Alice-[:KNOWS]->Carol, Bob-[:KNOWS]->Carol
+        let db = create_social_network();
+        let session = db.session();
+
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person) WHERE EXISTS { MATCH (n)-[:KNOWS]->() } RETURN n.name ORDER BY n.name",
+            )
+            .unwrap();
+
+        // Alice knows Bob and Carol, Bob knows Carol
+        assert_eq!(result.row_count(), 2);
+        assert_eq!(result.rows[0][0], Value::String("Alice".into()));
+        assert_eq!(result.rows[1][0], Value::String("Bob".into()));
+    }
+
+    #[test]
+    fn test_cypher_not_exists_subquery() {
+        let db = create_social_network();
+        let session = db.session();
+
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person) WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->() } RETURN n.name",
+            )
+            .unwrap();
+
+        // Carol has no outgoing KNOWS edges
+        assert_eq!(result.row_count(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Carol".into()));
+    }
+
+    #[test]
+    fn test_cypher_exists_with_edge_type_filter() {
+        let db = create_social_network();
+        let session = db.session();
+
+        // No MANAGES edges exist in the social network
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person) WHERE EXISTS { MATCH (n)-[:MANAGES]->() } RETURN n.name",
+            )
+            .unwrap();
+
+        assert_eq!(result.row_count(), 0);
+    }
+
+    #[test]
+    fn test_cypher_exists_combined_with_predicate() {
+        let db = create_social_network();
+        let session = db.session();
+
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person) WHERE EXISTS { MATCH (n)-[:KNOWS]->() } AND n.name = 'Alice' RETURN n.name",
+            )
+            .unwrap();
+
+        assert_eq!(result.row_count(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Alice".into()));
+    }
+
+    #[test]
+    fn test_cypher_exists_with_works_at() {
+        let db = create_social_network();
+        let session = db.session();
+
+        // All three people have WORKS_AT edges
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person) WHERE EXISTS { MATCH (n)-[:WORKS_AT]->() } RETURN n.name ORDER BY n.name",
+            )
+            .unwrap();
+
+        assert_eq!(result.row_count(), 3);
+        assert_eq!(result.rows[0][0], Value::String("Alice".into()));
+        assert_eq!(result.rows[1][0], Value::String("Bob".into()));
+        assert_eq!(result.rows[2][0], Value::String("Carol".into()));
+    }
 }
 
 // ============================================================================

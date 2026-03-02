@@ -113,6 +113,196 @@ fn test_exists_subquery_no_match() {
 }
 
 // ============================================================================
+// Complex EXISTS subquery — covers semi-join rewrite in planner/filter.rs
+// ============================================================================
+
+/// Extended graph: Person nodes with KNOWS edges, City nodes with LIVES_IN edges.
+/// Alice -> Bob, Alice -> Carol, Bob -> Carol (KNOWS)
+/// Alice lives in NYC, Bob lives in NYC, Carol lives in London.
+fn create_multi_hop_graph() -> GrafeoDB {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    let alice = session.create_node_with_props(
+        &["Person"],
+        [
+            ("name", Value::String("Alice".into())),
+            ("age", Value::Int64(30)),
+        ],
+    );
+    let bob = session.create_node_with_props(
+        &["Person"],
+        [
+            ("name", Value::String("Bob".into())),
+            ("age", Value::Int64(25)),
+        ],
+    );
+    let carol = session.create_node_with_props(
+        &["Person"],
+        [
+            ("name", Value::String("Carol".into())),
+            ("age", Value::Int64(35)),
+        ],
+    );
+    // Dave has no LIVES_IN edge
+    let dave = session.create_node_with_props(
+        &["Person"],
+        [
+            ("name", Value::String("Dave".into())),
+            ("age", Value::Int64(40)),
+        ],
+    );
+
+    let nyc = session.create_node_with_props(&["City"], [("name", Value::String("NYC".into()))]);
+    let london =
+        session.create_node_with_props(&["City"], [("name", Value::String("London".into()))]);
+
+    // KNOWS edges
+    session.create_edge(alice, bob, "KNOWS");
+    session.create_edge(alice, carol, "KNOWS");
+    session.create_edge(bob, carol, "KNOWS");
+    session.create_edge(dave, alice, "KNOWS");
+
+    // LIVES_IN edges
+    session.create_edge(alice, nyc, "LIVES_IN");
+    session.create_edge(bob, nyc, "LIVES_IN");
+    session.create_edge(carol, london, "LIVES_IN");
+    // Dave has no LIVES_IN edge
+
+    drop(session);
+    db
+}
+
+fn sorted_names(db: &GrafeoDB, query: &str) -> Vec<String> {
+    let session = db.session();
+    let result = session.execute(query).unwrap();
+    let mut names: Vec<String> = result
+        .rows
+        .iter()
+        .map(|r| match &r[0] {
+            Value::String(s) => s.to_string(),
+            other => panic!("expected string, got {other:?}"),
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+#[test]
+fn test_exists_multi_hop() {
+    let db = create_multi_hop_graph();
+
+    // Alice KNOWS Bob who LIVES_IN NYC, Alice KNOWS Carol who LIVES_IN London
+    // Bob KNOWS Carol who LIVES_IN London
+    // Dave KNOWS Alice who LIVES_IN NYC
+    // All 4 have a 2-hop KNOWS->LIVES_IN path
+    let names = sorted_names(
+        &db,
+        "MATCH (n:Person) \
+         WHERE EXISTS { MATCH (n)-[:KNOWS]->(m)-[:LIVES_IN]->(c:City) } \
+         RETURN n.name",
+    );
+    assert_eq!(names, vec!["Alice", "Bob", "Dave"]);
+}
+
+#[test]
+fn test_exists_multi_hop_no_match() {
+    let db = create_multi_hop_graph();
+
+    // No MANAGES edges exist, so no 2-hop path
+    let names = sorted_names(
+        &db,
+        "MATCH (n:Person) \
+         WHERE EXISTS { MATCH (n)-[:MANAGES]->(m)-[:LIVES_IN]->(c:City) } \
+         RETURN n.name",
+    );
+    assert!(names.is_empty());
+}
+
+#[test]
+fn test_exists_with_inner_property_filter() {
+    let db = create_multi_hop_graph();
+
+    // Alice KNOWS Bob(25) and Carol(35), Bob KNOWS Carol(35), Dave KNOWS Alice(30)
+    // Only people who know someone older than 30:
+    //   Alice: KNOWS Carol(35) ✓
+    //   Bob: KNOWS Carol(35) ✓
+    //   Dave: KNOWS Alice(30), 30 is NOT > 30 ✗
+    let names = sorted_names(
+        &db,
+        "MATCH (n:Person) \
+         WHERE EXISTS { MATCH (n)-[:KNOWS]->(m) WHERE m.age > 30 } \
+         RETURN n.name",
+    );
+    assert_eq!(names, vec!["Alice", "Bob"]);
+}
+
+#[test]
+fn test_not_exists_complex() {
+    let db = create_multi_hop_graph();
+
+    // NOT EXISTS multi-hop: people who do NOT have a KNOWS->LIVES_IN path to a City
+    // Alice, Bob, Dave all have such paths; Carol KNOWS nobody with LIVES_IN? No:
+    // Carol has no outgoing KNOWS edges, so she has no 2-hop path.
+    // But Carol is not in the KNOWS->LIVES_IN result set at all.
+    // Actually: Alice->Bob->NYC, Alice->Carol->London, Bob->Carol->London, Dave->Alice->NYC
+    // Carol has no outgoing KNOWS edges, so NOT EXISTS is true for Carol.
+    let names = sorted_names(
+        &db,
+        "MATCH (n:Person) \
+         WHERE NOT EXISTS { MATCH (n)-[:KNOWS]->(m)-[:LIVES_IN]->(c:City) } \
+         RETURN n.name",
+    );
+    assert_eq!(names, vec!["Carol"]);
+}
+
+#[test]
+fn test_exists_complex_combined_with_and() {
+    let db = create_multi_hop_graph();
+
+    // EXISTS (multi-hop) AND property filter on outer variable
+    // People who have a KNOWS->LIVES_IN path AND are older than 28
+    // From multi-hop test: Alice(30), Bob(25), Dave(40) have paths
+    // After age > 28: Alice(30), Dave(40)
+    let names = sorted_names(
+        &db,
+        "MATCH (n:Person) \
+         WHERE EXISTS { MATCH (n)-[:KNOWS]->(m)-[:LIVES_IN]->(c:City) } \
+           AND n.age > 28 \
+         RETURN n.name",
+    );
+    assert_eq!(names, vec!["Alice", "Dave"]);
+}
+
+#[test]
+fn test_exists_complex_gql_syntax() {
+    let db = create_multi_hop_graph();
+
+    // Same multi-hop EXISTS test in GQL syntax
+    let session = db.session();
+    let result = session
+        .execute_language(
+            "MATCH (n:Person) \
+             WHERE EXISTS { MATCH (n)-[:KNOWS]->(m)-[:LIVES_IN]->(c:City) } \
+             RETURN n.name",
+            "gql",
+            None,
+        )
+        .unwrap();
+
+    let mut names: Vec<String> = result
+        .rows
+        .iter()
+        .map(|r| match &r[0] {
+            Value::String(s) => s.to_string(),
+            other => panic!("expected string, got {other:?}"),
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, vec!["Alice", "Bob", "Dave"]);
+}
+
+// ============================================================================
 // List/Map expressions — covers expression.rs List, Map branches
 // ============================================================================
 
