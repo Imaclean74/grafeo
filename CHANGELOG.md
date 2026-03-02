@@ -2,13 +2,14 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.12] - 2026-03-02
+## [0.5.12] - Unreleased
 
 ### Added
 
 - **PreparedCommit**: two-phase commit with `session.prepare_commit()`, inspect pending mutation counts and attach metadata before finalizing
 - **Atomic snapshot restore**: `db.restore_snapshot(data)` replaces database contents in place, with full pre-validation (store unchanged on error)
 - **LpgStore::clear()**: resets the store to empty state, following documented lock ordering
+- **EXISTS subqueries** (GQL, Cypher): support for complex inner patterns including multi-hop traversals, property filters, and label constraints via semi-join rewrite
 
 ### Fixed
 

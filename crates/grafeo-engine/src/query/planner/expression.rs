@@ -186,15 +186,26 @@ impl super::Planner {
         }
     }
 
-    /// Extracts the pattern from an EXISTS subplan.
-    /// Returns (start_variable, direction, edge_type, end_labels).
+    /// Extracts the pattern from an EXISTS subplan for the simple single-hop fast path.
+    ///
+    /// Returns `(start_variable, direction, edge_type, end_labels)` only for bare
+    /// single-hop patterns like `(n)-[:TYPE]->()`. Rejects multi-hop patterns,
+    /// inner WHERE filters, and label constraints on target nodes, all of which
+    /// are handled correctly by the semi-join rewrite in `plan_filter`.
     pub(super) fn extract_exists_pattern(
         &self,
         subplan: &LogicalOperator,
     ) -> Result<(String, Direction, Option<String>, Option<Vec<String>>)> {
         match subplan {
             LogicalOperator::Expand(expand) => {
-                // Get end node labels from the to_variable if there's a node scan input
+                // Only accept single-hop: the Expand's input (source plan) must be
+                // a plain NodeScan. Another Expand means multi-hop; a Filter means
+                // inner WHERE or label constraint. Both require the semi-join path.
+                if !matches!(expand.input.as_ref(), LogicalOperator::NodeScan(_)) {
+                    return Err(Error::Internal(
+                        "Unsupported EXISTS subquery pattern".to_string(),
+                    ));
+                }
                 let end_labels = self.extract_end_labels_from_expand(expand);
                 let direction = match expand.direction {
                     ExpandDirection::Outgoing => Direction::Outgoing,
@@ -217,7 +228,8 @@ impl super::Planner {
                     ))
                 }
             }
-            LogicalOperator::Filter(filter) => self.extract_exists_pattern(&filter.input),
+            // Filters (inner WHERE, label constraints) are not supported by the
+            // simple fast path. The semi-join rewrite handles them correctly.
             _ => Err(Error::Internal(
                 "Unsupported EXISTS subquery pattern".to_string(),
             )),

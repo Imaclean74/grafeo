@@ -2105,4 +2105,78 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_auto_gc_triggers_on_commit_interval() {
+        use crate::config::Config;
+
+        let config = Config::in_memory().with_gc_interval(2);
+        let db = GrafeoDB::with_config(config).unwrap();
+        let mut session = db.session();
+
+        // First commit: counter = 1, no GC (not a multiple of 2)
+        session.begin_tx().unwrap();
+        session.create_node(&["A"]);
+        session.commit().unwrap();
+
+        // Second commit: counter = 2, GC should trigger (multiple of 2)
+        session.begin_tx().unwrap();
+        session.create_node(&["B"]);
+        session.commit().unwrap();
+
+        // Verify the database is still functional after GC
+        assert_eq!(db.node_count(), 2);
+    }
+
+    #[test]
+    fn test_query_timeout_config_propagates_to_session() {
+        use crate::config::Config;
+        use std::time::Duration;
+
+        let config = Config::in_memory().with_query_timeout(Duration::from_secs(5));
+        let db = GrafeoDB::with_config(config).unwrap();
+        let session = db.session();
+
+        // Verify the session has a query deadline (timeout was set)
+        assert!(session.query_deadline().is_some());
+    }
+
+    #[test]
+    fn test_no_query_timeout_returns_no_deadline() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        // Default config has no timeout
+        assert!(session.query_deadline().is_none());
+    }
+
+    #[test]
+    fn test_graph_model_accessor() {
+        use crate::config::GraphModel;
+
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        assert_eq!(session.graph_model(), GraphModel::Lpg);
+    }
+
+    #[cfg(feature = "gql")]
+    #[test]
+    fn test_external_store_session() {
+        use grafeo_core::graph::GraphStoreMut;
+        use std::sync::Arc;
+
+        let config = crate::config::Config::in_memory();
+        let store = Arc::new(grafeo_core::graph::lpg::LpgStore::new()) as Arc<dyn GraphStoreMut>;
+        let db = GrafeoDB::with_store(store, config).unwrap();
+
+        let session = db.session();
+
+        // Create data through a query (goes through the external graph_store)
+        session.execute("INSERT (:Test {name: 'hello'})").unwrap();
+
+        // Verify we can query through it
+        let result = session.execute("MATCH (n:Test) RETURN n.name").unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
 }

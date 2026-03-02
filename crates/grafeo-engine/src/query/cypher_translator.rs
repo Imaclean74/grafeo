@@ -1585,15 +1585,44 @@ impl CypherTranslator {
                 QueryErrorKind::Semantic,
                 "Pattern comprehension not yet supported",
             ))),
-            ast::Expression::Exists(_) => Err(Error::Query(QueryError::new(
-                QueryErrorKind::Semantic,
-                "EXISTS not yet supported",
-            ))),
+            ast::Expression::Exists(inner_query) => {
+                let inner_plan = self.translate_exists_subquery(inner_query)?;
+                Ok(LogicalExpression::ExistsSubquery(Box::new(inner_plan)))
+            }
             ast::Expression::CountSubquery(_) => Err(Error::Query(QueryError::new(
                 QueryErrorKind::Semantic,
                 "COUNT subquery not yet supported",
             ))),
         }
+    }
+
+    /// Translates the inner query of an EXISTS subquery to a `LogicalOperator`.
+    fn translate_exists_subquery(&self, query: &ast::Query) -> Result<LogicalOperator> {
+        let mut plan: Option<LogicalOperator> = None;
+
+        for clause in &query.clauses {
+            match clause {
+                ast::Clause::Match(m) => {
+                    plan = Some(self.translate_match(m, plan)?);
+                }
+                ast::Clause::Where(w) => {
+                    plan = Some(self.translate_where(w, plan)?);
+                }
+                _ => {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        "EXISTS subquery only supports MATCH and WHERE clauses",
+                    )));
+                }
+            }
+        }
+
+        plan.ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "EXISTS subquery requires at least one MATCH clause",
+            ))
+        })
     }
 
     fn translate_literal(&self, lit: &ast::Literal) -> Result<LogicalExpression> {
@@ -2455,7 +2484,7 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_union() {
+    fn test_translate_union_all() {
         let plan =
             translate("MATCH (n:Person) RETURN n.name UNION ALL MATCH (m:Animal) RETURN m.name")
                 .unwrap();
@@ -2464,5 +2493,77 @@ mod tests {
             "Expected Union at root, got {:?}",
             std::mem::discriminant(&plan.root)
         );
+    }
+
+    #[test]
+    fn test_translate_union_without_all_applies_distinct() {
+        let plan = translate("MATCH (n:Person) RETURN n.name UNION MATCH (m:Animal) RETURN m.name")
+            .unwrap();
+        // UNION (without ALL) should wrap the result in Distinct
+        assert!(
+            matches!(&plan.root, LogicalOperator::Distinct(_)),
+            "Expected Distinct at root for UNION without ALL, got {:?}",
+            std::mem::discriminant(&plan.root)
+        );
+        if let LogicalOperator::Distinct(distinct) = &plan.root {
+            assert!(
+                matches!(distinct.input.as_ref(), LogicalOperator::Union(_)),
+                "Expected Union inside Distinct"
+            );
+        }
+    }
+
+    #[test]
+    fn test_translate_call_procedure() {
+        let plan = translate("CALL db.labels()").unwrap();
+        assert!(
+            matches!(&plan.root, LogicalOperator::CallProcedure(_)),
+            "Expected CallProcedure, got {:?}",
+            std::mem::discriminant(&plan.root)
+        );
+        if let LogicalOperator::CallProcedure(call) = &plan.root {
+            assert_eq!(call.name, vec!["db", "labels"]);
+            assert!(call.arguments.is_empty());
+            assert!(call.yield_items.is_none());
+        }
+    }
+
+    #[test]
+    fn test_translate_call_with_args_and_yield() {
+        let plan = translate("CALL db.index.fulltext('Person', 'name') YIELD status").unwrap();
+        if let LogicalOperator::CallProcedure(call) = &plan.root {
+            assert_eq!(call.name, vec!["db", "index", "fulltext"]);
+            assert_eq!(call.arguments.len(), 2);
+            assert!(call.yield_items.is_some());
+            let yields = call.yield_items.as_ref().unwrap();
+            assert_eq!(yields.len(), 1);
+            assert_eq!(yields[0].field_name, "status");
+        } else {
+            panic!("Expected CallProcedure");
+        }
+    }
+
+    // === EXISTS Subquery Tests ===
+
+    #[test]
+    fn test_translate_exists_subquery() {
+        let plan =
+            translate("MATCH (n:Person) WHERE EXISTS { MATCH (n)-[:KNOWS]->() } RETURN n").unwrap();
+
+        // Plan should be Return -> Filter -> NodeScan
+        // with the Filter predicate being ExistsSubquery
+        if let LogicalOperator::Return(ret) = &plan.root {
+            if let LogicalOperator::Filter(filter) = ret.input.as_ref() {
+                assert!(
+                    matches!(&filter.predicate, LogicalExpression::ExistsSubquery(_)),
+                    "Expected ExistsSubquery predicate, got {:?}",
+                    filter.predicate
+                );
+            } else {
+                panic!("Expected Filter, got {:?}", ret.input);
+            }
+        } else {
+            panic!("Expected Return");
+        }
     }
 }
