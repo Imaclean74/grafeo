@@ -110,6 +110,12 @@ impl BindingContext {
     pub fn is_empty(&self) -> bool {
         self.variables.is_empty()
     }
+
+    /// Removes a variable from the context (used for temporary scoping).
+    pub fn remove_variable(&mut self, name: &str) {
+        self.variables.remove(name);
+        self.order.retain(|n| n != name);
+    }
 }
 
 /// Semantic binder for query plans.
@@ -855,12 +861,12 @@ impl Binder {
     }
 
     /// Validates a return item.
-    fn validate_return_item(&self, item: &ReturnItem) -> Result<()> {
+    fn validate_return_item(&mut self, item: &ReturnItem) -> Result<()> {
         self.validate_expression(&item.expression)
     }
 
     /// Validates that an expression only references defined variables.
-    fn validate_expression(&self, expr: &LogicalExpression) -> Result<()> {
+    fn validate_expression(&mut self, expr: &LogicalExpression) -> Result<()> {
         match expr {
             LogicalExpression::Variable(name) => {
                 if !self.context.contains(name) && !name.starts_with("_anon_") {
@@ -995,15 +1001,47 @@ impl Binder {
                 Ok(())
             }
             LogicalExpression::Reduce {
+                accumulator,
                 initial,
+                variable,
                 list,
                 expression,
-                ..
             } => {
                 self.validate_expression(initial)?;
                 self.validate_expression(list)?;
-                // accumulator and variable are locally scoped
+                // accumulator and variable are locally scoped: inject them
+                // into context, validate body, then remove
+                let had_acc = self.context.contains(accumulator);
+                let had_var = self.context.contains(variable);
+                if !had_acc {
+                    self.context.add_variable(
+                        accumulator.clone(),
+                        VariableInfo {
+                            name: accumulator.clone(),
+                            data_type: LogicalType::Any,
+                            is_node: false,
+                            is_edge: false,
+                        },
+                    );
+                }
+                if !had_var {
+                    self.context.add_variable(
+                        variable.clone(),
+                        VariableInfo {
+                            name: variable.clone(),
+                            data_type: LogicalType::Any,
+                            is_node: false,
+                            is_edge: false,
+                        },
+                    );
+                }
                 self.validate_expression(expression)?;
+                if !had_acc {
+                    self.context.remove_variable(accumulator);
+                }
+                if !had_var {
+                    self.context.remove_variable(variable);
+                }
                 Ok(())
             }
         }

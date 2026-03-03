@@ -2901,4 +2901,195 @@ mod tests {
             result.err()
         );
     }
+
+    // === GqlTranslationResult enum Tests ===
+
+    #[test]
+    fn test_translate_full_returns_plan_for_query() {
+        let query = "MATCH (n:Person) RETURN n";
+        let result = translate_full(query);
+        assert!(
+            result.is_ok(),
+            "translate_full should succeed: {:?}",
+            result.err()
+        );
+        assert!(
+            matches!(result.unwrap(), GqlTranslationResult::Plan(_)),
+            "translate_full should return Plan for a query"
+        );
+    }
+
+    #[test]
+    fn test_translate_full_returns_session_command() {
+        let query = "COMMIT";
+        let result = translate_full(query);
+        assert!(
+            result.is_ok(),
+            "translate_full should succeed for COMMIT: {:?}",
+            result.err()
+        );
+        assert!(
+            matches!(result.unwrap(), GqlTranslationResult::SessionCommand(_)),
+            "translate_full should return SessionCommand for COMMIT"
+        );
+    }
+
+    // === translate() vs session commands ===
+
+    #[test]
+    fn test_translate_returns_ok_for_query() {
+        let query = "MATCH (n) RETURN n";
+        let result = translate(query);
+        assert!(result.is_ok(), "translate should succeed for a query");
+    }
+
+    #[test]
+    fn test_translate_returns_err_for_session_command() {
+        let query = "COMMIT";
+        let result = translate(query);
+        assert!(
+            result.is_err(),
+            "translate should return Err for session commands"
+        );
+    }
+
+    // === Set Operations ===
+
+    #[test]
+    fn test_translate_except() {
+        let query = "MATCH (a:Person) RETURN a EXCEPT MATCH (b:Employee) RETURN b";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "EXCEPT should translate: {:?}",
+            result.err()
+        );
+
+        let plan = result.unwrap();
+        assert!(
+            matches!(plan.root, LogicalOperator::Except(_)),
+            "Expected Except operator, got {:?}",
+            plan.root
+        );
+    }
+
+    #[test]
+    fn test_translate_intersect() {
+        let query = "MATCH (a:Person) RETURN a INTERSECT MATCH (b:Employee) RETURN b";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "INTERSECT should translate: {:?}",
+            result.err()
+        );
+
+        let plan = result.unwrap();
+        assert!(
+            matches!(plan.root, LogicalOperator::Intersect(_)),
+            "Expected Intersect operator, got {:?}",
+            plan.root
+        );
+    }
+
+    #[test]
+    fn test_translate_otherwise() {
+        let query = "MATCH (a:Person) RETURN a OTHERWISE MATCH (b:Employee) RETURN b";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "OTHERWISE should translate: {:?}",
+            result.err()
+        );
+
+        let plan = result.unwrap();
+        assert!(
+            matches!(plan.root, LogicalOperator::Otherwise(_)),
+            "Expected Otherwise operator, got {:?}",
+            plan.root
+        );
+    }
+
+    // === FINISH ===
+
+    #[test]
+    fn test_translate_finish() {
+        let query = "MATCH (n:Person) FINISH";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "FINISH should translate: {:?}",
+            result.err()
+        );
+
+        let plan = result.unwrap();
+        // FINISH is translated as Limit(0)
+        if let LogicalOperator::Limit(limit) = &plan.root {
+            assert_eq!(limit.count, 0, "FINISH should produce Limit(0)");
+        } else {
+            panic!("Expected Limit operator for FINISH, got {:?}", plan.root);
+        }
+    }
+
+    // === Element WHERE on nodes ===
+
+    #[test]
+    fn test_translate_element_where_on_node() {
+        let query = "MATCH (n:Person WHERE n.age > 30) RETURN n";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "Element WHERE should translate: {:?}",
+            result.err()
+        );
+
+        let plan = result.unwrap();
+        // Walk the plan to find a Filter with a > predicate
+        fn find_gt_filter(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Filter(f) => {
+                    if let LogicalExpression::Binary { op, .. } = &f.predicate {
+                        *op == BinaryOp::Gt || find_gt_filter(&f.input)
+                    } else {
+                        find_gt_filter(&f.input)
+                    }
+                }
+                LogicalOperator::Return(r) => find_gt_filter(&r.input),
+                _ => false,
+            }
+        }
+        assert!(
+            find_gt_filter(&plan.root),
+            "Expected a Filter with Gt predicate from element WHERE clause"
+        );
+    }
+
+    // === NULLIF desugaring ===
+
+    #[test]
+    fn test_translate_nullif_desugaring() {
+        let query = "MATCH (n:Person) RETURN nullif(n.age, 0) AS age";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "NULLIF should translate: {:?}",
+            result.err()
+        );
+
+        let plan = result.unwrap();
+        // NULLIF(x, y) desugars to CASE WHEN x = y THEN NULL ELSE x END.
+        // The Return operator should contain a Case expression.
+        fn find_case_in_return(op: &LogicalOperator) -> bool {
+            if let LogicalOperator::Return(ret) = op {
+                ret.items
+                    .iter()
+                    .any(|item| matches!(item.expression, LogicalExpression::Case { .. }))
+            } else {
+                false
+            }
+        }
+        assert!(
+            find_case_in_return(&plan.root),
+            "Expected NULLIF to desugar into a CASE expression in RETURN"
+        );
+    }
 }

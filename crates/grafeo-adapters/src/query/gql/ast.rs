@@ -29,37 +29,37 @@ pub enum Statement {
 /// Session and transaction commands.
 #[derive(Debug, Clone)]
 pub enum SessionCommand {
-    /// USE GRAPH <name>
+    /// `USE GRAPH name`
     UseGraph(String),
-    /// CREATE [PROPERTY] GRAPH <name>
+    /// `CREATE [PROPERTY] GRAPH name [IF NOT EXISTS]`
     CreateGraph {
         /// Graph name.
         name: String,
         /// IF NOT EXISTS flag.
         if_not_exists: bool,
     },
-    /// DROP [PROPERTY] GRAPH [IF EXISTS] <name>
+    /// `DROP [PROPERTY] GRAPH [IF EXISTS] name`
     DropGraph {
         /// Graph name.
         name: String,
         /// IF EXISTS flag.
         if_exists: bool,
     },
-    /// SESSION SET GRAPH <name>
+    /// `SESSION SET GRAPH name`
     SessionSetGraph(String),
-    /// SESSION SET TIME ZONE <tz>
+    /// `SESSION SET TIME ZONE 'tz'`
     SessionSetTimeZone(String),
-    /// SESSION SET PARAMETER $name = value
+    /// `SESSION SET PARAMETER $name = value`
     SessionSetParameter(String, Expression),
-    /// SESSION RESET [ALL]
+    /// `SESSION RESET [ALL]`
     SessionReset,
-    /// SESSION CLOSE
+    /// `SESSION CLOSE`
     SessionClose,
-    /// START TRANSACTION
+    /// `START TRANSACTION`
     StartTransaction,
-    /// COMMIT
+    /// `COMMIT`
     Commit,
-    /// ROLLBACK
+    /// `ROLLBACK`
     Rollback,
 }
 

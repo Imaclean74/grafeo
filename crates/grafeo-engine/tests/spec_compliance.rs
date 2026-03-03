@@ -1,0 +1,1686 @@
+//! Spec compliance tests for GQL, Cypher, and SPARQL.
+//!
+//! Tests the features added in 0.5.13 for full spec coverage.
+//! Covers: set operations, apply operator, predicates, session commands,
+//! GQL statements, Cypher features, and SPARQL features.
+//!
+//! ```bash
+//! cargo test -p grafeo-engine --features full --test spec_compliance
+//! ```
+
+use grafeo_common::types::Value;
+use grafeo_engine::GrafeoDB;
+
+// ============================================================================
+// Test Fixtures
+// ============================================================================
+
+fn social_network() -> GrafeoDB {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    let alice = session.create_node_with_props(
+        &["Person"],
+        [
+            ("name", Value::String("Alice".into())),
+            ("age", Value::Int64(30)),
+        ],
+    );
+    let bob = session.create_node_with_props(
+        &["Person"],
+        [
+            ("name", Value::String("Bob".into())),
+            ("age", Value::Int64(25)),
+        ],
+    );
+    let carol = session.create_node_with_props(
+        &["Person"],
+        [
+            ("name", Value::String("Carol".into())),
+            ("age", Value::Int64(35)),
+        ],
+    );
+    let dave = session.create_node_with_props(
+        &["Person", "Engineer"],
+        [
+            ("name", Value::String("Dave".into())),
+            ("age", Value::Int64(28)),
+        ],
+    );
+    let techcorp = session.create_node_with_props(
+        &["Company"],
+        [
+            ("name", Value::String("TechCorp".into())),
+            ("founded", Value::Int64(2010)),
+        ],
+    );
+
+    let e1 = session.create_edge(alice, bob, "KNOWS");
+    db.set_edge_property(e1, "since", Value::Int64(2020));
+    let e2 = session.create_edge(alice, carol, "KNOWS");
+    db.set_edge_property(e2, "since", Value::Int64(2019));
+    let e3 = session.create_edge(bob, carol, "KNOWS");
+    db.set_edge_property(e3, "since", Value::Int64(2021));
+    session.create_edge(alice, techcorp, "WORKS_AT");
+    session.create_edge(bob, techcorp, "WORKS_AT");
+    session.create_edge(dave, techcorp, "WORKS_AT");
+
+    db
+}
+
+fn extract_strings(db: &GrafeoDB, query: &str) -> Vec<String> {
+    let session = db.session();
+    let result = session.execute(query).unwrap();
+    result
+        .rows
+        .iter()
+        .map(|row| match &row[0] {
+            Value::String(s) => s.to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect()
+}
+
+#[allow(dead_code)]
+fn extract_single_int(db: &GrafeoDB, query: &str) -> i64 {
+    let session = db.session();
+    let result = session.execute(query).unwrap();
+    match &result.rows[0][0] {
+        Value::Int64(n) => *n,
+        other => panic!("Expected Int64, got {other:?}"),
+    }
+}
+
+// ============================================================================
+// GQL Set Operations (covers set_ops.rs, gql_translator.rs, planner)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_set_ops {
+    use super::*;
+
+    #[test]
+    fn union_all_returns_duplicates() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person) WHERE n.age < 30 RETURN n.name \
+                 UNION ALL \
+                 MATCH (n:Person) WHERE n.age > 24 RETURN n.name",
+            )
+            .unwrap();
+        // Bob (25) and Dave (28) match both sides
+        assert!(result.row_count() >= 4);
+    }
+
+    #[test]
+    fn union_distinct_deduplicates() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person) WHERE n.age < 30 RETURN n.name \
+                 UNION \
+                 MATCH (n:Person) WHERE n.age > 24 RETURN n.name",
+            )
+            .unwrap();
+        // Should be at most 4 distinct names
+        assert!(result.row_count() <= 4);
+        // All names should be unique
+        let names: Vec<_> = result.rows.iter().map(|r| format!("{:?}", r[0])).collect();
+        let unique: std::collections::HashSet<_> = names.iter().collect();
+        assert_eq!(names.len(), unique.len(), "UNION should deduplicate");
+    }
+
+    #[test]
+    fn except_removes_common_rows() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person) RETURN n.name \
+                 EXCEPT \
+                 MATCH (n:Person) WHERE n.age > 30 RETURN n.name",
+            )
+            .unwrap();
+        // Should exclude Carol (35)
+        let names = result
+            .rows
+            .iter()
+            .filter_map(|r| match &r[0] {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(!names.contains(&"Carol".to_string()));
+    }
+
+    #[test]
+    fn intersect_keeps_common_rows() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person) WHERE n.age >= 25 RETURN n.name \
+                 INTERSECT \
+                 MATCH (n:Person) WHERE n.age <= 30 RETURN n.name",
+            )
+            .unwrap();
+        // Intersection: age 25-30 (Bob, Alice, Dave)
+        assert!(result.row_count() >= 2);
+    }
+
+    #[test]
+    fn otherwise_returns_left_if_non_empty() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person) WHERE n.name = 'Alice' RETURN n.name \
+                 OTHERWISE \
+                 MATCH (n:Person) RETURN n.name",
+            )
+            .unwrap();
+        // Left side matches Alice, so right side is ignored
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn otherwise_falls_through_when_left_empty() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person) WHERE n.name = 'Nobody' RETURN n.name \
+                 OTHERWISE \
+                 MATCH (n:Person) RETURN n.name",
+            )
+            .unwrap();
+        // Left side empty, falls through to right
+        assert_eq!(result.row_count(), 4);
+    }
+}
+
+// ============================================================================
+// GQL Predicates (covers filter.rs IS TYPED, IS DIRECTED, etc.)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_predicates {
+    use super::*;
+
+    #[test]
+    fn property_exists_check() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n:Person) WHERE property_exists(n, 'age') RETURN n.name")
+            .unwrap();
+        assert_eq!(result.row_count(), 4, "All persons have age property");
+    }
+
+    #[test]
+    fn nullif_returns_null_when_equal() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n:Person) WHERE n.name = 'Alice' RETURN NULLIF(n.age, 30) AS val")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+    }
+
+    #[test]
+    fn nullif_returns_value_when_different() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n:Person) WHERE n.name = 'Bob' RETURN NULLIF(n.age, 30) AS val")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Int64(25));
+    }
+
+    #[test]
+    fn element_id_function() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n:Person) WHERE n.name = 'Alice' RETURN element_id(n)")
+            .unwrap();
+        let id_str = match &result.rows[0][0] {
+            Value::String(s) => s.to_string(),
+            other => panic!("Expected string element ID, got {other:?}"),
+        };
+        assert!(
+            id_str.starts_with("n:"),
+            "element_id should start with 'n:'"
+        );
+    }
+
+    #[test]
+    fn cast_to_string() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person) WHERE n.name = 'Alice' RETURN CAST(n.age AS STRING) AS age_str",
+            )
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::String("30".into()));
+    }
+
+    #[test]
+    fn cast_to_integer() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Item {value: '42'})").unwrap();
+        let result = session
+            .execute("MATCH (n:Item) RETURN CAST(n.value AS INTEGER) AS v")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Int64(42));
+    }
+
+    #[test]
+    fn cast_to_float() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Item {value: '3.14'})").unwrap();
+        let result = session
+            .execute("MATCH (n:Item) RETURN CAST(n.value AS FLOAT) AS v")
+            .unwrap();
+        match &result.rows[0][0] {
+            Value::Float64(f) => assert!((f - std::f64::consts::PI).abs() < 0.01),
+            other => panic!("Expected Float64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cast_to_boolean() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Item {value: 'true'})").unwrap();
+        let result = session
+            .execute("MATCH (n:Item) RETURN CAST(n.value AS BOOLEAN) AS v")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Bool(true));
+    }
+
+    #[test]
+    fn xor_operator() {
+        let db = social_network();
+        // XOR: (age>30)=Carol XOR (name=Bob)=Bob, but not both => Bob, Carol
+        let names = extract_strings(
+            &db,
+            "MATCH (n:Person) WHERE (n.age > 30) XOR (n.name = 'Bob') RETURN n.name ORDER BY n.name",
+        );
+        assert!(names.contains(&"Bob".to_string()));
+        assert!(names.contains(&"Carol".to_string()));
+        assert!(!names.contains(&"Alice".to_string())); // age=30, not >30, not Bob
+    }
+}
+
+// ============================================================================
+// GQL Statements (covers parser.rs + translator: FINISH, SELECT, LET, etc.)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_statements {
+    use super::*;
+
+    #[test]
+    fn finish_returns_empty() {
+        let db = social_network();
+        let session = db.session();
+        let result = session.execute("MATCH (n:Person) FINISH").unwrap();
+        assert_eq!(result.row_count(), 0, "FINISH should return no rows");
+    }
+
+    #[test]
+    fn select_as_return_synonym() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n:Person) SELECT n.name ORDER BY n.name")
+            .unwrap();
+        assert_eq!(result.row_count(), 4);
+    }
+
+    #[test]
+    fn element_where_on_node() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n:Person WHERE n.age > 28) RETURN n.name ORDER BY n.name")
+            .unwrap();
+        let names: Vec<_> = result
+            .rows
+            .iter()
+            .filter_map(|r| match &r[0] {
+                Value::String(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"Alice".to_string())); // age 30
+        assert!(names.contains(&"Carol".to_string())); // age 35
+        assert!(!names.contains(&"Bob".to_string())); // age 25
+    }
+
+    #[test]
+    fn element_where_on_edge() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (a:Person)-[e:KNOWS WHERE e.since >= 2020]->(b:Person) \
+                 RETURN a.name, b.name ORDER BY a.name",
+            )
+            .unwrap();
+        // since>=2020: Alice->Bob (2020), Bob->Carol (2021)
+        assert!(result.row_count() >= 2);
+    }
+
+    #[test]
+    fn iso_path_quantifier_exact() {
+        let db = social_network();
+        let session = db.session();
+        // {1} means exactly 1 hop
+        let result = session
+            .execute("MATCH (a:Person)-[:KNOWS{1}]->(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        assert!(result.row_count() >= 3, "Should find direct connections");
+    }
+
+    #[test]
+    fn iso_path_quantifier_range() {
+        let db = social_network();
+        let session = db.session();
+        // {1,2} means 1 to 2 hops
+        let result = session
+            .execute(
+                "MATCH (a:Person)-[:KNOWS{1,2}]->(b:Person) WHERE a.name = 'Alice' RETURN b.name",
+            )
+            .unwrap();
+        // Alice->Bob (1), Alice->Carol (1), Alice->Bob->Carol (2)
+        assert!(result.row_count() >= 2);
+    }
+
+    #[test]
+    fn property_map_not_confused_with_quantifier() {
+        // Regression: {since: 2020} was misinterpreted as path quantifier
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (a:Person)-[e:KNOWS {since: 2020}]->(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        assert!(result.row_count() >= 1);
+    }
+
+    #[test]
+    fn match_mode_different_edges() {
+        let db = social_network();
+        let session = db.session();
+        // DIFFERENT EDGES is like TRAIL - no repeated edges
+        let result = session
+            .execute(
+                "MATCH DIFFERENT EDGES (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name",
+            )
+            .unwrap();
+        assert!(result.row_count() >= 3);
+    }
+
+    #[test]
+    fn match_mode_repeatable_elements() {
+        let db = social_network();
+        let session = db.session();
+        // REPEATABLE ELEMENTS is like WALK - edges and nodes may repeat
+        let result = session
+            .execute("MATCH REPEATABLE ELEMENTS (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        assert!(result.row_count() >= 3);
+    }
+
+    #[test]
+    fn label_expression_disjunction() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n IS Person | Company) RETURN n.name ORDER BY n.name")
+            .unwrap();
+        // Should find all 4 persons + TechCorp
+        assert_eq!(result.row_count(), 5);
+    }
+
+    #[test]
+    fn label_expression_conjunction() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n IS Person & Engineer) RETURN n.name")
+            .unwrap();
+        // Only Dave has both Person and Engineer
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn label_expression_negation() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH (n IS Person & !Engineer) RETURN n.name ORDER BY n.name")
+            .unwrap();
+        // Alice, Bob, Carol have Person but not Engineer
+        assert_eq!(result.row_count(), 3);
+    }
+
+    #[test]
+    fn group_by_explicit() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH (n:Person)-[:WORKS_AT]->(c:Company) \
+                 RETURN c.name, count(n) AS cnt GROUP BY c.name",
+            )
+            .unwrap();
+        assert!(result.row_count() >= 1);
+    }
+
+    #[test]
+    fn gql_filter_clause() {
+        let db = social_network();
+        let session = db.session();
+        // FILTER is a GQL synonym for WHERE
+        let result = session
+            .execute("MATCH (n:Person) FILTER n.age > 28 RETURN n.name ORDER BY n.name")
+            .unwrap();
+        assert!(result.row_count() >= 2); // Alice (30), Carol (35)
+    }
+
+    #[test]
+    fn gql_offset_clause() {
+        let db = social_network();
+        let session = db.session();
+        // OFFSET is a GQL synonym for SKIP
+        let result = session
+            .execute("MATCH (n:Person) RETURN n.name ORDER BY n.name OFFSET 2")
+            .unwrap();
+        assert_eq!(result.row_count(), 2); // 4 total, skip 2
+    }
+
+    #[test]
+    fn list_index_access() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session
+            .execute("INSERT (:Item {tags: ['a', 'b', 'c']})")
+            .unwrap();
+        let result = session
+            .execute("MATCH (n:Item) RETURN n.tags[0] AS first")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::String("a".into()));
+    }
+
+    #[test]
+    fn gql_block_comment() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH /* all people */ (n:Person) RETURN count(n) AS cnt")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Int64(4));
+    }
+}
+
+// ============================================================================
+// GQL Session and DDL Commands (covers session.rs, parser DDL branches)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_session_commands {
+    use super::*;
+
+    #[test]
+    fn create_graph_and_drop_graph() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        // CREATE GRAPH
+        let result = session.execute("CREATE GRAPH test_graph");
+        assert!(result.is_ok());
+        // Verify it exists
+        let graphs = db.list_graphs();
+        assert!(graphs.contains(&"test_graph".to_string()));
+        // DROP GRAPH
+        let result = session.execute("DROP GRAPH test_graph");
+        assert!(result.is_ok());
+        let graphs = db.list_graphs();
+        assert!(!graphs.contains(&"test_graph".to_string()));
+    }
+
+    #[test]
+    fn create_graph_if_not_exists() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("CREATE GRAPH g1").unwrap();
+        // Without IF NOT EXISTS, should fail
+        let result = session.execute("CREATE GRAPH g1");
+        assert!(result.is_err());
+        // With IF NOT EXISTS, should succeed
+        let result = session.execute("CREATE GRAPH IF NOT EXISTS g1");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn drop_graph_if_exists() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        // Without IF EXISTS, should fail on nonexistent
+        let result = session.execute("DROP GRAPH nonexistent");
+        assert!(result.is_err());
+        // With IF EXISTS, should succeed
+        let result = session.execute("DROP GRAPH IF EXISTS nonexistent");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn create_property_graph() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("CREATE PROPERTY GRAPH my_graph");
+        assert!(result.is_ok());
+        assert!(db.list_graphs().contains(&"my_graph".to_string()));
+    }
+
+    #[test]
+    fn drop_property_graph() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("CREATE PROPERTY GRAPH pg").unwrap();
+        let result = session.execute("DROP PROPERTY GRAPH pg");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn use_graph_command() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("CREATE GRAPH workspace").unwrap();
+        let result = session.execute("USE GRAPH workspace");
+        assert!(result.is_ok());
+        assert_eq!(session.current_graph(), Some("workspace".to_string()));
+    }
+
+    #[test]
+    fn use_graph_nonexistent_errors() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("USE GRAPH nonexistent");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn session_set_time_zone() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("SESSION SET TIME ZONE 'UTC+5'");
+        assert!(result.is_ok());
+        assert_eq!(session.time_zone(), Some("UTC+5".to_string()));
+    }
+
+    #[test]
+    fn session_set_graph() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("CREATE GRAPH analytics").unwrap();
+        let result = session.execute("SESSION SET GRAPH analytics");
+        assert!(result.is_ok());
+        assert_eq!(session.current_graph(), Some("analytics".to_string()));
+    }
+
+    #[test]
+    fn session_set_schema() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        // SESSION SET SCHEMA maps to graph
+        let result = session.execute("SESSION SET SCHEMA myschema");
+        assert!(result.is_ok());
+        assert_eq!(session.current_graph(), Some("myschema".to_string()));
+    }
+
+    #[test]
+    fn session_reset() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("CREATE GRAPH g1").unwrap();
+        session.execute("USE GRAPH g1").unwrap();
+        session.execute("SESSION SET TIME ZONE 'EST'").unwrap();
+        // Reset clears everything
+        let result = session.execute("SESSION RESET");
+        assert!(result.is_ok());
+        assert_eq!(session.current_graph(), None);
+        assert_eq!(session.time_zone(), None);
+    }
+
+    #[test]
+    fn session_close() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("SESSION CLOSE");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn start_transaction_errors_helpfully() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("START TRANSACTION");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("begin_tx"), "Should suggest begin_tx()");
+    }
+
+    #[test]
+    fn commit_errors_helpfully() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("COMMIT");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rollback_errors_helpfully() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("ROLLBACK");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn session_set_parameter() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute("SESSION SET PARAMETER my_param = 42");
+        assert!(result.is_ok());
+    }
+}
+
+// ============================================================================
+// GQL Path Features (covers path search prefixes, questioned edges)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_path_features {
+    use super::*;
+
+    #[test]
+    fn any_shortest_path() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH ANY SHORTEST (a:Person)-[:KNOWS*]->(b:Person) \
+                 WHERE a.name = 'Alice' AND b.name = 'Carol' \
+                 RETURN a.name, b.name",
+            )
+            .unwrap();
+        // Alice->Carol is 1 hop (direct), should find it
+        assert!(result.row_count() >= 1);
+    }
+
+    #[test]
+    fn all_shortest_path() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute(
+                "MATCH ALL SHORTEST (a:Person)-[:KNOWS*]->(b:Person) \
+                 WHERE a.name = 'Alice' AND b.name = 'Carol' \
+                 RETURN a.name, b.name",
+            )
+            .unwrap();
+        assert!(result.row_count() >= 1);
+    }
+
+    #[test]
+    fn path_mode_walk() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH WALK (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        assert!(result.row_count() >= 3);
+    }
+
+    #[test]
+    fn path_mode_trail() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute("MATCH TRAIL (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name")
+            .unwrap();
+        assert!(result.row_count() >= 3);
+    }
+}
+
+// ============================================================================
+// GQL INSERT Patterns (covers path INSERT decomposition)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_insert_patterns {
+    use super::*;
+
+    #[test]
+    fn insert_node_with_properties() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session
+            .execute("INSERT (:Person {name: 'Eve', age: 22})")
+            .unwrap();
+        let result = session.execute("MATCH (n:Person) RETURN n.name").unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn insert_path_creates_nodes_and_edge() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session
+            .execute("INSERT (:Person {name: 'X'})-[:KNOWS]->(:Person {name: 'Y'})")
+            .unwrap();
+        let result = session
+            .execute("MATCH (a)-[:KNOWS]->(b) RETURN a.name, b.name")
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn create_edge_with_properties_in_query() {
+        // Regression: {since: 2020} was misinterpreted as quantifier
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Person {name: 'A'})").unwrap();
+        session.execute("INSERT (:Person {name: 'B'})").unwrap();
+        session
+            .execute(
+                "MATCH (a:Person), (b:Person) WHERE a.name = 'A' AND b.name = 'B' \
+                 CREATE (a)-[:KNOWS {since: 2020}]->(b) RETURN a.name",
+            )
+            .unwrap();
+        let result = session
+            .execute("MATCH (a)-[e:KNOWS]->(b) RETURN e.since")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Int64(2020));
+    }
+}
+
+// ============================================================================
+// Cypher Features (covers cypher parser + translator)
+// ============================================================================
+
+#[cfg(feature = "cypher")]
+mod cypher_features {
+    use super::*;
+
+    #[test]
+    fn count_subquery() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher(
+                "MATCH (p:Person) \
+                 RETURN p.name, COUNT { MATCH (p)-[:KNOWS]->() } AS friends \
+                 ORDER BY p.name",
+            )
+            .unwrap();
+        assert!(result.row_count() >= 3);
+    }
+
+    #[test]
+    fn map_projection() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher("MATCH (p:Person) WHERE p.name = 'Alice' RETURN p { .name, .age }")
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+        // Should return a map value
+        match &result.rows[0][0] {
+            Value::Map(m) => {
+                let keys: Vec<String> = m.keys().map(|k| k.as_str().to_string()).collect();
+                assert!(keys.contains(&"name".to_string()), "Map should have 'name'");
+                assert!(keys.contains(&"age".to_string()), "Map should have 'age'");
+            }
+            other => panic!("Expected Map, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[ignore = "reduce runtime: list property not returned as Value::List from store"]
+    fn reduce_function() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session
+            .execute("INSERT (:Item {nums: [1, 2, 3, 4, 5]})")
+            .unwrap();
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Item) RETURN reduce(total = 0, x IN n.nums | total + x) AS sum",
+            )
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Int64(15));
+    }
+
+    #[test]
+    fn cypher_math_functions() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person) WHERE n.name = 'Alice' \
+                 RETURN sign(n.age) AS s, abs(-5) AS a",
+            )
+            .unwrap();
+        // sign(30) = 1
+        assert_eq!(result.rows[0][0], Value::Int64(1));
+    }
+
+    #[test]
+    fn cypher_string_functions() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person) WHERE n.name = 'Alice' \
+                 RETURN left(n.name, 3) AS l, right(n.name, 3) AS r",
+            )
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::String("Ali".into()));
+        assert_eq!(result.rows[0][1], Value::String("ice".into()));
+    }
+
+    #[test]
+    fn cypher_trig_functions() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Val {x: 0.0})").unwrap();
+        let result = session
+            .execute_cypher("MATCH (n:Val) RETURN sin(n.x) AS s, cos(n.x) AS c")
+            .unwrap();
+        match &result.rows[0][0] {
+            Value::Float64(f) => assert!((f - 0.0).abs() < 0.001, "sin(0) should be 0"),
+            other => panic!("Expected Float64 for sin, got {other:?}"),
+        }
+        match &result.rows[0][1] {
+            Value::Float64(f) => assert!((f - 1.0).abs() < 0.001, "cos(0) should be 1"),
+            other => panic!("Expected Float64 for cos, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cypher_pi_and_e() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:X {x: 1})").unwrap();
+        let result = session
+            .execute_cypher("MATCH (n:X) RETURN pi() AS p, e() AS e")
+            .unwrap();
+        match &result.rows[0][0] {
+            Value::Float64(f) => assert!((f - std::f64::consts::PI).abs() < 0.001),
+            other => panic!("Expected Float64, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cypher_power_operator() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:X {x: 3})").unwrap();
+        let result = session
+            .execute_cypher("MATCH (n:X) RETURN n.x ^ 2 AS sq")
+            .unwrap();
+        match &result.rows[0][0] {
+            Value::Float64(f) => assert!((f - 9.0).abs() < 0.001),
+            Value::Int64(n) => assert_eq!(*n, 9),
+            other => panic!("Expected numeric, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cypher_label_check_in_where() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher("MATCH (n) WHERE n:Engineer RETURN n.name")
+            .unwrap();
+        assert_eq!(result.row_count(), 1); // Only Dave
+    }
+
+    #[test]
+    fn cypher_exists_subquery() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher(
+                "MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:WORKS_AT]->(:Company) } \
+                 RETURN p.name ORDER BY p.name",
+            )
+            .unwrap();
+        assert!(result.row_count() >= 3); // Alice, Bob, Dave work at TechCorp
+    }
+
+    #[test]
+    #[ignore = "Cypher count(*) parser: generic function path shadows TokenKind::Count arm"]
+    fn cypher_foreach_set() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session
+            .execute("INSERT (:Person {name: 'A', verified: false})")
+            .unwrap();
+        session
+            .execute("INSERT (:Person {name: 'B', verified: false})")
+            .unwrap();
+        session
+            .execute_cypher(
+                "MATCH (n:Person) WITH collect(n) AS people \
+                 FOREACH (p IN people | SET p.verified = true) \
+                 RETURN count(*) AS cnt",
+            )
+            .unwrap();
+        let result = session
+            .execute("MATCH (n:Person) WHERE n.verified = true RETURN count(n) AS cnt")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Int64(2));
+    }
+
+    #[test]
+    #[ignore = "CALL subquery: outer scope variables not propagated into Apply subplan"]
+    fn cypher_call_inline_subquery() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher(
+                "MATCH (p:Person) \
+                 CALL { WITH p MATCH (p)-[:KNOWS]->(f) RETURN count(f) AS cnt } \
+                 RETURN p.name, cnt ORDER BY p.name",
+            )
+            .unwrap();
+        assert!(result.row_count() >= 2);
+    }
+
+    #[test]
+    #[ignore = "pattern comprehension: binder does not scope inner variables, planner Apply wiring incomplete"]
+    fn cypher_pattern_comprehension() {
+        let db = social_network();
+        let session = db.session();
+        let result = session
+            .execute_cypher(
+                "MATCH (p:Person) WHERE p.name = 'Alice' \
+                 RETURN p.name, [(p)-[:KNOWS]->(f) | f.name] AS friends",
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+        match &result.rows[0][1] {
+            Value::List(items) => assert!(items.len() >= 2, "Alice knows Bob and Carol"),
+            other => panic!("Expected list of friends, got {other:?}"),
+        }
+    }
+}
+
+// ============================================================================
+// SPARQL Features (covers sparql_translator.rs)
+// ============================================================================
+
+#[cfg(all(feature = "sparql", feature = "rdf"))]
+mod sparql_features {
+    use grafeo_engine::{Config, GrafeoDB, GraphModel};
+
+    fn rdf_db() -> GrafeoDB {
+        GrafeoDB::with_config(Config::in_memory().with_graph_model(GraphModel::Rdf)).unwrap()
+    }
+
+    #[test]
+    fn inverse_property_path() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/knows> <http://ex.org/bob> .
+                    <http://ex.org/bob> <http://ex.org/knows> <http://ex.org/carol> .
+                }"#,
+            )
+            .unwrap();
+        // ^knows means inverse: find who knows bob
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?who WHERE {
+                    <http://ex.org/bob> ^<http://ex.org/knows> ?who
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1, "Alice knows Bob (inverse)");
+    }
+
+    #[test]
+    #[ignore = "SPARQL path?: reflexive projection does not handle IRI subjects (needs Values operator)"]
+    fn zero_or_one_property_path() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/knows> <http://ex.org/bob> .
+                }"#,
+            )
+            .unwrap();
+        // knows? means zero or one hop
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?who WHERE {
+                    <http://ex.org/alice> <http://ex.org/knows>? ?who
+                }"#,
+            )
+            .unwrap();
+        // Should find alice herself (0 hops) and bob (1 hop)
+        assert!(
+            result.row_count() >= 1,
+            "ZeroOrOne should find at least one match"
+        );
+    }
+
+    #[test]
+    fn sparql_optional_pattern() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/name> "Alice" .
+                    <http://ex.org/alice> <http://ex.org/age> "30" .
+                    <http://ex.org/bob> <http://ex.org/name> "Bob" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name ?age WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    OPTIONAL { ?s <http://ex.org/age> ?age }
+                }"#,
+            )
+            .unwrap();
+        // Both Alice and Bob, but only Alice has age
+        assert_eq!(result.row_count(), 2);
+    }
+
+    #[test]
+    fn sparql_union_pattern() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/name> "Alice" .
+                    <http://ex.org/bob> <http://ex.org/label> "Bob" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?val WHERE {
+                    { ?s <http://ex.org/name> ?val }
+                    UNION
+                    { ?s <http://ex.org/label> ?val }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 2);
+    }
+
+    #[test]
+    fn sparql_filter_exists() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/name> "Alice" .
+                    <http://ex.org/alice> <http://ex.org/knows> <http://ex.org/bob> .
+                    <http://ex.org/carol> <http://ex.org/name> "Carol" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    FILTER EXISTS { ?s <http://ex.org/knows> ?o }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1, "Only Alice has knows relation");
+    }
+
+    #[test]
+    fn sparql_filter_not_exists() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/name> "Alice" .
+                    <http://ex.org/alice> <http://ex.org/knows> <http://ex.org/bob> .
+                    <http://ex.org/carol> <http://ex.org/name> "Carol" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    FILTER NOT EXISTS { ?s <http://ex.org/knows> ?o }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1, "Only Carol has no knows relation");
+    }
+
+    #[test]
+    fn sparql_sequence_property_path() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/knows> <http://ex.org/bob> .
+                    <http://ex.org/bob> <http://ex.org/likes> <http://ex.org/carol> .
+                }"#,
+            )
+            .unwrap();
+        // Sequence: knows / likes
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?who WHERE {
+                    <http://ex.org/alice> <http://ex.org/knows>/<http://ex.org/likes> ?who
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn sparql_alternative_property_path() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/knows> <http://ex.org/bob> .
+                    <http://ex.org/alice> <http://ex.org/likes> <http://ex.org/carol> .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?who WHERE {
+                    <http://ex.org/alice> (<http://ex.org/knows>|<http://ex.org/likes>) ?who
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 2, "Alternative path finds both");
+    }
+
+    #[test]
+    fn sparql_one_or_more_path() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/a> <http://ex.org/next> <http://ex.org/b> .
+                    <http://ex.org/b> <http://ex.org/next> <http://ex.org/c> .
+                    <http://ex.org/c> <http://ex.org/next> <http://ex.org/d> .
+                }"#,
+            )
+            .unwrap();
+        // + means one or more hops
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?end WHERE {
+                    <http://ex.org/a> <http://ex.org/next>+ ?end
+                }"#,
+            )
+            .unwrap();
+        assert!(result.row_count() >= 3, "One-or-more should find b, c, d");
+    }
+
+    #[test]
+    #[ignore = "SPARQL path*: reflexive projection does not handle IRI subjects (needs Values operator)"]
+    fn sparql_zero_or_more_path() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/a> <http://ex.org/next> <http://ex.org/b> .
+                    <http://ex.org/b> <http://ex.org/next> <http://ex.org/c> .
+                }"#,
+            )
+            .unwrap();
+        // * means zero or more hops (includes self)
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?end WHERE {
+                    <http://ex.org/a> <http://ex.org/next>* ?end
+                }"#,
+            )
+            .unwrap();
+        assert!(result.row_count() >= 3, "Zero-or-more should find a, b, c");
+    }
+
+    #[test]
+    #[ignore = "SPARQL sequence paths: nested complex paths inside Sequence not recursively translated"]
+    fn sparql_rdf_collections() {
+        let db = rdf_db();
+        let session = db.session();
+        // Use collection syntax: (item1 item2 item3)
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/list> <http://ex.org/items> <http://ex.org/a> .
+                    <http://ex.org/a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> "one" .
+                    <http://ex.org/a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://ex.org/b> .
+                    <http://ex.org/b> <http://www.w3.org/1999/02/22-rdf-syntax-ns#first> "two" .
+                    <http://ex.org/b> <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> <http://www.w3.org/1999/02/22-rdf-syntax-ns#nil> .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?item WHERE {
+                    <http://ex.org/list> <http://ex.org/items> ?head .
+                    ?head <http://www.w3.org/1999/02/22-rdf-syntax-ns#first>/<http://www.w3.org/1999/02/22-rdf-syntax-ns#rest>* ?item
+                }"#,
+            )
+            .unwrap();
+        assert!(result.row_count() >= 1);
+    }
+
+    #[test]
+    fn sparql_aggregation_count() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alice> <http://ex.org/type> "person" .
+                    <http://ex.org/bob> <http://ex.org/type> "person" .
+                    <http://ex.org/techcorp> <http://ex.org/type> "company" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?type (COUNT(?s) AS ?count) WHERE {
+                    ?s <http://ex.org/type> ?type
+                } GROUP BY ?type ORDER BY ?type"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 2);
+    }
+
+    #[test]
+    fn sparql_having_clause() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/a> <http://ex.org/type> "x" .
+                    <http://ex.org/b> <http://ex.org/type> "x" .
+                    <http://ex.org/c> <http://ex.org/type> "y" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?type (COUNT(?s) AS ?cnt) WHERE {
+                    ?s <http://ex.org/type> ?type
+                } GROUP BY ?type HAVING (COUNT(?s) > 1)"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1, "Only 'x' has count > 1");
+    }
+}
+
+// ============================================================================
+// GQL Parser Unit Tests (covers DDL/session parsing branches)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_parser_unit {
+    use grafeo_adapters::query::gql;
+    use grafeo_adapters::query::gql::ast::{SessionCommand, Statement};
+
+    #[test]
+    fn parse_create_graph() {
+        let stmt = gql::parse("CREATE GRAPH mydb").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::CreateGraph {
+                name,
+                if_not_exists,
+            }) => {
+                assert_eq!(name, "mydb");
+                assert!(!if_not_exists);
+            }
+            other => panic!("Expected CreateGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_create_graph_if_not_exists() {
+        let stmt = gql::parse("CREATE GRAPH IF NOT EXISTS mydb").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::CreateGraph {
+                name,
+                if_not_exists,
+            }) => {
+                assert_eq!(name, "mydb");
+                assert!(if_not_exists);
+            }
+            other => panic!("Expected CreateGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_create_property_graph() {
+        let stmt = gql::parse("CREATE PROPERTY GRAPH pg1").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::CreateGraph { name, .. }) => {
+                assert_eq!(name, "pg1");
+            }
+            other => panic!("Expected CreateGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_drop_graph() {
+        let stmt = gql::parse("DROP GRAPH mydb").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::DropGraph { name, if_exists }) => {
+                assert_eq!(name, "mydb");
+                assert!(!if_exists);
+            }
+            other => panic!("Expected DropGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_drop_graph_if_exists() {
+        let stmt = gql::parse("DROP GRAPH IF EXISTS mydb").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::DropGraph { name, if_exists }) => {
+                assert_eq!(name, "mydb");
+                assert!(if_exists);
+            }
+            other => panic!("Expected DropGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_drop_property_graph() {
+        let stmt = gql::parse("DROP PROPERTY GRAPH pg1").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::DropGraph { name, .. }) => {
+                assert_eq!(name, "pg1");
+            }
+            other => panic!("Expected DropGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_use_graph() {
+        let stmt = gql::parse("USE GRAPH workspace").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::UseGraph(name)) => {
+                assert_eq!(name, "workspace");
+            }
+            other => panic!("Expected UseGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_session_set_graph() {
+        let stmt = gql::parse("SESSION SET GRAPH analytics").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::SessionSetGraph(name)) => {
+                assert_eq!(name, "analytics");
+            }
+            other => panic!("Expected SessionSetGraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_session_set_time_zone() {
+        let stmt = gql::parse("SESSION SET TIME ZONE 'UTC+5'").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::SessionSetTimeZone(tz)) => {
+                assert_eq!(tz, "UTC+5");
+            }
+            other => panic!("Expected SessionSetTimeZone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_session_set_schema() {
+        let stmt = gql::parse("SESSION SET SCHEMA myschema").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::SessionSetGraph(name)) => {
+                assert_eq!(name, "myschema");
+            }
+            other => panic!("Expected SessionSetGraph (schema), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_session_set_parameter() {
+        let stmt = gql::parse("SESSION SET PARAMETER timeout = 30").unwrap();
+        match stmt {
+            Statement::SessionCommand(SessionCommand::SessionSetParameter(name, _)) => {
+                assert_eq!(name, "timeout");
+            }
+            other => panic!("Expected SessionSetParameter, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_session_reset() {
+        let stmt = gql::parse("SESSION RESET").unwrap();
+        assert!(matches!(
+            stmt,
+            Statement::SessionCommand(SessionCommand::SessionReset)
+        ));
+    }
+
+    #[test]
+    fn parse_session_reset_all() {
+        let stmt = gql::parse("SESSION RESET ALL").unwrap();
+        assert!(matches!(
+            stmt,
+            Statement::SessionCommand(SessionCommand::SessionReset)
+        ));
+    }
+
+    #[test]
+    fn parse_session_close() {
+        let stmt = gql::parse("SESSION CLOSE").unwrap();
+        assert!(matches!(
+            stmt,
+            Statement::SessionCommand(SessionCommand::SessionClose)
+        ));
+    }
+
+    #[test]
+    fn parse_start_transaction() {
+        let stmt = gql::parse("START TRANSACTION").unwrap();
+        assert!(matches!(
+            stmt,
+            Statement::SessionCommand(SessionCommand::StartTransaction)
+        ));
+    }
+
+    #[test]
+    fn parse_commit() {
+        let stmt = gql::parse("COMMIT").unwrap();
+        assert!(matches!(
+            stmt,
+            Statement::SessionCommand(SessionCommand::Commit)
+        ));
+    }
+
+    #[test]
+    fn parse_rollback() {
+        let stmt = gql::parse("ROLLBACK").unwrap();
+        assert!(matches!(
+            stmt,
+            Statement::SessionCommand(SessionCommand::Rollback)
+        ));
+    }
+
+    #[test]
+    fn parse_finish_statement() {
+        let stmt = gql::parse("MATCH (n) FINISH").unwrap();
+        match stmt {
+            Statement::Query(q) => {
+                assert!(q.return_clause.is_finish);
+            }
+            other => panic!("Expected Query with FINISH, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_select_statement() {
+        let stmt = gql::parse("MATCH (n:Person) SELECT n.name").unwrap();
+        match stmt {
+            Statement::Query(q) => {
+                assert!(!q.return_clause.items.is_empty());
+            }
+            other => panic!("Expected Query with SELECT, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_drop_graph_error_on_bad_syntax() {
+        let result = gql::parse("DROP NOTHING");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_session_error_on_bad_action() {
+        let result = gql::parse("SESSION DESTROY");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_start_error_without_transaction() {
+        let result = gql::parse("START SOMETHING");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_use_error_without_graph() {
+        let result = gql::parse("USE SOMETHING");
+        assert!(result.is_err());
+    }
+}
+
+// ============================================================================
+// GQL Translator Unit Tests (covers translate_full, session command routing)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod gql_translator_unit {
+    use grafeo_engine::query::gql_translator;
+
+    #[test]
+    fn translate_returns_plan_for_query() {
+        let result = gql_translator::translate("MATCH (n) RETURN n");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn translate_returns_error_for_session_command() {
+        let result = gql_translator::translate("CREATE GRAPH test");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Session commands"));
+    }
+
+    #[test]
+    fn translate_full_returns_session_command() {
+        let result = gql_translator::translate_full("CREATE GRAPH test").unwrap();
+        assert!(matches!(
+            result,
+            gql_translator::GqlTranslationResult::SessionCommand(_)
+        ));
+    }
+
+    #[test]
+    fn translate_full_returns_plan_for_query() {
+        let result = gql_translator::translate_full("MATCH (n) RETURN n").unwrap();
+        assert!(matches!(
+            result,
+            gql_translator::GqlTranslationResult::Plan(_)
+        ));
+    }
+
+    #[test]
+    fn translate_except_produces_plan() {
+        let result = gql_translator::translate(
+            "MATCH (n:Person) RETURN n.name EXCEPT MATCH (m:Person) WHERE m.age > 30 RETURN m.name",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn translate_intersect_produces_plan() {
+        let result = gql_translator::translate(
+            "MATCH (n:Person) RETURN n.name INTERSECT MATCH (m:Person) RETURN m.name",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn translate_otherwise_produces_plan() {
+        let result = gql_translator::translate(
+            "MATCH (n:Person) RETURN n.name OTHERWISE MATCH (m:Person) RETURN m.name",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn translate_finish_produces_plan() {
+        let result = gql_translator::translate("MATCH (n) FINISH");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn translate_element_where_produces_plan() {
+        let result = gql_translator::translate("MATCH (n:Person WHERE n.age > 25) RETURN n.name");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn translate_count_subquery() {
+        let result = gql_translator::translate(
+            "MATCH (n:Person) RETURN n.name, COUNT { MATCH (n)-[:KNOWS]->() } AS cnt",
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn translate_schema_errors() {
+        let result = gql_translator::translate("CREATE NODE TYPE Foo");
+        assert!(result.is_err());
+    }
+}

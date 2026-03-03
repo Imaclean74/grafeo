@@ -2321,4 +2321,281 @@ mod tests {
         let result = session.execute("MATCH (n:Test) RETURN n.name").unwrap();
         assert_eq!(result.row_count(), 1);
     }
+
+    // ==================== Session Command Tests ====================
+
+    #[cfg(feature = "gql")]
+    mod session_command_tests {
+        use super::*;
+
+        #[test]
+        fn test_use_graph_sets_current_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // Create the graph first, then USE it
+            session.execute("CREATE GRAPH mydb").unwrap();
+            session.execute("USE GRAPH mydb").unwrap();
+
+            assert_eq!(session.current_graph(), Some("mydb".to_string()));
+        }
+
+        #[test]
+        fn test_use_graph_nonexistent_errors() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("USE GRAPH doesnotexist");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("does not exist"),
+                "Expected 'does not exist' error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_use_graph_default_always_valid() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // "default" is always valid, even without CREATE GRAPH
+            session.execute("USE GRAPH default").unwrap();
+            assert_eq!(session.current_graph(), Some("default".to_string()));
+        }
+
+        #[test]
+        fn test_session_set_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // SESSION SET GRAPH does not verify existence
+            session.execute("SESSION SET GRAPH analytics").unwrap();
+            assert_eq!(session.current_graph(), Some("analytics".to_string()));
+        }
+
+        #[test]
+        fn test_session_set_time_zone() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            assert_eq!(session.time_zone(), None);
+
+            session.execute("SESSION SET TIME ZONE 'UTC'").unwrap();
+            assert_eq!(session.time_zone(), Some("UTC".to_string()));
+
+            session
+                .execute("SESSION SET TIME ZONE 'America/New_York'")
+                .unwrap();
+            assert_eq!(session.time_zone(), Some("America/New_York".to_string()));
+        }
+
+        #[test]
+        fn test_session_set_parameter() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session
+                .execute("SESSION SET PARAMETER $timeout = 30")
+                .unwrap();
+
+            // Parameter is stored (value is Null for now, since expression
+            // evaluation is not yet wired up)
+            assert!(session.get_parameter("timeout").is_some());
+        }
+
+        #[test]
+        fn test_session_reset_clears_all_state() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // Set various session state
+            session.execute("SESSION SET GRAPH analytics").unwrap();
+            session.execute("SESSION SET TIME ZONE 'UTC'").unwrap();
+            session
+                .execute("SESSION SET PARAMETER $limit = 100")
+                .unwrap();
+
+            // Verify state was set
+            assert!(session.current_graph().is_some());
+            assert!(session.time_zone().is_some());
+            assert!(session.get_parameter("limit").is_some());
+
+            // Reset everything
+            session.execute("SESSION RESET").unwrap();
+
+            assert_eq!(session.current_graph(), None);
+            assert_eq!(session.time_zone(), None);
+            assert!(session.get_parameter("limit").is_none());
+        }
+
+        #[test]
+        fn test_session_close_clears_state() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("SESSION SET GRAPH analytics").unwrap();
+            session.execute("SESSION SET TIME ZONE 'UTC'").unwrap();
+
+            session.execute("SESSION CLOSE").unwrap();
+
+            assert_eq!(session.current_graph(), None);
+            assert_eq!(session.time_zone(), None);
+        }
+
+        #[test]
+        fn test_create_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+
+            // Should be able to USE it now
+            session.execute("USE GRAPH mydb").unwrap();
+            assert_eq!(session.current_graph(), Some("mydb".to_string()));
+        }
+
+        #[test]
+        fn test_create_graph_duplicate_errors() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+            let result = session.execute("CREATE GRAPH mydb");
+
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("already exists"),
+                "Expected 'already exists' error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_create_graph_if_not_exists() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+            // Should succeed silently with IF NOT EXISTS
+            session.execute("CREATE GRAPH IF NOT EXISTS mydb").unwrap();
+        }
+
+        #[test]
+        fn test_drop_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+            session.execute("DROP GRAPH mydb").unwrap();
+
+            // Should no longer be usable
+            let result = session.execute("USE GRAPH mydb");
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_drop_graph_nonexistent_errors() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("DROP GRAPH nosuchgraph");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("does not exist"),
+                "Expected 'does not exist' error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_drop_graph_if_exists() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // Should succeed silently with IF EXISTS
+            session.execute("DROP GRAPH IF EXISTS nosuchgraph").unwrap();
+        }
+
+        #[test]
+        fn test_start_transaction_returns_error() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("START TRANSACTION");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("begin_tx"),
+                "Expected guidance to use begin_tx(), got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_commit_via_gql_returns_error() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("COMMIT");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("commit()"),
+                "Expected guidance to use commit(), got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_rollback_via_gql_returns_error() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("ROLLBACK");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("rollback()"),
+                "Expected guidance to use rollback(), got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_session_commands_return_empty_result() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("SESSION SET GRAPH test").unwrap();
+            assert_eq!(result.row_count(), 0);
+            assert_eq!(result.column_count(), 0);
+        }
+
+        #[test]
+        fn test_current_graph_default_is_none() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            assert_eq!(session.current_graph(), None);
+        }
+
+        #[test]
+        fn test_time_zone_default_is_none() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            assert_eq!(session.time_zone(), None);
+        }
+
+        #[test]
+        fn test_session_state_independent_across_sessions() {
+            let db = GrafeoDB::new_in_memory();
+            let session1 = db.session();
+            let session2 = db.session();
+
+            session1.execute("SESSION SET GRAPH first").unwrap();
+            session2.execute("SESSION SET GRAPH second").unwrap();
+
+            assert_eq!(session1.current_graph(), Some("first".to_string()));
+            assert_eq!(session2.current_graph(), Some("second".to_string()));
+        }
+    }
 }

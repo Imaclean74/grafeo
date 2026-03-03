@@ -161,17 +161,31 @@ impl ValueVector {
 
     /// Pushes a node ID.
     pub fn push_node_id(&mut self, value: NodeId) {
-        if let VectorData::NodeId(vec) = &mut self.data {
-            vec.push(value);
-            self.len += 1;
+        match &mut self.data {
+            VectorData::NodeId(vec) => {
+                vec.push(value);
+                self.len += 1;
+            }
+            VectorData::Generic(vec) => {
+                vec.push(Value::Int64(value.as_u64() as i64));
+                self.len += 1;
+            }
+            _ => {}
         }
     }
 
     /// Pushes an edge ID.
     pub fn push_edge_id(&mut self, value: EdgeId) {
-        if let VectorData::EdgeId(vec) = &mut self.data {
-            vec.push(value);
-            self.len += 1;
+        match &mut self.data {
+            VectorData::EdgeId(vec) => {
+                vec.push(value);
+                self.len += 1;
+            }
+            VectorData::Generic(vec) => {
+                vec.push(Value::Int64(value.as_u64() as i64));
+                self.len += 1;
+            }
+            _ => {}
         }
     }
 

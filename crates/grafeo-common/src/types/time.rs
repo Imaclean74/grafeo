@@ -116,7 +116,7 @@ impl Time {
         self.offset
     }
 
-    /// Parses a time from ISO 8601 format "HH:MM:SS[.nnn][+HH:MM|Z]".
+    /// Parses a time from ISO 8601 format `HH:MM:SS[.nnn][+HH:MM|Z]`.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         // Split off timezone suffix

@@ -2703,4 +2703,363 @@ mod tests {
             panic!("Expected Return");
         }
     }
+
+    // === Map Projection Tests ===
+
+    #[test]
+    fn test_translate_map_projection() {
+        let plan = translate("MATCH (p:Person) RETURN p { .name, .age }").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            if let LogicalExpression::MapProjection { base, entries } = &ret.items[0].expression {
+                assert_eq!(base, "p");
+                assert_eq!(entries.len(), 2);
+                assert!(
+                    matches!(&entries[0], MapProjectionEntry::PropertySelector(s) if s == "name")
+                );
+                assert!(
+                    matches!(&entries[1], MapProjectionEntry::PropertySelector(s) if s == "age")
+                );
+            } else {
+                panic!(
+                    "Expected MapProjection expression, got {:?}",
+                    ret.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    // === reduce() Tests ===
+
+    #[test]
+    fn test_translate_reduce() {
+        let plan = translate("MATCH (n) RETURN reduce(acc = 0, x IN [1,2,3] | acc + x)").unwrap();
+
+        // Walk past possible Aggregate wrapping to find the Reduce expression
+        fn find_reduce_expr(op: &LogicalOperator) -> Option<&LogicalExpression> {
+            match op {
+                LogicalOperator::Return(ret) => {
+                    for item in &ret.items {
+                        if matches!(&item.expression, LogicalExpression::Reduce { .. }) {
+                            return Some(&item.expression);
+                        }
+                    }
+                    find_reduce_expr(&ret.input)
+                }
+                LogicalOperator::Aggregate(agg) => {
+                    // Check group_by expressions
+                    for expr in &agg.group_by {
+                        if matches!(expr, LogicalExpression::Reduce { .. }) {
+                            return Some(expr);
+                        }
+                    }
+                    find_reduce_expr(&agg.input)
+                }
+                _ => None,
+            }
+        }
+
+        let reduce_expr =
+            find_reduce_expr(&plan.root).expect("Expected Reduce expression in the plan");
+
+        if let LogicalExpression::Reduce {
+            accumulator,
+            initial,
+            variable,
+            list,
+            expression,
+        } = reduce_expr
+        {
+            assert_eq!(accumulator, "acc");
+            assert!(matches!(
+                initial.as_ref(),
+                LogicalExpression::Literal(Value::Int64(0))
+            ));
+            assert_eq!(variable, "x");
+            // The list should be a List of 3 items
+            if let LogicalExpression::List(items) = list.as_ref() {
+                assert_eq!(items.len(), 3);
+            } else {
+                panic!("Expected List for reduce iteration, got {:?}", list);
+            }
+            // The body should be acc + x (Binary Add)
+            if let LogicalExpression::Binary { op, .. } = expression.as_ref() {
+                assert_eq!(*op, BinaryOp::Add);
+            } else {
+                panic!("Expected Binary Add in reduce body, got {:?}", expression);
+            }
+        } else {
+            panic!("Expected Reduce, got {:?}", reduce_expr);
+        }
+    }
+
+    // === Pattern Comprehension Tests ===
+
+    #[test]
+    fn test_translate_pattern_comprehension() {
+        let plan = translate("MATCH (p:Person) RETURN [(p)-[:KNOWS]->(f) | f.name]").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            if let LogicalExpression::PatternComprehension {
+                subplan,
+                projection,
+            } = &ret.items[0].expression
+            {
+                // The subplan should contain an Expand (for the pattern)
+                fn has_expand(op: &LogicalOperator) -> bool {
+                    match op {
+                        LogicalOperator::Expand(_) => true,
+                        LogicalOperator::Filter(f) => has_expand(&f.input),
+                        _ => false,
+                    }
+                }
+                assert!(
+                    has_expand(subplan),
+                    "Expected pattern comprehension subplan to contain Expand"
+                );
+                // The projection should be f.name (Property access)
+                assert!(
+                    matches!(
+                        projection.as_ref(),
+                        LogicalExpression::Property { variable, property }
+                        if variable == "f" && property == "name"
+                    ),
+                    "Expected projection to be f.name, got {:?}",
+                    projection
+                );
+            } else {
+                panic!(
+                    "Expected PatternComprehension, got {:?}",
+                    ret.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    // === COUNT Subquery Tests ===
+
+    #[test]
+    fn test_translate_count_subquery() {
+        let plan =
+            translate("MATCH (p:Person) RETURN COUNT { MATCH (p)-[:KNOWS]->() } AS cnt").unwrap();
+
+        // The COUNT subquery should appear as a CountSubquery expression
+        fn find_count_subquery(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Return(ret) => {
+                    ret.items
+                        .iter()
+                        .any(|item| matches!(&item.expression, LogicalExpression::CountSubquery(_)))
+                        || find_count_subquery(&ret.input)
+                }
+                LogicalOperator::Aggregate(agg) => {
+                    agg.group_by
+                        .iter()
+                        .any(|expr| matches!(expr, LogicalExpression::CountSubquery(_)))
+                        || find_count_subquery(&agg.input)
+                }
+                _ => false,
+            }
+        }
+
+        assert!(
+            find_count_subquery(&plan.root),
+            "Expected CountSubquery in the plan, got {:?}",
+            plan.root
+        );
+    }
+
+    // === CALL Subquery Tests ===
+
+    #[test]
+    fn test_translate_call_subquery() {
+        let plan = translate(
+            "MATCH (p:Person) CALL { WITH p MATCH (p)-[:KNOWS]->(f) RETURN count(f) AS cnt } RETURN p.name, cnt",
+        )
+        .unwrap();
+
+        // The plan should have an Apply operator for the CALL subquery
+        fn find_apply(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Apply(_) => true,
+                LogicalOperator::Return(ret) => find_apply(&ret.input),
+                LogicalOperator::Filter(f) => find_apply(&f.input),
+                LogicalOperator::Sort(s) => find_apply(&s.input),
+                _ => false,
+            }
+        }
+
+        assert!(
+            find_apply(&plan.root),
+            "Expected Apply operator for CALL subquery"
+        );
+
+        // Verify the final RETURN has two items
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(
+                ret.items.len(),
+                2,
+                "Expected 2 return items (p.name and cnt)"
+            );
+        } else {
+            panic!("Expected Return at root");
+        }
+    }
+
+    // === FOREACH Tests ===
+
+    #[test]
+    fn test_translate_foreach() {
+        let plan = translate("MATCH (n:Person) FOREACH (x IN [1,2,3] | SET n.x = 1)").unwrap();
+
+        // FOREACH translates to Unwind + mutation pipeline
+        // The plan should contain an Unwind operator somewhere
+        fn find_unwind(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Unwind(_) => true,
+                LogicalOperator::SetProperty(s) => find_unwind(&s.input),
+                LogicalOperator::Filter(f) => find_unwind(&f.input),
+                LogicalOperator::Return(r) => find_unwind(&r.input),
+                _ => false,
+            }
+        }
+
+        assert!(
+            find_unwind(&plan.root),
+            "FOREACH should produce an Unwind operator in the plan"
+        );
+
+        // The root should be a SetProperty (the inner SET clause)
+        assert!(
+            matches!(&plan.root, LogicalOperator::SetProperty(_)),
+            "Expected SetProperty at root for FOREACH with SET, got {:?}",
+            std::mem::discriminant(&plan.root)
+        );
+    }
+
+    // === Basic Query Translation Tests ===
+
+    #[test]
+    fn test_translate_match_with_multiple_labels() {
+        // Multi-label node patterns
+        let plan = translate("MATCH (n:Person:Employee) RETURN n").unwrap();
+        assert!(matches!(&plan.root, LogicalOperator::Return(_)));
+    }
+
+    #[test]
+    fn test_translate_standalone_return() {
+        // RETURN without MATCH (pure expression evaluation)
+        let plan = translate("RETURN 2 * 3").unwrap();
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            // The expression should be a Binary Mul of 2 * 3
+            if let LogicalExpression::Binary { op, left, right } = &ret.items[0].expression {
+                assert_eq!(*op, BinaryOp::Mul);
+                assert!(matches!(
+                    left.as_ref(),
+                    LogicalExpression::Literal(Value::Int64(2))
+                ));
+                assert!(matches!(
+                    right.as_ref(),
+                    LogicalExpression::Literal(Value::Int64(3))
+                ));
+            } else {
+                panic!("Expected Binary expression");
+            }
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    #[test]
+    fn test_translate_undirected_relationship() {
+        let plan = translate("MATCH (a:Person)-[:FRIEND]-(b:Person) RETURN a, b").unwrap();
+
+        fn find_expand(op: &LogicalOperator) -> Option<&ExpandOp> {
+            match op {
+                LogicalOperator::Expand(e) => Some(e),
+                LogicalOperator::Return(r) => find_expand(&r.input),
+                LogicalOperator::Filter(f) => find_expand(&f.input),
+                _ => None,
+            }
+        }
+
+        let expand = find_expand(&plan.root).expect("Expected Expand");
+        assert_eq!(expand.direction, ExpandDirection::Both);
+        assert_eq!(expand.edge_types, vec!["FRIEND".to_string()]);
+    }
+
+    #[test]
+    fn test_translate_match_with_return_alias() {
+        let plan = translate("MATCH (n:Person) RETURN n.name AS personName").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            assert_eq!(ret.items[0].alias.as_deref(), Some("personName"));
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    #[test]
+    fn test_translate_multiple_return_items() {
+        let plan = translate("MATCH (n:Person) RETURN n.name, n.age, n.city").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 3);
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    #[test]
+    fn test_translate_list_predicate_all() {
+        let plan = translate("MATCH (n) WHERE all(x IN [1,2,3] WHERE x > 0) RETURN n").unwrap();
+
+        fn find_filter(op: &LogicalOperator) -> Option<&FilterOp> {
+            match op {
+                LogicalOperator::Filter(f) => Some(f),
+                LogicalOperator::Return(r) => find_filter(&r.input),
+                _ => None,
+            }
+        }
+
+        let filter = find_filter(&plan.root).expect("Expected Filter");
+        assert!(
+            matches!(
+                &filter.predicate,
+                LogicalExpression::ListPredicate {
+                    kind: ListPredicateKind::All,
+                    ..
+                }
+            ),
+            "Expected ListPredicate(All), got {:?}",
+            filter.predicate
+        );
+    }
+
+    #[test]
+    fn test_translate_list_comprehension() {
+        let plan = translate("MATCH (n) RETURN [x IN [1,2,3] WHERE x > 1 | x * 2]").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            assert!(
+                matches!(
+                    &ret.items[0].expression,
+                    LogicalExpression::ListComprehension { .. }
+                ),
+                "Expected ListComprehension, got {:?}",
+                ret.items[0].expression
+            );
+        } else {
+            panic!("Expected Return");
+        }
+    }
 }

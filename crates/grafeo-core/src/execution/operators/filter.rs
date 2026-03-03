@@ -3744,4 +3744,802 @@ mod tests {
         // Verify it's exhausted
         assert!(filter2.next().unwrap().is_none());
     }
+
+    // === eval_binary_op: Arithmetic Tests ===
+
+    /// Helper: creates an `ExpressionPredicate` wrapping a literal expression,
+    /// evaluates it against an empty chunk, and returns the result `Value`.
+    fn eval_literal_expr(expr: FilterExpression) -> Option<Value> {
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), store);
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+        pred.eval_at(&chunk, 0)
+    }
+
+    fn binary(left: Value, op: BinaryFilterOp, right: Value) -> FilterExpression {
+        FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(left)),
+            op,
+            right: Box::new(FilterExpression::Literal(right)),
+        }
+    }
+
+    fn unary(op: UnaryFilterOp, operand: FilterExpression) -> FilterExpression {
+        FilterExpression::Unary {
+            op,
+            operand: Box::new(operand),
+        }
+    }
+
+    #[test]
+    fn test_eval_binary_addition_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(10),
+            BinaryFilterOp::Add,
+            Value::Int64(20),
+        ));
+        assert_eq!(result, Some(Value::Int64(30)));
+    }
+
+    #[test]
+    fn test_eval_binary_subtraction_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(50),
+            BinaryFilterOp::Sub,
+            Value::Int64(18),
+        ));
+        assert_eq!(result, Some(Value::Int64(32)));
+    }
+
+    #[test]
+    fn test_eval_binary_multiplication_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(7),
+            BinaryFilterOp::Mul,
+            Value::Int64(6),
+        ));
+        assert_eq!(result, Some(Value::Int64(42)));
+    }
+
+    #[test]
+    fn test_eval_binary_division_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(100),
+            BinaryFilterOp::Div,
+            Value::Int64(4),
+        ));
+        assert_eq!(result, Some(Value::Int64(25)));
+    }
+
+    #[test]
+    fn test_eval_binary_modulo_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(17),
+            BinaryFilterOp::Mod,
+            Value::Int64(5),
+        ));
+        assert_eq!(result, Some(Value::Int64(2)));
+    }
+
+    // === eval_binary_op: Comparisons ===
+
+    #[test]
+    fn test_eval_comparison_lt() {
+        let result =
+            eval_literal_expr(binary(Value::Int64(3), BinaryFilterOp::Lt, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result =
+            eval_literal_expr(binary(Value::Int64(5), BinaryFilterOp::Lt, Value::Int64(3)));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_comparison_gt() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(10),
+            BinaryFilterOp::Gt,
+            Value::Int64(5),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_comparison_eq() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(42),
+            BinaryFilterOp::Eq,
+            Value::Int64(42),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Int64(42),
+            BinaryFilterOp::Eq,
+            Value::Int64(43),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_comparison_ne() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello".into()),
+            BinaryFilterOp::Ne,
+            Value::String("world".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("same".into()),
+            BinaryFilterOp::Ne,
+            Value::String("same".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_comparison_le_ge() {
+        // <=
+        let result =
+            eval_literal_expr(binary(Value::Int64(5), BinaryFilterOp::Le, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result =
+            eval_literal_expr(binary(Value::Int64(6), BinaryFilterOp::Le, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(false)));
+
+        // >=
+        let result =
+            eval_literal_expr(binary(Value::Int64(5), BinaryFilterOp::Ge, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result =
+            eval_literal_expr(binary(Value::Int64(4), BinaryFilterOp::Ge, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    // === eval_binary_op: Logical Operators ===
+
+    #[test]
+    fn test_eval_logical_and() {
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::And,
+            Value::Bool(true),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::And,
+            Value::Bool(false),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_logical_or() {
+        let result = eval_literal_expr(binary(
+            Value::Bool(false),
+            BinaryFilterOp::Or,
+            Value::Bool(true),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Bool(false),
+            BinaryFilterOp::Or,
+            Value::Bool(false),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_logical_xor() {
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::Xor,
+            Value::Bool(false),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::Xor,
+            Value::Bool(true),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    // === Type Coercion: Int + Float Arithmetic ===
+
+    #[test]
+    fn test_eval_type_coercion_int_plus_float() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(10),
+            BinaryFilterOp::Add,
+            Value::Float64(2.5),
+        ));
+        assert_eq!(result, Some(Value::Float64(12.5)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_float_minus_int() {
+        let result = eval_literal_expr(binary(
+            Value::Float64(10.0),
+            BinaryFilterOp::Sub,
+            Value::Int64(3),
+        ));
+        assert_eq!(result, Some(Value::Float64(7.0)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_int_mul_float() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(4),
+            BinaryFilterOp::Mul,
+            Value::Float64(2.5),
+        ));
+        assert_eq!(result, Some(Value::Float64(10.0)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_int_eq_float() {
+        // Int 42 should equal Float 42.0
+        let result = eval_literal_expr(binary(
+            Value::Int64(42),
+            BinaryFilterOp::Eq,
+            Value::Float64(42.0),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_int_lt_float() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(3),
+            BinaryFilterOp::Lt,
+            Value::Float64(3.5),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === String Comparison ===
+
+    #[test]
+    fn test_eval_string_comparison() {
+        let result = eval_literal_expr(binary(
+            Value::String("apple".into()),
+            BinaryFilterOp::Lt,
+            Value::String("banana".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("zebra".into()),
+            BinaryFilterOp::Gt,
+            Value::String("apple".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_string_concatenation() {
+        let result = eval_literal_expr(binary(
+            Value::String("Hello".into()),
+            BinaryFilterOp::Add,
+            Value::String(" World".into()),
+        ));
+        assert_eq!(result, Some(Value::String("Hello World".into())));
+    }
+
+    // === IS NULL / IS NOT NULL ===
+
+    #[test]
+    fn test_eval_is_null() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNull,
+            FilterExpression::Literal(Value::Null),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNull,
+            FilterExpression::Literal(Value::Int64(42)),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_is_not_null() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNotNull,
+            FilterExpression::Literal(Value::Int64(42)),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNotNull,
+            FilterExpression::Literal(Value::Null),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_is_null_on_missing_variable() {
+        // Accessing a non-existent variable should produce None,
+        // which IS NULL treats as true
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let expr = FilterExpression::Unary {
+            op: UnaryFilterOp::IsNull,
+            operand: Box::new(FilterExpression::Variable("missing_var".to_string())),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), store);
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === STARTS WITH / ENDS WITH / CONTAINS ===
+
+    #[test]
+    fn test_eval_starts_with() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::StartsWith,
+            Value::String("hello".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::StartsWith,
+            Value::String("world".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_ends_with() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::EndsWith,
+            Value::String("world".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::EndsWith,
+            Value::String("hello".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_contains() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::Contains,
+            Value::String("lo wo".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::Contains,
+            Value::String("xyz".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    // === List Operations: IN Operator ===
+
+    #[test]
+    fn test_eval_in_operator() {
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+
+        // 2 IN [1, 2, 3] should be true
+        let expr = FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(Value::Int64(2))),
+            op: BinaryFilterOp::In,
+            right: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), Arc::clone(&store));
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        // 5 IN [1, 2, 3] should be false
+        let expr = FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(Value::Int64(5))),
+            op: BinaryFilterOp::In,
+            right: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), Arc::clone(&store));
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_in_operator_strings() {
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+
+        // "banana" IN ["apple", "banana", "cherry"]
+        let expr = FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(Value::String("banana".into()))),
+            op: BinaryFilterOp::In,
+            right: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::String("apple".into())),
+                FilterExpression::Literal(Value::String("banana".into())),
+                FilterExpression::Literal(Value::String("cherry".into())),
+            ])),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), store);
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === List Index Access ===
+
+    #[test]
+    fn test_eval_list_index_access() {
+        // [10, 20, 30][2] = 30
+        let result = eval_literal_expr(FilterExpression::IndexAccess {
+            base: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(10)),
+                FilterExpression::Literal(Value::Int64(20)),
+                FilterExpression::Literal(Value::Int64(30)),
+            ])),
+            index: Box::new(FilterExpression::Literal(Value::Int64(2))),
+        });
+        assert_eq!(result, Some(Value::Int64(30)));
+    }
+
+    #[test]
+    fn test_eval_list_negative_index() {
+        // [10, 20, 30][-2] = 20
+        let result = eval_literal_expr(FilterExpression::IndexAccess {
+            base: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(10)),
+                FilterExpression::Literal(Value::Int64(20)),
+                FilterExpression::Literal(Value::Int64(30)),
+            ])),
+            index: Box::new(FilterExpression::Literal(Value::Int64(-2))),
+        });
+        assert_eq!(result, Some(Value::Int64(20)));
+    }
+
+    // === CASE / NULLIF Pattern ===
+
+    #[test]
+    fn test_eval_case_simple() {
+        // CASE WHEN true THEN 'yes' ELSE 'no' END
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Literal(Value::Bool(true)),
+                FilterExpression::Literal(Value::String("yes".into())),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::String(
+                "no".into(),
+            )))),
+        });
+        assert_eq!(result, Some(Value::String("yes".into())));
+    }
+
+    #[test]
+    fn test_eval_case_falls_to_else() {
+        // CASE WHEN false THEN 'yes' ELSE 'no' END
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Literal(Value::Bool(false)),
+                FilterExpression::Literal(Value::String("yes".into())),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::String(
+                "no".into(),
+            )))),
+        });
+        assert_eq!(result, Some(Value::String("no".into())));
+    }
+
+    #[test]
+    fn test_eval_case_no_else_returns_null() {
+        // CASE WHEN false THEN 'yes' END (no ELSE, so NULL)
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Literal(Value::Bool(false)),
+                FilterExpression::Literal(Value::String("yes".into())),
+            )],
+            else_clause: None,
+        });
+        assert_eq!(result, Some(Value::Null));
+    }
+
+    #[test]
+    fn test_eval_nullif_via_case() {
+        // NULLIF(a, b) is equivalent to: CASE WHEN a = b THEN NULL ELSE a END
+        // Test NULLIF(5, 5) => NULL
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Binary {
+                    left: Box::new(FilterExpression::Literal(Value::Int64(5))),
+                    op: BinaryFilterOp::Eq,
+                    right: Box::new(FilterExpression::Literal(Value::Int64(5))),
+                },
+                FilterExpression::Literal(Value::Null),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::Int64(5)))),
+        });
+        assert_eq!(result, Some(Value::Null));
+
+        // NULLIF(5, 3) => 5
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Binary {
+                    left: Box::new(FilterExpression::Literal(Value::Int64(5))),
+                    op: BinaryFilterOp::Eq,
+                    right: Box::new(FilterExpression::Literal(Value::Int64(3))),
+                },
+                FilterExpression::Literal(Value::Null),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::Int64(5)))),
+        });
+        assert_eq!(result, Some(Value::Int64(5)));
+    }
+
+    #[test]
+    fn test_eval_simple_case_with_operand() {
+        // CASE 2 WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE 'other' END
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: Some(Box::new(FilterExpression::Literal(Value::Int64(2)))),
+            when_clauses: vec![
+                (
+                    FilterExpression::Literal(Value::Int64(1)),
+                    FilterExpression::Literal(Value::String("one".into())),
+                ),
+                (
+                    FilterExpression::Literal(Value::Int64(2)),
+                    FilterExpression::Literal(Value::String("two".into())),
+                ),
+            ],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::String(
+                "other".into(),
+            )))),
+        });
+        assert_eq!(result, Some(Value::String("two".into())));
+    }
+
+    // === Unary Operators ===
+
+    #[test]
+    fn test_eval_unary_not() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Not,
+            FilterExpression::Literal(Value::Bool(true)),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Not,
+            FilterExpression::Literal(Value::Bool(false)),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_unary_neg() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Neg,
+            FilterExpression::Literal(Value::Int64(42)),
+        ));
+        assert_eq!(result, Some(Value::Int64(-42)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Neg,
+            FilterExpression::Literal(Value::Float64(7.25)),
+        ));
+        assert_eq!(result, Some(Value::Float64(-7.25)));
+    }
+
+    // === Reduce Expression Evaluation ===
+
+    #[test]
+    fn test_eval_reduce_sum() {
+        // reduce(acc = 0, x IN [1, 2, 3] | acc + x) = 6
+        let result = eval_literal_expr(FilterExpression::Reduce {
+            accumulator: "acc".to_string(),
+            initial: Box::new(FilterExpression::Literal(Value::Int64(0))),
+            variable: "x".to_string(),
+            list: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            expression: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("acc".to_string())),
+                op: BinaryFilterOp::Add,
+                right: Box::new(FilterExpression::Variable("x".to_string())),
+            }),
+        });
+        assert_eq!(result, Some(Value::Int64(6)));
+    }
+
+    #[test]
+    fn test_eval_reduce_product() {
+        // reduce(acc = 1, x IN [2, 3, 4] | acc * x) = 24
+        let result = eval_literal_expr(FilterExpression::Reduce {
+            accumulator: "acc".to_string(),
+            initial: Box::new(FilterExpression::Literal(Value::Int64(1))),
+            variable: "x".to_string(),
+            list: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+                FilterExpression::Literal(Value::Int64(4)),
+            ])),
+            expression: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("acc".to_string())),
+                op: BinaryFilterOp::Mul,
+                right: Box::new(FilterExpression::Variable("x".to_string())),
+            }),
+        });
+        assert_eq!(result, Some(Value::Int64(24)));
+    }
+
+    // === List Comprehension ===
+
+    #[test]
+    fn test_eval_list_comprehension_with_filter() {
+        // [x IN [1, 2, 3, 4, 5] WHERE x > 2 | x * 10]
+        // Should produce [30, 40, 50]
+        let result = eval_literal_expr(FilterExpression::ListComprehension {
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+                FilterExpression::Literal(Value::Int64(4)),
+                FilterExpression::Literal(Value::Int64(5)),
+            ])),
+            filter_expr: Some(Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(2))),
+            })),
+            map_expr: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Mul,
+                right: Box::new(FilterExpression::Literal(Value::Int64(10))),
+            }),
+        });
+
+        if let Some(Value::List(items)) = result {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Value::Int64(30));
+            assert_eq!(items[1], Value::Int64(40));
+            assert_eq!(items[2], Value::Int64(50));
+        } else {
+            panic!("Expected List, got {:?}", result);
+        }
+    }
+
+    // === List Predicate (any/all/none/single) ===
+
+    #[test]
+    fn test_eval_list_predicate_any() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::Any,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(5)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(4))),
+            }),
+        });
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_list_predicate_all() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::All,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(10)),
+                FilterExpression::Literal(Value::Int64(20)),
+                FilterExpression::Literal(Value::Int64(30)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(5))),
+            }),
+        });
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_list_predicate_none() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::None,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(10))),
+            }),
+        });
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_list_predicate_single() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::Single,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(5)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(4))),
+            }),
+        });
+        // Only x=5 satisfies x > 4, so exactly one
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === Map key access via index ===
+
+    #[test]
+    fn test_eval_map_key_access() {
+        // {name: 'Alice'}['name'] = 'Alice'
+        let result = eval_literal_expr(FilterExpression::IndexAccess {
+            base: Box::new(FilterExpression::Map(vec![(
+                "name".to_string(),
+                FilterExpression::Literal(Value::String("Alice".into())),
+            )])),
+            index: Box::new(FilterExpression::Literal(Value::String("name".into()))),
+        });
+        assert_eq!(result, Some(Value::String("Alice".into())));
+    }
 }

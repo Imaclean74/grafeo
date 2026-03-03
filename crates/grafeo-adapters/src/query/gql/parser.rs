@@ -138,7 +138,11 @@ impl<'a> Parser<'a> {
                 | TokenKind::Vector  // vector() function
                 | TokenKind::Index   // index-related usage
                 | TokenKind::Dimension // dimension option
-                | TokenKind::Metric // metric option
+                | TokenKind::Metric  // metric option
+                | TokenKind::Set     // SESSION SET
+                | TokenKind::All     // SESSION RESET ALL, UNION ALL
+                | TokenKind::Filter  // FILTER as clause name
+                | TokenKind::Having // HAVING as identifier
         )
     }
 
@@ -1237,6 +1241,7 @@ impl<'a> Parser<'a> {
         // 1. `-[...]->` or `-[:TYPE]->` or `-[:TYPE*1..3]->` (direction determined by trailing arrow)
         // 2. `->` or `<-` or `--` (direction determined by leading arrow)
 
+        let mut edge_where_clause = None;
         let (variable, types, min_hops, max_hops, properties, direction) =
             if self.current.kind == TokenKind::Minus {
                 // Pattern: -[...]->(target) or -[...]-(target)
@@ -1248,7 +1253,8 @@ impl<'a> Parser<'a> {
                         self.advance();
 
                         // Parse variable name if present
-                        // Variable is followed by : (type), * (quantifier), { (properties), or ] (end)
+                        // Variable is followed by : (type), * (quantifier), { (properties),
+                        // WHERE (element filter), or ] (end)
                         let v = if self.is_identifier() {
                             let peek = self.peek_kind();
                             if matches!(
@@ -1257,6 +1263,7 @@ impl<'a> Parser<'a> {
                                     | TokenKind::Star
                                     | TokenKind::LBrace
                                     | TokenKind::RBracket
+                                    | TokenKind::Where
                             ) {
                                 let name = self.get_identifier_name();
                                 self.advance();
@@ -1297,6 +1304,12 @@ impl<'a> Parser<'a> {
                             Vec::new()
                         };
 
+                        // Parse element WHERE clause: [e:TYPE WHERE expr]
+                        if self.current.kind == TokenKind::Where {
+                            self.advance();
+                            edge_where_clause = Some(self.parse_expression()?);
+                        }
+
                         self.expect(TokenKind::RBracket)?;
                         (v, tps, min_h, max_h, edge_props)
                     } else {
@@ -1324,7 +1337,8 @@ impl<'a> Parser<'a> {
                         self.advance();
 
                         // Parse variable name if present
-                        // Variable is followed by : (type), * (quantifier), { (properties), or ] (end)
+                        // Variable is followed by : (type), * (quantifier), { (properties),
+                        // WHERE (element filter), or ] (end)
                         let v = if self.is_identifier() {
                             let peek = self.peek_kind();
                             if matches!(
@@ -1333,6 +1347,7 @@ impl<'a> Parser<'a> {
                                     | TokenKind::Star
                                     | TokenKind::LBrace
                                     | TokenKind::RBracket
+                                    | TokenKind::Where
                             ) {
                                 let name = self.get_identifier_name();
                                 self.advance();
@@ -1372,6 +1387,12 @@ impl<'a> Parser<'a> {
                         } else {
                             Vec::new()
                         };
+
+                        // Parse element WHERE clause: [e:TYPE WHERE expr]
+                        if self.current.kind == TokenKind::Where {
+                            self.advance();
+                            edge_where_clause = Some(self.parse_expression()?);
+                        }
 
                         self.expect(TokenKind::RBracket)?;
                         (v, tps, min_h, max_h, edge_props)
@@ -1430,6 +1451,7 @@ impl<'a> Parser<'a> {
                                     | TokenKind::Star
                                     | TokenKind::LBrace
                                     | TokenKind::RBracket
+                                    | TokenKind::Where
                             ) {
                                 let name = self.get_identifier_name();
                                 self.advance();
@@ -1466,6 +1488,12 @@ impl<'a> Parser<'a> {
                         } else {
                             Vec::new()
                         };
+
+                        // Parse element WHERE clause: [e:TYPE WHERE expr]
+                        if self.current.kind == TokenKind::Where {
+                            self.advance();
+                            edge_where_clause = Some(self.parse_expression()?);
+                        }
 
                         self.expect(TokenKind::RBracket)?;
                         (v, tps, min_h, max_h, edge_props)
@@ -1508,7 +1536,7 @@ impl<'a> Parser<'a> {
             min_hops,
             max_hops,
             properties,
-            where_clause: None, // Element WHERE on edges parsed inside brackets
+            where_clause: edge_where_clause,
             questioned,
             span: None,
         })
@@ -1518,8 +1546,15 @@ impl<'a> Parser<'a> {
     /// or ISO `{m,n}`, `{m,}`, `{,n}`, `{m}`.
     /// Returns (min_hops, max_hops) where None means no quantifier was present.
     fn parse_path_quantifier(&mut self) -> Result<(Option<u32>, Option<u32>)> {
-        // ISO GQL {m,n} quantifier syntax
+        // ISO GQL {m,n} quantifier syntax.
+        // Disambiguate from property map {key: value}: quantifiers start with
+        // an integer or comma, property maps start with an identifier.
         if self.current.kind == TokenKind::LBrace {
+            let next = self.peek_kind();
+            if next != TokenKind::Integer && next != TokenKind::Comma {
+                // Not a quantifier (likely a property map), bail out
+                return Ok((None, None));
+            }
             self.advance(); // consume {
             if self.current.kind == TokenKind::Comma {
                 // {,n}
@@ -2974,7 +3009,10 @@ impl<'a> Parser<'a> {
                 return Err(self.error("Expected NOT after IF"));
             }
             self.advance();
-            if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("EXISTS") {
+            if self.current.kind != TokenKind::Exists
+                && (!self.is_identifier()
+                    || !self.get_identifier_name().eq_ignore_ascii_case("EXISTS"))
+            {
                 return Err(self.error("Expected EXISTS after IF NOT"));
             }
             self.advance();
@@ -3012,18 +3050,20 @@ impl<'a> Parser<'a> {
         self.advance();
 
         // Optional IF EXISTS
-        let if_exists = if self.is_identifier()
-            && self.get_identifier_name().eq_ignore_ascii_case("IF")
-        {
-            self.advance();
-            if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("EXISTS") {
-                return Err(self.error("Expected EXISTS after IF"));
-            }
-            self.advance();
-            true
-        } else {
-            false
-        };
+        let if_exists =
+            if self.is_identifier() && self.get_identifier_name().eq_ignore_ascii_case("IF") {
+                self.advance();
+                if self.current.kind != TokenKind::Exists
+                    && (!self.is_identifier()
+                        || !self.get_identifier_name().eq_ignore_ascii_case("EXISTS"))
+                {
+                    return Err(self.error("Expected EXISTS after IF"));
+                }
+                self.advance();
+                true
+            } else {
+                false
+            };
 
         // Parse graph name
         if !self.is_identifier() {
@@ -4612,5 +4652,503 @@ mod tests {
         let edges = get_first_path_edges(&result);
         assert_eq!(edges[0].types, vec!["KNOWS", "LIKES"]);
         assert_eq!(edges[0].direction, EdgeDirection::Undirected);
+    }
+
+    // ==================== unescape_string ====================
+
+    #[test]
+    fn test_unescape_string_newline() {
+        assert_eq!(unescape_string(r"hello\nworld"), "hello\nworld");
+    }
+
+    #[test]
+    fn test_unescape_string_carriage_return() {
+        assert_eq!(unescape_string(r"line\rend"), "line\rend");
+    }
+
+    #[test]
+    fn test_unescape_string_tab() {
+        assert_eq!(unescape_string(r"col1\tcol2"), "col1\tcol2");
+    }
+
+    #[test]
+    fn test_unescape_string_backslash() {
+        assert_eq!(unescape_string(r"path\\to"), "path\\to");
+    }
+
+    #[test]
+    fn test_unescape_string_single_quote() {
+        assert_eq!(unescape_string(r"it\'s"), "it's");
+    }
+
+    #[test]
+    fn test_unescape_string_double_quote() {
+        assert_eq!(unescape_string(r#"say\"hello\""#), "say\"hello\"");
+    }
+
+    #[test]
+    fn test_unescape_string_unknown_escape() {
+        // Unknown escapes are kept as-is (backslash + char)
+        assert_eq!(unescape_string(r"\z"), "\\z");
+    }
+
+    #[test]
+    fn test_unescape_string_trailing_backslash() {
+        // Trailing backslash with no following char is kept
+        assert_eq!(unescape_string("trailing\\"), "trailing\\");
+    }
+
+    // ==================== DDL / Session Commands ====================
+
+    #[test]
+    fn test_parse_create_graph() {
+        let mut parser = Parser::new("CREATE GRAPH mydb");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "CREATE GRAPH should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::CreateGraph {
+            name,
+            if_not_exists,
+        }) = result.unwrap()
+        {
+            assert_eq!(name, "mydb");
+            assert!(!if_not_exists);
+        } else {
+            panic!("Expected CreateGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_create_graph_if_not_exists() {
+        let mut parser = Parser::new("CREATE GRAPH IF NOT EXISTS mydb");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "CREATE GRAPH IF NOT EXISTS should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::CreateGraph {
+            name,
+            if_not_exists,
+        }) = result.unwrap()
+        {
+            assert_eq!(name, "mydb");
+            assert!(if_not_exists);
+        } else {
+            panic!("Expected CreateGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_create_property_graph() {
+        let mut parser = Parser::new("CREATE PROPERTY GRAPH pg1");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "CREATE PROPERTY GRAPH should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::CreateGraph {
+            name,
+            if_not_exists,
+        }) = result.unwrap()
+        {
+            assert_eq!(name, "pg1");
+            assert!(!if_not_exists);
+        } else {
+            panic!("Expected CreateGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_drop_graph() {
+        let mut parser = Parser::new("DROP GRAPH mydb");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "DROP GRAPH should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::DropGraph { name, if_exists }) =
+            result.unwrap()
+        {
+            assert_eq!(name, "mydb");
+            assert!(!if_exists);
+        } else {
+            panic!("Expected DropGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_drop_graph_if_exists() {
+        let mut parser = Parser::new("DROP GRAPH IF EXISTS mydb");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "DROP GRAPH IF EXISTS should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::DropGraph { name, if_exists }) =
+            result.unwrap()
+        {
+            assert_eq!(name, "mydb");
+            assert!(if_exists);
+        } else {
+            panic!("Expected DropGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_drop_property_graph() {
+        let mut parser = Parser::new("DROP PROPERTY GRAPH pg1");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "DROP PROPERTY GRAPH should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::DropGraph { name, if_exists }) =
+            result.unwrap()
+        {
+            assert_eq!(name, "pg1");
+            assert!(!if_exists);
+        } else {
+            panic!("Expected DropGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_use_graph() {
+        let mut parser = Parser::new("USE GRAPH workspace");
+        let result = parser.parse();
+        assert!(result.is_ok(), "USE GRAPH should parse: {:?}", result.err());
+
+        if let Statement::SessionCommand(SessionCommand::UseGraph(name)) = result.unwrap() {
+            assert_eq!(name, "workspace");
+        } else {
+            panic!("Expected UseGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_session_set_graph() {
+        let mut parser = Parser::new("SESSION SET GRAPH analytics");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SESSION SET GRAPH should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::SessionSetGraph(name)) = result.unwrap() {
+            assert_eq!(name, "analytics");
+        } else {
+            panic!("Expected SessionSetGraph session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_session_set_time_zone() {
+        let mut parser = Parser::new("SESSION SET TIME ZONE 'UTC+5'");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SESSION SET TIME ZONE should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::SessionSetTimeZone(tz)) = result.unwrap() {
+            assert_eq!(tz, "UTC+5");
+        } else {
+            panic!("Expected SessionSetTimeZone session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_session_set_schema() {
+        // SESSION SET SCHEMA maps to SessionSetGraph (schema = graph in GQL)
+        let mut parser = Parser::new("SESSION SET SCHEMA myschema");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SESSION SET SCHEMA should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::SessionSetGraph(name)) = result.unwrap() {
+            assert_eq!(name, "myschema");
+        } else {
+            panic!("Expected SessionSetGraph session command (via SCHEMA)");
+        }
+    }
+
+    #[test]
+    fn test_parse_session_set_parameter() {
+        let mut parser = Parser::new("SESSION SET PARAMETER timeout = 30");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SESSION SET PARAMETER should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::SessionCommand(SessionCommand::SessionSetParameter(name, _value)) =
+            result.unwrap()
+        {
+            assert_eq!(name, "timeout");
+        } else {
+            panic!("Expected SessionSetParameter session command");
+        }
+    }
+
+    #[test]
+    fn test_parse_session_reset() {
+        let mut parser = Parser::new("SESSION RESET");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SESSION RESET should parse: {:?}",
+            result.err()
+        );
+
+        assert!(matches!(
+            result.unwrap(),
+            Statement::SessionCommand(SessionCommand::SessionReset)
+        ));
+    }
+
+    #[test]
+    fn test_parse_session_reset_all() {
+        // SESSION RESET ALL is treated the same as SESSION RESET
+        let mut parser = Parser::new("SESSION RESET ALL");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SESSION RESET ALL should parse: {:?}",
+            result.err()
+        );
+
+        assert!(matches!(
+            result.unwrap(),
+            Statement::SessionCommand(SessionCommand::SessionReset)
+        ));
+    }
+
+    #[test]
+    fn test_parse_session_close() {
+        let mut parser = Parser::new("SESSION CLOSE");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SESSION CLOSE should parse: {:?}",
+            result.err()
+        );
+
+        assert!(matches!(
+            result.unwrap(),
+            Statement::SessionCommand(SessionCommand::SessionClose)
+        ));
+    }
+
+    #[test]
+    fn test_parse_start_transaction() {
+        let mut parser = Parser::new("START TRANSACTION");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "START TRANSACTION should parse: {:?}",
+            result.err()
+        );
+
+        assert!(matches!(
+            result.unwrap(),
+            Statement::SessionCommand(SessionCommand::StartTransaction)
+        ));
+    }
+
+    #[test]
+    fn test_parse_commit() {
+        let mut parser = Parser::new("COMMIT");
+        let result = parser.parse();
+        assert!(result.is_ok(), "COMMIT should parse: {:?}", result.err());
+
+        assert!(matches!(
+            result.unwrap(),
+            Statement::SessionCommand(SessionCommand::Commit)
+        ));
+    }
+
+    #[test]
+    fn test_parse_rollback() {
+        let mut parser = Parser::new("ROLLBACK");
+        let result = parser.parse();
+        assert!(result.is_ok(), "ROLLBACK should parse: {:?}", result.err());
+
+        assert!(matches!(
+            result.unwrap(),
+            Statement::SessionCommand(SessionCommand::Rollback)
+        ));
+    }
+
+    // ==================== Edge WHERE Clause ====================
+
+    #[test]
+    fn test_parse_edge_where_clause() {
+        let mut parser = Parser::new("MATCH (a)-[e:KNOWS WHERE e.since >= 2020]->(b) RETURN a, b");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "Edge WHERE clause should parse: {:?}",
+            result.err()
+        );
+
+        let stmt = result.unwrap();
+        let edges = get_first_path_edges(&stmt);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].variable, Some("e".to_string()));
+        assert_eq!(edges[0].types, vec!["KNOWS"]);
+        assert!(
+            edges[0].where_clause.is_some(),
+            "Edge where_clause should be Some"
+        );
+    }
+
+    // ==================== Path Quantifier Disambiguation ====================
+
+    #[test]
+    fn test_parse_path_quantifier_vs_property_map() {
+        // {1,3} after an edge type is a quantifier (min/max hops)
+        let mut parser = Parser::new("MATCH (a)-[:KNOWS{1,3}]->(b) RETURN a, b");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "{{1,3}} quantifier should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::Query(q) = result.unwrap() {
+            if let Pattern::Path(path) = &q.match_clauses[0].patterns[0].pattern {
+                assert_eq!(path.edges[0].min_hops, Some(1));
+                assert_eq!(path.edges[0].max_hops, Some(3));
+            } else {
+                panic!("Expected path pattern");
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+
+        // {since: 2020} inside a node pattern is a property map, not a quantifier
+        let mut parser2 = Parser::new("MATCH (n:Person {since: 2020}) RETURN n");
+        let result2 = parser2.parse();
+        assert!(
+            result2.is_ok(),
+            "Property map should parse: {:?}",
+            result2.err()
+        );
+
+        if let Statement::Query(q) = result2.unwrap() {
+            if let Pattern::Node(node) = &q.match_clauses[0].patterns[0].pattern {
+                assert_eq!(node.properties.len(), 1);
+                assert_eq!(node.properties[0].0, "since");
+            } else {
+                panic!("Expected node pattern");
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    // ==================== NEXT Composition ====================
+
+    #[test]
+    fn test_parse_next_composition() {
+        let mut parser =
+            Parser::new("MATCH (n:Person) RETURN n.name NEXT MATCH (m:Company) RETURN m.name");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "NEXT composition should parse: {:?}",
+            result.err()
+        );
+
+        if let Statement::CompositeQuery { op, .. } = result.unwrap() {
+            assert_eq!(op, CompositeOp::Next);
+        } else {
+            panic!("Expected CompositeQuery with Next op");
+        }
+    }
+
+    // ==================== FINISH Statement ====================
+
+    #[test]
+    fn test_parse_finish_statement() {
+        let mut parser = Parser::new("MATCH (n) FINISH");
+        let result = parser.parse();
+        assert!(result.is_ok(), "FINISH should parse: {:?}", result.err());
+
+        if let Statement::Query(q) = result.unwrap() {
+            assert!(q.return_clause.is_finish, "Expected is_finish to be true");
+            assert!(
+                q.return_clause.items.is_empty(),
+                "FINISH should have no return items"
+            );
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    // ==================== SELECT Statement ====================
+
+    #[test]
+    fn test_parse_select_statement() {
+        let mut parser = Parser::new("MATCH (n:Person) SELECT n.name");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SELECT should parse: {:?}", result.err());
+
+        if let Statement::Query(q) = result.unwrap() {
+            assert!(!q.return_clause.is_finish);
+            assert_eq!(q.return_clause.items.len(), 1);
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    // ==================== Error Cases for New Commands ====================
+
+    #[test]
+    fn test_parse_error_drop_nothing() {
+        let mut parser = Parser::new("DROP NOTHING");
+        let result = parser.parse();
+        assert!(result.is_err(), "DROP NOTHING should fail");
+    }
+
+    #[test]
+    fn test_parse_error_session_destroy() {
+        let mut parser = Parser::new("SESSION DESTROY");
+        let result = parser.parse();
+        assert!(result.is_err(), "SESSION DESTROY should fail");
+    }
+
+    #[test]
+    fn test_parse_error_start_something() {
+        let mut parser = Parser::new("START SOMETHING");
+        let result = parser.parse();
+        assert!(result.is_err(), "START SOMETHING should fail");
+    }
+
+    #[test]
+    fn test_parse_error_use_something() {
+        let mut parser = Parser::new("USE SOMETHING");
+        let result = parser.parse();
+        assert!(result.is_err(), "USE SOMETHING should fail");
     }
 }

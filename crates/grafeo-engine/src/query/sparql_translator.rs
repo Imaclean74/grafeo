@@ -2442,4 +2442,136 @@ mod tests {
             "Alternative path with 2 predicates should have 2 Union branches"
         );
     }
+
+    // === Inverse Property Path Tests ===
+
+    #[test]
+    fn test_translate_inverse_property_path() {
+        let query = "SELECT ?s WHERE { ?o ^<http://ex.org/knows> ?s }";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "Inverse path translation failed: {:?}",
+            result.err()
+        );
+        let plan = result.unwrap();
+
+        // Inverse path swaps subject and object, so we should get a TripleScan
+        // where the predicate is the inner IRI.
+        fn find_triple_scan(op: &LogicalOperator) -> Option<&TripleScanOp> {
+            match op {
+                LogicalOperator::TripleScan(ts) => Some(ts),
+                LogicalOperator::Project(p) => find_triple_scan(&p.input),
+                LogicalOperator::Filter(f) => find_triple_scan(&f.input),
+                LogicalOperator::Join(j) => {
+                    find_triple_scan(&j.left).or_else(|| find_triple_scan(&j.right))
+                }
+                _ => None,
+            }
+        }
+        let scan = find_triple_scan(&plan.root).expect("Expected TripleScan for inverse path");
+        // The predicate should be the IRI (not the inverse wrapper)
+        assert!(
+            matches!(&scan.predicate, TripleComponent::Iri(_)),
+            "Expected IRI predicate in TripleScan after inverse, got {:?}",
+            scan.predicate
+        );
+    }
+
+    // === translate() returns Ok for various path types ===
+
+    #[test]
+    fn test_translate_ok_for_named_iri_path() {
+        let query = "SELECT ?s ?o WHERE { ?s <http://ex.org/rel> ?o }";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "Named IRI path should translate: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_translate_ok_for_zero_or_one_path() {
+        let query = "SELECT ?s ?o WHERE { ?s <http://ex.org/rel>? ?o }";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "ZeroOrOne path should translate: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_translate_ok_for_rdf_type_shorthand() {
+        let query = "SELECT ?s WHERE { ?s a <http://ex.org/Person> }";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "'a' (rdf:type) shorthand should translate: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_translate_ok_for_negated_property_set() {
+        let query = "SELECT ?s ?o WHERE { ?s !<http://ex.org/skip> ?o }";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "Negated property set should translate: {:?}",
+            result.err()
+        );
+    }
+
+    // === Basic SELECT verification ===
+
+    #[test]
+    fn test_translate_basic_select_structure() {
+        let query = "SELECT ?x ?y WHERE { ?x <http://ex.org/p> ?y }";
+        let result = translate(query);
+        assert!(result.is_ok());
+
+        let plan = result.unwrap();
+        // Top-level should be a Project
+        fn find_project(op: &LogicalOperator) -> Option<&ProjectOp> {
+            match op {
+                LogicalOperator::Project(p) => Some(p),
+                _ => None,
+            }
+        }
+        let project = find_project(&plan.root).expect("Expected Project operator at top level");
+        assert_eq!(
+            project.projections.len(),
+            2,
+            "SELECT ?x ?y should produce 2 projections"
+        );
+    }
+
+    // === OPTIONAL pattern ===
+
+    #[test]
+    fn test_translate_optional_produces_left_join() {
+        let query = "SELECT ?x ?name WHERE { ?x <http://ex.org/type> ?t OPTIONAL { ?x <http://ex.org/name> ?name } }";
+        let result = translate(query);
+        assert!(
+            result.is_ok(),
+            "OPTIONAL should translate: {:?}",
+            result.err()
+        );
+
+        let plan = result.unwrap();
+        fn find_left_join(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::LeftJoin(_) => true,
+                LogicalOperator::Project(p) => find_left_join(&p.input),
+                LogicalOperator::Filter(f) => find_left_join(&f.input),
+                _ => false,
+            }
+        }
+        assert!(
+            find_left_join(&plan.root),
+            "OPTIONAL should produce a LeftJoin operator in the plan"
+        );
+    }
 }

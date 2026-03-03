@@ -206,7 +206,11 @@ impl super::Planner {
                     | LogicalExpression::Unary { .. }
                     | LogicalExpression::List(_)
                     | LogicalExpression::Map(_)
-                    | LogicalExpression::IndexAccess { .. } => {
+                    | LogicalExpression::IndexAccess { .. }
+                    | LogicalExpression::CountSubquery(_)
+                    | LogicalExpression::MapProjection { .. }
+                    | LogicalExpression::Reduce { .. }
+                    | LogicalExpression::PatternComprehension { .. } => {
                         // Convert complex expressions to FilterExpression for evaluation
                         let filter_expr = self.convert_expression(&item.expression)?;
                         projections.push(ProjectExpr::Expression {
