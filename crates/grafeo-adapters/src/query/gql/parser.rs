@@ -173,6 +173,13 @@ impl<'a> Parser<'a> {
 
     /// Parses the input into a statement.
     pub fn parse(&mut self) -> Result<Statement> {
+        // Handle EXPLAIN prefix: wraps the entire following statement
+        if self.is_identifier() && self.get_identifier_name().eq_ignore_ascii_case("EXPLAIN") {
+            self.advance(); // consume EXPLAIN
+            let inner = self.parse()?;
+            return Ok(Statement::Explain(Box::new(inner)));
+        }
+
         let mut left = self.parse_single_statement()?;
 
         // Handle NEXT (linear composition): output of left becomes input of right

@@ -1258,6 +1258,14 @@ impl Session {
             plan
         };
 
+        // EXPLAIN: annotate pushdown hints and return the plan tree
+        if optimized_plan.explain {
+            use crate::query::processor::{annotate_pushdown_hints, explain_result};
+            let mut plan = optimized_plan;
+            annotate_pushdown_hints(&mut plan.root, self.graph_store.as_ref());
+            return Ok(explain_result(&plan));
+        }
+
         // Get transaction context for MVCC visibility
         let (viewing_epoch, tx_id) = self.get_transaction_context();
 

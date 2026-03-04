@@ -4,12 +4,13 @@
 
 use crate::query::plan::{
     AggregateExpr, AggregateFunction, AggregateOp, BinaryOp, CreateEdgeOp, CreateNodeOp,
-    DeleteNodeOp, DistinctOp, ExpandDirection, ExpandOp, FilterOp, JoinOp, JoinType, LeftJoinOp,
-    LimitOp, LogicalExpression, LogicalOperator, LogicalPlan, MapCollectOp, NodeScanOp, PathMode,
-    ProjectOp, Projection, ReturnItem, ReturnOp, SetPropertyOp, SkipOp, SortKey, SortOp, SortOrder,
-    UnaryOp, UnionOp, UnwindOp,
+    DeleteNodeOp, DistinctOp, ExpandDirection, ExpandOp, JoinOp, JoinType, LeftJoinOp,
+    LogicalExpression, LogicalOperator, LogicalPlan, MapCollectOp, NodeScanOp, PathMode, ProjectOp,
+    Projection, ReturnItem, SetPropertyOp, SortKey, SortOrder, UnaryOp, UnionOp, UnwindOp,
 };
-use crate::query::translator_common::VarGen;
+use crate::query::translator_common::{
+    VarGen, wrap_filter, wrap_limit, wrap_return, wrap_skip, wrap_sort,
+};
 use grafeo_adapters::query::gremlin::{self, ast};
 use grafeo_common::types::Value;
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
@@ -325,11 +326,7 @@ impl GremlinTranslator {
                     alias: None,
                 }]
             });
-            plan = LogicalOperator::Return(ReturnOp {
-                items,
-                distinct: false,
-                input: Box::new(plan),
-            });
+            plan = wrap_return(plan, items, false);
         }
 
         Ok(LogicalPlan::new(plan))
@@ -405,14 +402,14 @@ impl GremlinTranslator {
             input: Box::new(plan),
         });
 
-        let final_plan = LogicalOperator::Return(ReturnOp {
-            items: vec![ReturnItem {
+        let final_plan = wrap_return(
+            create_edge,
+            vec![ReturnItem {
                 expression: LogicalExpression::Variable(edge_var),
                 alias: None,
             }],
-            distinct: false,
-            input: Box::new(create_edge),
-        });
+            false,
+        );
 
         Ok(LogicalPlan::new(final_plan))
     }
@@ -480,10 +477,7 @@ impl GremlinTranslator {
                     && !ids.is_empty()
                 {
                     let id_filter = self.build_id_filter(&var, ids);
-                    plan = LogicalOperator::Filter(FilterOp {
-                        predicate: id_filter,
-                        input: Box::new(plan),
-                    });
+                    plan = wrap_filter(plan, id_filter);
                 }
 
                 Ok(plan)
@@ -519,10 +513,7 @@ impl GremlinTranslator {
                     && !ids.is_empty()
                 {
                     let id_filter = self.build_id_filter(&edge_var, ids);
-                    plan = LogicalOperator::Filter(FilterOp {
-                        predicate: id_filter,
-                        input: Box::new(plan),
-                    });
+                    plan = wrap_filter(plan, id_filter);
                 }
 
                 Ok(plan)
@@ -663,10 +654,7 @@ impl GremlinTranslator {
             // Filter steps
             ast::Step::Has(has_step) => {
                 let predicate = self.translate_has_step(has_step, current_var)?;
-                let plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(input),
-                });
+                let plan = wrap_filter(input, predicate);
                 Ok((plan, None))
             }
             ast::Step::HasLabel(labels) => {
@@ -703,18 +691,12 @@ impl GremlinTranslator {
                     }
                     result
                 };
-                let plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(input),
-                });
+                let plan = wrap_filter(input, predicate);
                 Ok((plan, None))
             }
             ast::Step::HasId(ids) => {
                 let predicate = self.build_id_filter(current_var, ids);
-                let plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(input),
-                });
+                let plan = wrap_filter(input, predicate);
                 Ok((plan, None))
             }
             ast::Step::HasNot(key) => {
@@ -725,10 +707,7 @@ impl GremlinTranslator {
                         property: key.clone(),
                     }),
                 };
-                let plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(input),
-                });
+                let plan = wrap_filter(input, predicate);
                 Ok((plan, None))
             }
             ast::Step::Dedup(keys) => {
@@ -746,28 +725,16 @@ impl GremlinTranslator {
                 Ok((plan, None))
             }
             ast::Step::Limit(n) => {
-                let plan = LogicalOperator::Limit(LimitOp {
-                    count: *n,
-                    input: Box::new(input),
-                });
+                let plan = wrap_limit(input, *n);
                 Ok((plan, None))
             }
             ast::Step::Skip(n) => {
-                let plan = LogicalOperator::Skip(SkipOp {
-                    count: *n,
-                    input: Box::new(input),
-                });
+                let plan = wrap_skip(input, *n);
                 Ok((plan, None))
             }
             ast::Step::Range(start, end) => {
-                let plan = LogicalOperator::Skip(SkipOp {
-                    count: *start,
-                    input: Box::new(input),
-                });
-                let plan = LogicalOperator::Limit(LimitOp {
-                    count: end - start,
-                    input: Box::new(plan),
-                });
+                let plan = wrap_skip(input, *start);
+                let plan = wrap_limit(plan, end - start);
                 Ok((plan, None))
             }
 
@@ -955,10 +922,7 @@ impl GremlinTranslator {
                         })
                         .collect()
                 };
-                let plan = LogicalOperator::Sort(SortOp {
-                    keys,
-                    input: Box::new(input),
-                });
+                let plan = wrap_sort(input, keys);
                 Ok((plan, None))
             }
 
@@ -1217,10 +1181,7 @@ impl GremlinTranslator {
                         right: Box::new(combined),
                     };
                 }
-                let plan = LogicalOperator::Filter(FilterOp {
-                    predicate: combined,
-                    input: Box::new(input),
-                });
+                let plan = wrap_filter(input, combined);
                 Ok((plan, None))
             }
 
@@ -1243,23 +1204,20 @@ impl GremlinTranslator {
                         right: Box::new(combined),
                     };
                 }
-                let plan = LogicalOperator::Filter(FilterOp {
-                    predicate: combined,
-                    input: Box::new(input),
-                });
+                let plan = wrap_filter(input, combined);
                 Ok((plan, None))
             }
 
             // not() filter: negate a sub-traversal filter
             ast::Step::Not(steps) => {
                 if let Some(pred) = self.steps_to_predicate(steps, current_var)? {
-                    let plan = LogicalOperator::Filter(FilterOp {
-                        predicate: LogicalExpression::Unary {
+                    let plan = wrap_filter(
+                        input,
+                        LogicalExpression::Unary {
                             op: UnaryOp::Not,
                             operand: Box::new(pred),
                         },
-                        input: Box::new(input),
-                    });
+                    );
                     Ok((plan, None))
                 } else {
                     Ok((input, None))
@@ -1270,10 +1228,7 @@ impl GremlinTranslator {
             ast::Step::Where(clause) => match clause {
                 ast::WhereClause::Traversal(steps) => {
                     if let Some(pred) = self.steps_to_predicate(steps, current_var)? {
-                        let plan = LogicalOperator::Filter(FilterOp {
-                            predicate: pred,
-                            input: Box::new(input),
-                        });
+                        let plan = wrap_filter(input, pred);
                         Ok((plan, None))
                     } else {
                         Ok((input, None))
@@ -1282,10 +1237,7 @@ impl GremlinTranslator {
                 ast::WhereClause::Predicate(_var, pred) => {
                     let prop_expr = LogicalExpression::Variable(current_var.to_string());
                     let predicate = Self::translate_predicate(pred, prop_expr)?;
-                    let plan = LogicalOperator::Filter(FilterOp {
-                        predicate,
-                        input: Box::new(input),
-                    });
+                    let plan = wrap_filter(input, predicate);
                     Ok((plan, None))
                 }
             },
@@ -1294,10 +1246,7 @@ impl GremlinTranslator {
             ast::Step::Filter(pred) => {
                 let prop_expr = LogicalExpression::Variable(current_var.to_string());
                 let predicate = Self::translate_predicate(pred, prop_expr)?;
-                let plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(input),
-                });
+                let plan = wrap_filter(input, predicate);
                 Ok((plan, None))
             }
 
@@ -1323,10 +1272,7 @@ impl GremlinTranslator {
 
                 if let Some(pred) = cond_pred {
                     // True branch: filter by condition, then apply true steps
-                    let mut true_plan = LogicalOperator::Filter(FilterOp {
-                        predicate: pred.clone(),
-                        input: Box::new(input.clone()),
-                    });
+                    let mut true_plan = wrap_filter(input.clone(), pred.clone());
                     let mut true_var = current_var.to_string();
                     for step in &clause.true_branch {
                         let (new_plan, new_var) =
@@ -1342,10 +1288,7 @@ impl GremlinTranslator {
                         op: UnaryOp::Not,
                         operand: Box::new(pred),
                     };
-                    let mut false_plan = LogicalOperator::Filter(FilterOp {
-                        predicate: negated,
-                        input: Box::new(input),
-                    });
+                    let mut false_plan = wrap_filter(input, negated);
                     let mut false_var = current_var.to_string();
                     if let Some(false_steps) = &clause.false_branch {
                         for step in false_steps {
@@ -1839,6 +1782,7 @@ impl GremlinTranslator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::plan::{FilterOp, LimitOp, SkipOp, SortOp};
 
     // === Basic Traversal Tests ===
 

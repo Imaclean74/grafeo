@@ -1109,6 +1109,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1259,6 +1260,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1285,6 +1287,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1325,6 +1328,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1367,6 +1371,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1387,6 +1392,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1406,6 +1412,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1428,6 +1435,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -1450,6 +1458,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -2025,6 +2034,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -2062,6 +2072,7 @@ mod tests {
                 label: Some("Data".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);
@@ -2129,6 +2140,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let default_card = default_est.estimate(&filter);
@@ -2170,6 +2182,7 @@ mod tests {
                 label: Some("Person".to_string()),
                 input: None,
             })),
+            pushdown_hint: None,
         });
 
         let cardinality = estimator.estimate(&filter);

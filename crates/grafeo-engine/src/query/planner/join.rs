@@ -1,5 +1,6 @@
 //! Join, union, and distinct planning.
 
+use super::common;
 use super::*;
 
 impl super::Planner {
@@ -81,12 +82,6 @@ impl super::Planner {
 
     /// Plans a UNION operator.
     pub(super) fn plan_union(&self, union: &UnionOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
-        if union.inputs.is_empty() {
-            return Err(Error::Internal(
-                "Union requires at least one input".to_string(),
-            ));
-        }
-
         let mut inputs = Vec::with_capacity(union.inputs.len());
         let mut columns = Vec::new();
 
@@ -98,10 +93,8 @@ impl super::Planner {
             inputs.push(op);
         }
 
-        let output_schema = self.derive_schema_from_columns(&columns);
-        let operator = Box::new(UnionOperator::new(inputs, output_schema));
-
-        Ok((operator, columns))
+        let schema = self.derive_schema_from_columns(&columns);
+        common::build_union(inputs, columns, schema)
     }
 
     /// Plans a DISTINCT operator.
@@ -110,26 +103,13 @@ impl super::Planner {
         distinct: &DistinctOp,
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (input_op, columns) = self.plan_operator(&distinct.input)?;
-        let output_schema = self.derive_schema_from_columns(&columns);
-        let operator: Box<dyn Operator> = if let Some(ref dist_cols) = distinct.columns {
-            // Resolve column names to indices for column-specific dedup
-            let col_indices: Vec<usize> = dist_cols
-                .iter()
-                .filter_map(|name| columns.iter().position(|c| c == name))
-                .collect();
-            if col_indices.is_empty() {
-                Box::new(DistinctOperator::new(input_op, output_schema))
-            } else {
-                Box::new(DistinctOperator::on_columns(
-                    input_op,
-                    col_indices,
-                    output_schema,
-                ))
-            }
-        } else {
-            Box::new(DistinctOperator::new(input_op, output_schema))
-        };
-        Ok((operator, columns))
+        let schema = self.derive_schema_from_columns(&columns);
+        Ok(common::build_distinct(
+            input_op,
+            columns,
+            distinct.columns.as_deref(),
+            schema,
+        ))
     }
 
     /// Plans an EXCEPT operator.
@@ -139,14 +119,10 @@ impl super::Planner {
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (left_op, columns) = self.plan_operator(&except.left)?;
         let (right_op, _) = self.plan_operator(&except.right)?;
-        let output_schema = self.derive_schema_from_columns(&columns);
-        let operator = Box::new(ExceptOperator::new(
-            left_op,
-            right_op,
-            except.all,
-            output_schema,
-        ));
-        Ok((operator, columns))
+        let schema = self.derive_schema_from_columns(&columns);
+        Ok(common::build_except(
+            left_op, right_op, columns, except.all, schema,
+        ))
     }
 
     /// Plans an INTERSECT operator.
@@ -156,14 +132,14 @@ impl super::Planner {
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (left_op, columns) = self.plan_operator(&intersect.left)?;
         let (right_op, _) = self.plan_operator(&intersect.right)?;
-        let output_schema = self.derive_schema_from_columns(&columns);
-        let operator = Box::new(IntersectOperator::new(
+        let schema = self.derive_schema_from_columns(&columns);
+        Ok(common::build_intersect(
             left_op,
             right_op,
+            columns,
             intersect.all,
-            output_schema,
-        ));
-        Ok((operator, columns))
+            schema,
+        ))
     }
 
     /// Plans an OTHERWISE operator.
@@ -173,16 +149,18 @@ impl super::Planner {
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (left_op, columns) = self.plan_operator(&otherwise.left)?;
         let (right_op, _) = self.plan_operator(&otherwise.right)?;
-        let operator = Box::new(OtherwiseOperator::new(left_op, right_op));
-        Ok((operator, columns))
+        Ok(common::build_otherwise(left_op, right_op, columns))
     }
 
     /// Plans an APPLY (lateral join) operator.
     pub(super) fn plan_apply(&self, apply: &ApplyOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
-        let (outer_op, mut columns) = self.plan_operator(&apply.input)?;
+        let (outer_op, columns) = self.plan_operator(&apply.input)?;
         let (inner_op, inner_columns) = self.plan_operator(&apply.subplan)?;
-        columns.extend(inner_columns);
-        let operator = Box::new(ApplyOperator::new(outer_op, inner_op));
-        Ok((operator, columns))
+        Ok(common::build_apply(
+            outer_op,
+            inner_op,
+            columns,
+            inner_columns,
+        ))
     }
 }

@@ -4,15 +4,17 @@
 
 use crate::query::plan::{
     self as plan, AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp,
-    CallProcedureOp, CreateEdgeOp, CreateNodeOp, DeleteNodeOp, DistinctOp, ExceptOp,
-    ExpandDirection, ExpandOp, FilterOp, IntersectOp, JoinOp, JoinType, LeftJoinOp, LimitOp,
-    LogicalExpression, LogicalOperator, LogicalPlan, MergeOp, MergeRelationshipOp, NodeScanOp,
-    OtherwiseOp, PathMode, ProcedureYield, ProjectOp, Projection, RemoveLabelOp, ReturnItem,
-    ReturnOp, SetPropertyOp, ShortestPathOp, SkipOp, SortKey, SortOp, SortOrder, UnaryOp, UnionOp,
-    UnwindOp,
+    CallProcedureOp, CreateEdgeOp, CreateNodeOp, DeleteNodeOp, ExceptOp, ExpandDirection, ExpandOp,
+    IntersectOp, JoinOp, JoinType, LeftJoinOp, LogicalExpression, LogicalOperator, LogicalPlan,
+    MergeOp, MergeRelationshipOp, NodeScanOp, OtherwiseOp, PathMode, ProcedureYield, ProjectOp,
+    Projection, RemoveLabelOp, ReturnItem, SetPropertyOp, ShortestPathOp, SortKey, SortOrder,
+    UnaryOp, UnionOp, UnwindOp,
 };
+#[cfg(test)]
+use crate::query::plan::{FilterOp, LimitOp, SkipOp};
 use crate::query::translator_common::{
-    combine_with_and, is_aggregate_function, to_aggregate_function,
+    combine_with_and, is_aggregate_function, to_aggregate_function, wrap_distinct, wrap_filter,
+    wrap_limit, wrap_return, wrap_skip, wrap_sort,
 };
 use grafeo_adapters::query::gql::{self, ast};
 use grafeo_common::types::Value;
@@ -21,7 +23,7 @@ use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
 /// Result of translating a GQL query: either a logical plan, session command, or schema command.
 #[derive(Debug)]
 pub enum GqlTranslationResult {
-    /// A query plan to execute.
+    /// A query plan to execute (or EXPLAIN if `plan.explain` is true).
     Plan(LogicalPlan),
     /// A session or transaction command (not a query plan).
     SessionCommand(ast::SessionCommand),
@@ -78,6 +80,11 @@ impl GqlTranslator {
             ast::Statement::Schema(schema) => {
                 Ok(GqlTranslationResult::SchemaCommand(schema.clone()))
             }
+            ast::Statement::Explain(inner) => {
+                let mut plan = self.translate_statement(inner)?;
+                plan.explain = true;
+                Ok(GqlTranslationResult::Plan(plan))
+            }
             other => self
                 .translate_statement(other)
                 .map(GqlTranslationResult::Plan),
@@ -100,6 +107,7 @@ impl GqlTranslator {
                 QueryErrorKind::Semantic,
                 "Session commands cannot be executed as queries",
             ))),
+            ast::Statement::Explain(inner) => self.translate_statement(inner),
         }
     }
 
@@ -120,10 +128,7 @@ impl GqlTranslator {
                 let root = if op == ast::CompositeOp::UnionAll {
                     union_op
                 } else {
-                    LogicalOperator::Distinct(DistinctOp {
-                        input: Box::new(union_op),
-                        columns: None,
-                    })
+                    wrap_distinct(union_op)
                 };
                 Ok(LogicalPlan::new(root))
             }
@@ -188,10 +193,7 @@ impl GqlTranslator {
         // Apply WHERE filter on yielded rows
         if let Some(where_clause) = &call.where_clause {
             let predicate = self.translate_expression(&where_clause.expression)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         // Apply RETURN clause (with ORDER BY, SKIP, LIMIT)
@@ -211,11 +213,7 @@ impl GqlTranslator {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                plan = LogicalOperator::Return(ReturnOp {
-                    items: return_items,
-                    distinct: return_clause.distinct,
-                    input: Box::new(plan),
-                });
+                plan = wrap_return(plan, return_items, return_clause.distinct);
             }
 
             // Apply ORDER BY (wraps Return so aliases are visible)
@@ -234,30 +232,21 @@ impl GqlTranslator {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                plan = LogicalOperator::Sort(SortOp {
-                    keys,
-                    input: Box::new(plan),
-                });
+                plan = wrap_sort(plan, keys);
             }
 
             // Apply SKIP
             if let Some(skip_expr) = &return_clause.skip
                 && let ast::Expression::Literal(ast::Literal::Integer(n)) = skip_expr
             {
-                plan = LogicalOperator::Skip(SkipOp {
-                    count: *n as usize,
-                    input: Box::new(plan),
-                });
+                plan = wrap_skip(plan, *n as usize);
             }
 
             // Apply LIMIT
             if let Some(limit_expr) = &return_clause.limit
                 && let ast::Expression::Literal(ast::Literal::Integer(n)) = limit_expr
             {
-                plan = LogicalOperator::Limit(LimitOp {
-                    count: *n as usize,
-                    input: Box::new(plan),
-                });
+                plan = wrap_limit(plan, *n as usize);
             }
         }
 
@@ -286,10 +275,7 @@ impl GqlTranslator {
                 {
                     if let Some(where_clause) = &query.where_clause {
                         let predicate = self.translate_expression(&where_clause.expression)?;
-                        plan = LogicalOperator::Filter(FilterOp {
-                            predicate,
-                            input: Box::new(plan),
-                        });
+                        plan = wrap_filter(plan, predicate);
                     }
                     where_applied = true;
                 }
@@ -469,10 +455,7 @@ impl GqlTranslator {
         // Apply WHERE filter (skip if already applied before a mutation clause)
         if !where_applied && let Some(where_clause) = &query.where_clause {
             let predicate = self.translate_expression(&where_clause.expression)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         // Legacy path: handle SET/REMOVE/CREATE/DELETE from individual fields.
@@ -567,18 +550,12 @@ impl GqlTranslator {
             // Apply WHERE filter if present in WITH clause
             if let Some(where_clause) = &with_clause.where_clause {
                 let predicate = self.translate_expression(&where_clause.expression)?;
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, predicate);
             }
 
             // Handle DISTINCT
             if with_clause.distinct {
-                plan = LogicalOperator::Distinct(DistinctOp {
-                    input: Box::new(plan),
-                    columns: None,
-                });
+                plan = wrap_distinct(plan);
             }
         }
 
@@ -586,29 +563,20 @@ impl GqlTranslator {
         if let Some(skip_expr) = &query.return_clause.skip
             && let ast::Expression::Literal(ast::Literal::Integer(n)) = skip_expr
         {
-            plan = LogicalOperator::Skip(SkipOp {
-                count: *n as usize,
-                input: Box::new(plan),
-            });
+            plan = wrap_skip(plan, *n as usize);
         }
 
         // Apply LIMIT
         if let Some(limit_expr) = &query.return_clause.limit
             && let ast::Expression::Literal(ast::Literal::Integer(n)) = limit_expr
         {
-            plan = LogicalOperator::Limit(LimitOp {
-                count: *n as usize,
-                input: Box::new(plan),
-            });
+            plan = wrap_limit(plan, *n as usize);
         }
 
         // FINISH: consume input, return empty result (mutations already applied)
         if query.return_clause.is_finish {
             // Wrap in a Limit(0) to consume input but return no rows
-            plan = LogicalOperator::Limit(LimitOp {
-                count: 0,
-                input: Box::new(plan),
-            });
+            plan = wrap_limit(plan, 0);
             return Ok(LogicalPlan::new(plan));
         }
 
@@ -656,11 +624,7 @@ impl GqlTranslator {
             });
 
             if let Some(return_items) = post_return {
-                plan = LogicalOperator::Return(ReturnOp {
-                    items: return_items,
-                    distinct: query.return_clause.distinct,
-                    input: Box::new(agg_op),
-                });
+                plan = wrap_return(agg_op, return_items, query.return_clause.distinct);
             } else {
                 plan = agg_op;
             }
@@ -682,10 +646,7 @@ impl GqlTranslator {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                plan = LogicalOperator::Sort(SortOp {
-                    keys,
-                    input: Box::new(plan),
-                });
+                plan = wrap_sort(plan, keys);
             }
 
             // Note: For aggregate queries, we don't add a Return operator
@@ -713,11 +674,7 @@ impl GqlTranslator {
                     .collect::<Result<Vec<_>>>()?
             };
 
-            plan = LogicalOperator::Return(ReturnOp {
-                items: return_items,
-                distinct: query.return_clause.distinct,
-                input: Box::new(plan),
-            });
+            plan = wrap_return(plan, return_items, query.return_clause.distinct);
 
             // Apply ORDER BY (wraps Return so aliases are visible)
             if let Some(order_by) = &query.return_clause.order_by {
@@ -735,10 +692,7 @@ impl GqlTranslator {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                plan = LogicalOperator::Sort(SortOp {
-                    keys,
-                    input: Box::new(plan),
-                });
+                plan = wrap_sort(plan, keys);
             }
         }
 
@@ -1267,29 +1221,20 @@ impl GqlTranslator {
             // Only add filter for non-simple expressions (simple Label already used in NodeScan)
             if !matches!(label_expr, ast::LabelExpression::Label(_)) {
                 let predicate = Self::translate_label_expression(&variable, label_expr);
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, predicate);
             }
         }
 
         // Add filter for node pattern properties (e.g., {name: 'Alice'})
         if !node.properties.is_empty() {
             let predicate = self.build_property_predicate(&variable, &node.properties)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         // Add element pattern WHERE clause (e.g., (n WHERE n.age > 30))
         if let Some(ref where_expr) = node.where_clause {
             let predicate = self.translate_expression(where_expr)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         Ok(plan)
@@ -1385,19 +1330,13 @@ impl GqlTranslator {
         // Add filter for source node properties (e.g., {id: 'a'})
         if !path.source.properties.is_empty() {
             let predicate = self.build_property_predicate(&source_var, &path.source.properties)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         // Add element WHERE clause for source node
         if let Some(ref where_expr) = path.source.where_clause {
             let predicate = self.translate_expression(where_expr)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         // Process each edge in the chain
@@ -1461,42 +1400,31 @@ impl GqlTranslator {
                 && let Some(ref ev) = edge_var_for_filter
             {
                 let predicate = self.build_property_predicate(ev, &edge.properties)?;
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, predicate);
             }
 
             // Add element WHERE clause for edge
             if let Some(ref where_expr) = edge.where_clause {
                 let predicate = self.translate_expression(where_expr)?;
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, predicate);
             }
 
             // Add filter for target node properties
             if !edge.target.properties.is_empty() {
                 let predicate =
                     self.build_property_predicate(&target_var, &edge.target.properties)?;
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, predicate);
             }
 
             // Add filter for target node labels (colon syntax or IS expression)
             if let Some(ref label_expr) = edge.target.label_expression {
                 let predicate = Self::translate_label_expression(&target_var, label_expr);
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, predicate);
             } else if !edge.target.labels.is_empty() {
                 let label = edge.target.labels[0].clone();
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate: LogicalExpression::FunctionCall {
+                plan = wrap_filter(
+                    plan,
+                    LogicalExpression::FunctionCall {
                         name: "hasLabel".into(),
                         args: vec![
                             LogicalExpression::Variable(target_var.clone()),
@@ -1504,17 +1432,13 @@ impl GqlTranslator {
                         ],
                         distinct: false,
                     },
-                    input: Box::new(plan),
-                });
+                );
             }
 
             // Add element WHERE clause for target node
             if let Some(ref where_expr) = edge.target.where_clause {
                 let predicate = self.translate_expression(where_expr)?;
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, predicate);
             }
 
             // Questioned edge: wrap expand + all filters in a LeftJoin so the
@@ -1746,14 +1670,14 @@ impl GqlTranslator {
             }
         }
 
-        let ret = LogicalOperator::Return(ReturnOp {
-            items: vec![ReturnItem {
+        let ret = wrap_return(
+            plan.unwrap(),
+            vec![ReturnItem {
                 expression: LogicalExpression::Variable(last_variable),
                 alias: None,
             }],
-            distinct: false,
-            input: Box::new(plan.unwrap()),
-        });
+            false,
+        );
 
         Ok(LogicalPlan::new(ret))
     }
@@ -2100,10 +2024,7 @@ impl GqlTranslator {
 
         if let Some(where_clause) = &query.where_clause {
             let predicate = self.translate_expression(&where_clause.expression)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         Ok(plan)

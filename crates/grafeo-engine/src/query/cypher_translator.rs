@@ -5,14 +5,15 @@
 
 use crate::query::plan::{
     AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp, CallProcedureOp,
-    CreateEdgeOp, CreateNodeOp, DeleteNodeOp, DistinctOp, ExpandDirection, ExpandOp, FilterOp,
-    LeftJoinOp, LimitOp, ListPredicateKind, LogicalExpression, LogicalOperator, LogicalPlan,
-    MapProjectionEntry, MergeOp, MergeRelationshipOp, NodeScanOp, PathMode, ProcedureYield,
-    ProjectOp, Projection, RemoveLabelOp, ReturnItem, ReturnOp, SetPropertyOp, ShortestPathOp,
-    SkipOp, SortKey, SortOp, SortOrder, UnaryOp, UnionOp, UnwindOp,
+    CreateEdgeOp, CreateNodeOp, DeleteNodeOp, ExpandDirection, ExpandOp, LeftJoinOp,
+    ListPredicateKind, LogicalExpression, LogicalOperator, LogicalPlan, MapProjectionEntry,
+    MergeOp, MergeRelationshipOp, NodeScanOp, PathMode, ProcedureYield, ProjectOp, Projection,
+    RemoveLabelOp, ReturnItem, SetPropertyOp, ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp,
+    UnwindOp,
 };
 use crate::query::translator_common::{
-    combine_with_and, is_aggregate_function, to_aggregate_function,
+    combine_with_and, is_aggregate_function, to_aggregate_function, wrap_distinct, wrap_filter,
+    wrap_limit, wrap_return, wrap_skip, wrap_sort,
 };
 use grafeo_adapters::query::cypher::{self, ast};
 use grafeo_common::types::Value;
@@ -95,13 +96,15 @@ impl CypherTranslator {
                 let root = if *all {
                     union_op
                 } else {
-                    LogicalOperator::Distinct(DistinctOp {
-                        input: Box::new(union_op),
-                        columns: None,
-                    })
+                    wrap_distinct(union_op)
                 };
 
                 Ok(LogicalPlan::new(root))
+            }
+            ast::Statement::Explain(inner) => {
+                let mut plan = self.translate_statement(inner)?;
+                plan.explain = true;
+                Ok(plan)
             }
         }
     }
@@ -335,10 +338,7 @@ impl CypherTranslator {
         // Add filter for inline properties (e.g., {city: 'NYC'})
         if !node.properties.is_empty() {
             let predicate = self.build_property_predicate(&variable, &node.properties)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         Ok(plan)
@@ -473,10 +473,7 @@ impl CypherTranslator {
                 op: BinaryOp::Eq,
                 right: Box::new(self.translate_expression(value)?),
             };
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate: filter_expr,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, filter_expr);
         }
 
         // Get the target node info from the relationship chain
@@ -506,10 +503,7 @@ impl CypherTranslator {
                     op: BinaryOp::Eq,
                     right: Box::new(self.translate_expression(value)?),
                 };
-                plan = LogicalOperator::Filter(FilterOp {
-                    predicate: filter_expr,
-                    input: Box::new(plan),
-                });
+                plan = wrap_filter(plan, filter_expr);
             }
 
             let direction = match rel.direction {
@@ -580,8 +574,9 @@ impl CypherTranslator {
         });
 
         if let Some(label) = target_label {
-            Ok(LogicalOperator::Filter(FilterOp {
-                predicate: LogicalExpression::FunctionCall {
+            Ok(wrap_filter(
+                expand,
+                LogicalExpression::FunctionCall {
                     name: "hasLabel".into(),
                     args: vec![
                         LogicalExpression::Variable(to_variable),
@@ -589,8 +584,7 @@ impl CypherTranslator {
                     ],
                     distinct: false,
                 },
-                input: Box::new(expand),
-            }))
+            ))
         } else {
             Ok(expand)
         }
@@ -609,10 +603,7 @@ impl CypherTranslator {
         })?;
         let predicate = self.translate_expression(&where_clause.predicate)?;
 
-        Ok(LogicalOperator::Filter(FilterOp {
-            predicate,
-            input: Box::new(input),
-        }))
+        Ok(wrap_filter(input, predicate))
     }
 
     fn translate_with(
@@ -642,17 +633,11 @@ impl CypherTranslator {
 
         if let Some(where_clause) = &with_clause.where_clause {
             let predicate = self.translate_expression(&where_clause.predicate)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         if with_clause.distinct {
-            plan = LogicalOperator::Distinct(DistinctOp {
-                input: Box::new(plan),
-                columns: None,
-            });
+            plan = wrap_distinct(plan);
         }
 
         Ok(plan)
@@ -680,7 +665,7 @@ impl CypherTranslator {
 
     fn translate_merge_statement(&self, merge: &ast::MergeClause) -> Result<LogicalPlan> {
         let op = self.translate_merge(merge, None)?;
-        Ok(LogicalPlan { root: op })
+        Ok(LogicalPlan::new(op))
     }
 
     fn translate_merge(
@@ -914,11 +899,7 @@ impl CypherTranslator {
 
             if let Some(return_items) = post_return {
                 // Wrapped aggregates need a post-projection
-                Ok(LogicalOperator::Return(ReturnOp {
-                    items: return_items,
-                    distinct: return_clause.distinct,
-                    input: Box::new(agg_op),
-                }))
+                Ok(wrap_return(agg_op, return_items, return_clause.distinct))
             } else {
                 Ok(agg_op)
             }
@@ -942,11 +923,7 @@ impl CypherTranslator {
                     .collect::<Result<_>>()?,
             };
 
-            Ok(LogicalOperator::Return(ReturnOp {
-                items,
-                distinct: return_clause.distinct,
-                input: Box::new(input),
-            }))
+            Ok(wrap_return(input, items, return_clause.distinct))
         }
     }
 
@@ -1174,10 +1151,7 @@ impl CypherTranslator {
             })
             .collect::<Result<_>>()?;
 
-        Ok(LogicalOperator::Sort(SortOp {
-            keys,
-            input: Box::new(input),
-        }))
+        Ok(wrap_sort(input, keys))
     }
 
     fn translate_skip(
@@ -1193,10 +1167,7 @@ impl CypherTranslator {
         })?;
         let count = self.eval_as_usize(expr)?;
 
-        Ok(LogicalOperator::Skip(SkipOp {
-            count,
-            input: Box::new(input),
-        }))
+        Ok(wrap_skip(input, count))
     }
 
     fn translate_limit(
@@ -1212,10 +1183,7 @@ impl CypherTranslator {
         })?;
         let count = self.eval_as_usize(expr)?;
 
-        Ok(LogicalOperator::Limit(LimitOp {
-            count,
-            input: Box::new(input),
-        }))
+        Ok(wrap_limit(input, count))
     }
 
     fn translate_create_clause(
@@ -1680,10 +1648,7 @@ impl CypherTranslator {
                 // Apply optional WHERE filter
                 let subplan = if let Some(where_expr) = where_clause {
                     let pred = self.translate_expression(where_expr)?;
-                    LogicalOperator::Filter(FilterOp {
-                        input: Box::new(pattern_plan),
-                        predicate: pred,
-                    })
+                    wrap_filter(pattern_plan, pred)
                 } else {
                     pattern_plan
                 };
@@ -1889,6 +1854,7 @@ fn contains_aggregate(expr: &ast::Expression) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::plan::{FilterOp, LimitOp, SkipOp, SortOp};
 
     // === Basic MATCH Tests ===
 

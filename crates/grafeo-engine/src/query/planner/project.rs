@@ -398,17 +398,22 @@ impl super::Planner {
     /// Plans a LIMIT operator.
     pub(super) fn plan_limit(&self, limit: &LimitOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (input_op, columns) = self.plan_operator(&limit.input)?;
-        let output_schema = self.derive_schema_from_columns(&columns);
-        let operator = Box::new(LimitOperator::new(input_op, limit.count, output_schema));
-        Ok((operator, columns))
+        let schema = self.derive_schema_from_columns(&columns);
+        Ok(super::common::build_limit(
+            input_op,
+            columns,
+            limit.count,
+            schema,
+        ))
     }
 
     /// Plans a SKIP operator.
     pub(super) fn plan_skip(&self, skip: &SkipOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (input_op, columns) = self.plan_operator(&skip.input)?;
-        let output_schema = self.derive_schema_from_columns(&columns);
-        let operator = Box::new(SkipOperator::new(input_op, skip.count, output_schema));
-        Ok((operator, columns))
+        let schema = self.derive_schema_from_columns(&columns);
+        Ok(super::common::build_skip(
+            input_op, columns, skip.count, schema,
+        ))
     }
 
     /// Plans a SORT (ORDER BY) operator.

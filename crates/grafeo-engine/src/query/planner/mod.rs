@@ -5,6 +5,7 @@
 //! hash joins vs nested loops, picking index scans vs full scans, etc.
 
 mod aggregate;
+pub(crate) mod common;
 mod expand;
 mod expression;
 mod filter;
@@ -29,18 +30,17 @@ use grafeo_common::utils::error::{Error, Result};
 use grafeo_core::execution::AdaptiveContext;
 use grafeo_core::execution::operators::{
     AddLabelOperator, AggregateExpr as PhysicalAggregateExpr,
-    AggregateFunction as PhysicalAggregateFunction, ApplyOperator, BinaryFilterOp,
-    ConstraintValidator, CreateEdgeOperator, CreateNodeOperator, DeleteEdgeOperator,
-    DeleteNodeOperator, DistinctOperator, EmptyOperator, ExceptOperator, ExecutionPathMode,
-    ExpandOperator, ExpandStep, ExpressionPredicate, FactorizedAggregate,
+    AggregateFunction as PhysicalAggregateFunction, BinaryFilterOp, ConstraintValidator,
+    CreateEdgeOperator, CreateNodeOperator, DeleteEdgeOperator, DeleteNodeOperator, EmptyOperator,
+    ExecutionPathMode, ExpandOperator, ExpandStep, ExpressionPredicate, FactorizedAggregate,
     FactorizedAggregateOperator, FilterExpression, FilterOperator, HashAggregateOperator,
-    HashJoinOperator, IntersectOperator, JoinType as PhysicalJoinType, LazyFactorizedChainOperator,
-    LeapfrogJoinOperator, LimitOperator, MapCollectOperator, MergeOperator,
-    MergeRelationshipConfig, MergeRelationshipOperator, NestedLoopJoinOperator, NodeListOperator,
-    NullOrder, Operator, OtherwiseOperator, ProjectExpr, ProjectOperator, PropertySource,
-    RemoveLabelOperator, ScanOperator, SetPropertyOperator, ShortestPathOperator,
-    SimpleAggregateOperator, SkipOperator, SortDirection, SortKey as PhysicalSortKey, SortOperator,
-    UnaryFilterOp, UnionOperator, UnwindOperator, VariableLengthExpandOperator,
+    HashJoinOperator, JoinType as PhysicalJoinType, LazyFactorizedChainOperator,
+    LeapfrogJoinOperator, MapCollectOperator, MergeOperator, MergeRelationshipConfig,
+    MergeRelationshipOperator, NestedLoopJoinOperator, NodeListOperator, NullOrder, Operator,
+    ProjectExpr, ProjectOperator, PropertySource, RemoveLabelOperator, ScanOperator,
+    SetPropertyOperator, ShortestPathOperator, SimpleAggregateOperator, SortDirection,
+    SortKey as PhysicalSortKey, SortOperator, UnaryFilterOp, UnwindOperator,
+    VariableLengthExpandOperator,
 };
 use grafeo_core::graph::{Direction, GraphStore, GraphStoreMut};
 use std::collections::HashMap;
@@ -832,18 +832,8 @@ fn value_to_logical_type(value: &grafeo_common::types::Value) -> LogicalType {
     }
 }
 
-/// Converts an expression to a string for column naming.
-fn expression_to_string(expr: &LogicalExpression) -> String {
-    match expr {
-        LogicalExpression::Variable(name) => name.clone(),
-        LogicalExpression::Property { variable, property } => {
-            format!("{variable}.{property}")
-        }
-        LogicalExpression::Literal(value) => format!("{value:?}"),
-        LogicalExpression::FunctionCall { name, .. } => format!("{name}(...)"),
-        _ => "expr".to_string(),
-    }
-}
+// expression_to_string is now in common.rs
+use common::expression_to_string;
 
 /// A physical plan ready for execution.
 pub struct PhysicalPlan {
@@ -1130,6 +1120,7 @@ mod tests {
                     label: Some("Person".to_string()),
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 
@@ -1174,6 +1165,7 @@ mod tests {
                     label: None,
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 
@@ -1206,6 +1198,7 @@ mod tests {
                     label: None,
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 
@@ -1238,6 +1231,7 @@ mod tests {
                     label: None,
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 
@@ -1275,6 +1269,7 @@ mod tests {
                     label: None,
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 
@@ -2065,6 +2060,7 @@ mod tests {
                     label: None,
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 

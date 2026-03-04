@@ -5,7 +5,10 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::plan::{AggregateFunction, BinaryOp, LogicalExpression};
+use super::plan::{
+    AggregateFunction, BinaryOp, DistinctOp, FilterOp, LimitOp, LogicalExpression, LogicalOperator,
+    ReturnItem, ReturnOp, SkipOp, SortKey, SortOp,
+};
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
 
 /// Returns true if the function name is a recognized aggregate function.
@@ -103,6 +106,64 @@ pub(crate) fn combine_with_and(predicates: Vec<LogicalExpression>) -> Result<Log
                 "Empty property predicate",
             ))
         })
+}
+
+// ---------------------------------------------------------------------------
+// Plan node builder helpers
+// ---------------------------------------------------------------------------
+
+/// Wraps an operator with a filter predicate.
+pub(crate) fn wrap_filter(input: LogicalOperator, predicate: LogicalExpression) -> LogicalOperator {
+    LogicalOperator::Filter(FilterOp {
+        predicate,
+        input: Box::new(input),
+        pushdown_hint: None,
+    })
+}
+
+/// Wraps an operator with ORDER BY.
+pub(crate) fn wrap_sort(input: LogicalOperator, keys: Vec<SortKey>) -> LogicalOperator {
+    LogicalOperator::Sort(SortOp {
+        keys,
+        input: Box::new(input),
+    })
+}
+
+/// Wraps an operator with SKIP.
+pub(crate) fn wrap_skip(input: LogicalOperator, count: usize) -> LogicalOperator {
+    LogicalOperator::Skip(SkipOp {
+        count,
+        input: Box::new(input),
+    })
+}
+
+/// Wraps an operator with LIMIT.
+pub(crate) fn wrap_limit(input: LogicalOperator, count: usize) -> LogicalOperator {
+    LogicalOperator::Limit(LimitOp {
+        count,
+        input: Box::new(input),
+    })
+}
+
+/// Wraps an operator with DISTINCT.
+pub(crate) fn wrap_distinct(input: LogicalOperator) -> LogicalOperator {
+    LogicalOperator::Distinct(DistinctOp {
+        input: Box::new(input),
+        columns: None,
+    })
+}
+
+/// Wraps an operator with RETURN.
+pub(crate) fn wrap_return(
+    input: LogicalOperator,
+    items: Vec<ReturnItem>,
+    distinct: bool,
+) -> LogicalOperator {
+    LogicalOperator::Return(ReturnOp {
+        items,
+        distinct,
+        input: Box::new(input),
+    })
 }
 
 #[cfg(test)]

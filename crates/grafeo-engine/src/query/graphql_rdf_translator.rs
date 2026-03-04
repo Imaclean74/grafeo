@@ -11,10 +11,10 @@
 //! - Scalar fields → Select variables from triple bindings
 
 use crate::query::plan::{
-    BinaryOp, FilterOp, JoinOp, JoinType, LogicalExpression, LogicalOperator, LogicalPlan,
-    ProjectOp, Projection, TripleComponent, TripleScanOp,
+    BinaryOp, JoinOp, JoinType, LogicalExpression, LogicalOperator, LogicalPlan, ProjectOp,
+    Projection, TripleComponent, TripleScanOp,
 };
-use crate::query::translator_common::{VarGen, capitalize_first};
+use crate::query::translator_common::{VarGen, capitalize_first, wrap_filter};
 use grafeo_adapters::query::graphql::{self, ast};
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
 use std::collections::HashMap;
@@ -307,10 +307,7 @@ impl GraphQLRdfTranslator {
                 right: Box::new(LogicalExpression::Literal(arg.value.to_value())),
             };
 
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate: filter,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, filter);
         }
 
         Ok(plan)

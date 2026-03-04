@@ -1238,6 +1238,7 @@ mod tests {
                     label: None,
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 

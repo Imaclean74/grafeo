@@ -274,6 +274,13 @@ impl QueryProcessor {
         // 4. Optimize the plan
         let optimized_plan = self.optimizer.optimize(logical_plan)?;
 
+        // 4a. EXPLAIN: annotate pushdown hints and return the plan tree
+        if optimized_plan.explain {
+            let mut plan = optimized_plan;
+            annotate_pushdown_hints(&mut plan.root, self.graph_store.as_ref());
+            return Ok(explain_result(&plan));
+        }
+
         // 5. Convert to physical plan with transaction context
         let planner = if let Some((epoch, tx_id)) = self.tx_context {
             Planner::with_context(
@@ -365,6 +372,11 @@ impl QueryProcessor {
         // 3. Optimize the plan
         let optimized_plan = self.optimizer.optimize(logical_plan)?;
 
+        // 3a. EXPLAIN: return the optimized plan tree without executing
+        if optimized_plan.explain {
+            return Ok(explain_result(&optimized_plan));
+        }
+
         // 4. Convert to physical plan (using RDF planner)
         let planner = RdfPlanner::new(Arc::clone(rdf_store));
         let mut physical_plan = planner.plan(&optimized_plan)?;
@@ -427,6 +439,148 @@ impl QueryProcessor {
     #[must_use]
     pub fn tx_manager(&self) -> &Arc<TransactionManager> {
         &self.tx_manager
+    }
+}
+
+/// Annotates filter operators in the plan with pushdown hints.
+///
+/// Walks the plan tree looking for `Filter -> NodeScan` patterns and checks
+/// whether a property index exists for equality predicates.
+pub(crate) fn annotate_pushdown_hints(
+    op: &mut LogicalOperator,
+    store: &dyn grafeo_core::graph::GraphStore,
+) {
+    use crate::query::plan::*;
+
+    match op {
+        LogicalOperator::Filter(filter) => {
+            // Recurse into children first
+            annotate_pushdown_hints(&mut filter.input, store);
+
+            // Annotate this filter if it sits on top of a NodeScan
+            if let LogicalOperator::NodeScan(scan) = filter.input.as_ref() {
+                filter.pushdown_hint = infer_pushdown(&filter.predicate, scan, store);
+            }
+        }
+        LogicalOperator::NodeScan(op) => {
+            if let Some(input) = &mut op.input {
+                annotate_pushdown_hints(input, store);
+            }
+        }
+        LogicalOperator::EdgeScan(op) => {
+            if let Some(input) = &mut op.input {
+                annotate_pushdown_hints(input, store);
+            }
+        }
+        LogicalOperator::Expand(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Project(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Join(op) => {
+            annotate_pushdown_hints(&mut op.left, store);
+            annotate_pushdown_hints(&mut op.right, store);
+        }
+        LogicalOperator::Aggregate(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Limit(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Skip(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Sort(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Distinct(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Return(op) => annotate_pushdown_hints(&mut op.input, store),
+        LogicalOperator::Union(op) => {
+            for input in &mut op.inputs {
+                annotate_pushdown_hints(input, store);
+            }
+        }
+        LogicalOperator::Apply(op) => {
+            annotate_pushdown_hints(&mut op.input, store);
+            annotate_pushdown_hints(&mut op.subplan, store);
+        }
+        LogicalOperator::Otherwise(op) => {
+            annotate_pushdown_hints(&mut op.left, store);
+            annotate_pushdown_hints(&mut op.right, store);
+        }
+        _ => {}
+    }
+}
+
+/// Infers the pushdown strategy for a filter predicate over a node scan.
+fn infer_pushdown(
+    predicate: &LogicalExpression,
+    scan: &crate::query::plan::NodeScanOp,
+    store: &dyn grafeo_core::graph::GraphStore,
+) -> Option<crate::query::plan::PushdownHint> {
+    use crate::query::plan::*;
+
+    match predicate {
+        // Equality: n.prop = value
+        LogicalExpression::Binary { left, op, right } if *op == BinaryOp::Eq => {
+            if let Some(prop) = extract_property_name(left, &scan.variable)
+                .or_else(|| extract_property_name(right, &scan.variable))
+            {
+                if store.has_property_index(&prop) {
+                    return Some(PushdownHint::IndexLookup { property: prop });
+                }
+                if scan.label.is_some() {
+                    return Some(PushdownHint::LabelFirst);
+                }
+            }
+            None
+        }
+        // Range: n.prop > value, n.prop < value, etc.
+        LogicalExpression::Binary {
+            left,
+            op: BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Lt | BinaryOp::Le,
+            right,
+        } => {
+            if let Some(prop) = extract_property_name(left, &scan.variable)
+                .or_else(|| extract_property_name(right, &scan.variable))
+            {
+                if store.has_property_index(&prop) {
+                    return Some(PushdownHint::RangeScan { property: prop });
+                }
+                if scan.label.is_some() {
+                    return Some(PushdownHint::LabelFirst);
+                }
+            }
+            None
+        }
+        // AND: check the left side (first conjunct) for pushdown
+        LogicalExpression::Binary {
+            left,
+            op: BinaryOp::And,
+            ..
+        } => infer_pushdown(left, scan, store),
+        _ => {
+            // Any other predicate on a labeled scan gets label-first
+            if scan.label.is_some() {
+                Some(PushdownHint::LabelFirst)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// Extracts the property name if the expression is `Property { variable, property }`
+/// and the variable matches the scan variable.
+fn extract_property_name(expr: &LogicalExpression, scan_var: &str) -> Option<String> {
+    if let LogicalExpression::Property { variable, property } = expr
+        && variable == scan_var
+    {
+        Some(property.clone())
+    } else {
+        None
+    }
+}
+
+/// Builds a `QueryResult` containing the EXPLAIN plan tree text.
+pub(crate) fn explain_result(plan: &LogicalPlan) -> QueryResult {
+    let tree_text = plan.root.explain_tree();
+    QueryResult {
+        columns: vec!["plan".to_string()],
+        column_types: vec![grafeo_common::types::LogicalType::String],
+        rows: vec![vec![Value::String(tree_text.into())]],
+        execution_time_ms: None,
+        rows_scanned: None,
+        status_message: None,
     }
 }
 

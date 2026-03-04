@@ -11,12 +11,25 @@ use grafeo_common::types::Value;
 pub struct LogicalPlan {
     /// The root operator of the plan.
     pub root: LogicalOperator,
+    /// When true, return the plan tree as text instead of executing.
+    pub explain: bool,
 }
 
 impl LogicalPlan {
     /// Creates a new logical plan with the given root operator.
     pub fn new(root: LogicalOperator) -> Self {
-        Self { root }
+        Self {
+            root,
+            explain: false,
+        }
+    }
+
+    /// Creates an EXPLAIN plan that returns the plan tree without executing.
+    pub fn explain(root: LogicalOperator) -> Self {
+        Self {
+            root,
+            explain: true,
+        }
     }
 }
 
@@ -246,6 +259,354 @@ impl LogicalOperator {
     }
 }
 
+impl LogicalOperator {
+    /// Formats this operator tree as a human-readable plan for EXPLAIN output.
+    pub fn explain_tree(&self) -> String {
+        let mut output = String::new();
+        self.fmt_tree(&mut output, 0);
+        output
+    }
+
+    fn fmt_tree(&self, out: &mut String, depth: usize) {
+        use std::fmt::Write;
+
+        let indent = "  ".repeat(depth);
+        match self {
+            Self::NodeScan(op) => {
+                let label = op.label.as_deref().unwrap_or("*");
+                let _ = writeln!(out, "{indent}NodeScan ({var}:{label})", var = op.variable);
+                if let Some(input) = &op.input {
+                    input.fmt_tree(out, depth + 1);
+                }
+            }
+            Self::EdgeScan(op) => {
+                let types = if op.edge_types.is_empty() {
+                    "*".to_string()
+                } else {
+                    op.edge_types.join("|")
+                };
+                let _ = writeln!(out, "{indent}EdgeScan ({var}:{types})", var = op.variable);
+            }
+            Self::Expand(op) => {
+                let types = if op.edge_types.is_empty() {
+                    "*".to_string()
+                } else {
+                    op.edge_types.join("|")
+                };
+                let dir = match op.direction {
+                    ExpandDirection::Outgoing => "->",
+                    ExpandDirection::Incoming => "<-",
+                    ExpandDirection::Both => "--",
+                };
+                let hops = match (op.min_hops, op.max_hops) {
+                    (1, Some(1)) => String::new(),
+                    (min, Some(max)) if min == max => format!("*{min}"),
+                    (min, Some(max)) => format!("*{min}..{max}"),
+                    (min, None) => format!("*{min}.."),
+                };
+                let _ = writeln!(
+                    out,
+                    "{indent}Expand ({from}){dir}[:{types}{hops}]{dir}({to})",
+                    from = op.from_variable,
+                    to = op.to_variable,
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Filter(op) => {
+                let hint = match &op.pushdown_hint {
+                    Some(PushdownHint::IndexLookup { property }) => {
+                        format!(" [index: {property}]")
+                    }
+                    Some(PushdownHint::RangeScan { property }) => {
+                        format!(" [range: {property}]")
+                    }
+                    Some(PushdownHint::LabelFirst) => " [label-first]".to_string(),
+                    None => String::new(),
+                };
+                let _ = writeln!(
+                    out,
+                    "{indent}Filter ({expr}){hint}",
+                    expr = fmt_expr(&op.predicate)
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Project(op) => {
+                let cols: Vec<String> = op
+                    .projections
+                    .iter()
+                    .map(|p| {
+                        let expr = fmt_expr(&p.expression);
+                        match &p.alias {
+                            Some(alias) => format!("{expr} AS {alias}"),
+                            None => expr,
+                        }
+                    })
+                    .collect();
+                let _ = writeln!(out, "{indent}Project ({cols})", cols = cols.join(", "));
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Join(op) => {
+                let _ = writeln!(out, "{indent}Join ({ty:?})", ty = op.join_type);
+                op.left.fmt_tree(out, depth + 1);
+                op.right.fmt_tree(out, depth + 1);
+            }
+            Self::Aggregate(op) => {
+                let groups: Vec<String> = op.group_by.iter().map(fmt_expr).collect();
+                let aggs: Vec<String> = op
+                    .aggregates
+                    .iter()
+                    .map(|a| {
+                        let func = format!("{:?}", a.function).to_lowercase();
+                        match &a.alias {
+                            Some(alias) => format!("{func}(...) AS {alias}"),
+                            None => format!("{func}(...)"),
+                        }
+                    })
+                    .collect();
+                let _ = writeln!(
+                    out,
+                    "{indent}Aggregate (group: [{groups}], aggs: [{aggs}])",
+                    groups = groups.join(", "),
+                    aggs = aggs.join(", "),
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Limit(op) => {
+                let _ = writeln!(out, "{indent}Limit ({count})", count = op.count);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Skip(op) => {
+                let _ = writeln!(out, "{indent}Skip ({count})", count = op.count);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Sort(op) => {
+                let keys: Vec<String> = op
+                    .keys
+                    .iter()
+                    .map(|k| {
+                        let dir = match k.order {
+                            SortOrder::Ascending => "ASC",
+                            SortOrder::Descending => "DESC",
+                        };
+                        format!("{} {dir}", fmt_expr(&k.expression))
+                    })
+                    .collect();
+                let _ = writeln!(out, "{indent}Sort ({keys})", keys = keys.join(", "));
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Distinct(op) => {
+                let _ = writeln!(out, "{indent}Distinct");
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Return(op) => {
+                let items: Vec<String> = op
+                    .items
+                    .iter()
+                    .map(|item| {
+                        let expr = fmt_expr(&item.expression);
+                        match &item.alias {
+                            Some(alias) => format!("{expr} AS {alias}"),
+                            None => expr,
+                        }
+                    })
+                    .collect();
+                let distinct = if op.distinct { " DISTINCT" } else { "" };
+                let _ = writeln!(
+                    out,
+                    "{indent}Return{distinct} ({items})",
+                    items = items.join(", ")
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Union(op) => {
+                let _ = writeln!(out, "{indent}Union ({n} branches)", n = op.inputs.len());
+                for input in &op.inputs {
+                    input.fmt_tree(out, depth + 1);
+                }
+            }
+            Self::LeftJoin(op) => {
+                let _ = writeln!(out, "{indent}LeftJoin");
+                op.left.fmt_tree(out, depth + 1);
+                op.right.fmt_tree(out, depth + 1);
+            }
+            Self::AntiJoin(op) => {
+                let _ = writeln!(out, "{indent}AntiJoin");
+                op.left.fmt_tree(out, depth + 1);
+                op.right.fmt_tree(out, depth + 1);
+            }
+            Self::Unwind(op) => {
+                let _ = writeln!(out, "{indent}Unwind ({var})", var = op.variable);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Bind(op) => {
+                let _ = writeln!(out, "{indent}Bind ({var})", var = op.variable);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::MapCollect(op) => {
+                let _ = writeln!(
+                    out,
+                    "{indent}MapCollect ({key} -> {val} AS {alias})",
+                    key = op.key_var,
+                    val = op.value_var,
+                    alias = op.alias
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Apply(op) => {
+                let _ = writeln!(out, "{indent}Apply");
+                op.input.fmt_tree(out, depth + 1);
+                op.subplan.fmt_tree(out, depth + 1);
+            }
+            Self::Except(op) => {
+                let all = if op.all { " ALL" } else { "" };
+                let _ = writeln!(out, "{indent}Except{all}");
+                op.left.fmt_tree(out, depth + 1);
+                op.right.fmt_tree(out, depth + 1);
+            }
+            Self::Intersect(op) => {
+                let all = if op.all { " ALL" } else { "" };
+                let _ = writeln!(out, "{indent}Intersect{all}");
+                op.left.fmt_tree(out, depth + 1);
+                op.right.fmt_tree(out, depth + 1);
+            }
+            Self::Otherwise(op) => {
+                let _ = writeln!(out, "{indent}Otherwise");
+                op.left.fmt_tree(out, depth + 1);
+                op.right.fmt_tree(out, depth + 1);
+            }
+            Self::ShortestPath(op) => {
+                let _ = writeln!(
+                    out,
+                    "{indent}ShortestPath ({from} -> {to})",
+                    from = op.source_var,
+                    to = op.target_var
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::Merge(op) => {
+                let _ = writeln!(out, "{indent}Merge ({var})", var = op.variable);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::MergeRelationship(op) => {
+                let _ = writeln!(out, "{indent}MergeRelationship ({var})", var = op.variable);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::CreateNode(op) => {
+                let labels = op.labels.join(":");
+                let _ = writeln!(
+                    out,
+                    "{indent}CreateNode ({var}:{labels})",
+                    var = op.variable
+                );
+                if let Some(input) = &op.input {
+                    input.fmt_tree(out, depth + 1);
+                }
+            }
+            Self::CreateEdge(op) => {
+                let var = op.variable.as_deref().unwrap_or("?");
+                let _ = writeln!(
+                    out,
+                    "{indent}CreateEdge ({from})-[{var}:{ty}]->({to})",
+                    from = op.from_variable,
+                    ty = op.edge_type,
+                    to = op.to_variable
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::DeleteNode(op) => {
+                let _ = writeln!(out, "{indent}DeleteNode ({var})", var = op.variable);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::DeleteEdge(op) => {
+                let _ = writeln!(out, "{indent}DeleteEdge ({var})", var = op.variable);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::SetProperty(op) => {
+                let props: Vec<String> = op
+                    .properties
+                    .iter()
+                    .map(|(k, _)| format!("{}.{k}", op.variable))
+                    .collect();
+                let _ = writeln!(
+                    out,
+                    "{indent}SetProperty ({props})",
+                    props = props.join(", ")
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::AddLabel(op) => {
+                let labels = op.labels.join(":");
+                let _ = writeln!(out, "{indent}AddLabel ({var}:{labels})", var = op.variable);
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::RemoveLabel(op) => {
+                let labels = op.labels.join(":");
+                let _ = writeln!(
+                    out,
+                    "{indent}RemoveLabel ({var}:{labels})",
+                    var = op.variable
+                );
+                op.input.fmt_tree(out, depth + 1);
+            }
+            Self::CallProcedure(op) => {
+                let _ = writeln!(
+                    out,
+                    "{indent}CallProcedure ({name})",
+                    name = op.name.join(".")
+                );
+            }
+            Self::TripleScan(op) => {
+                let _ = writeln!(
+                    out,
+                    "{indent}TripleScan ({s} {p} {o})",
+                    s = fmt_triple_component(&op.subject),
+                    p = fmt_triple_component(&op.predicate),
+                    o = fmt_triple_component(&op.object)
+                );
+                if let Some(input) = &op.input {
+                    input.fmt_tree(out, depth + 1);
+                }
+            }
+            Self::Empty => {
+                let _ = writeln!(out, "{indent}Empty");
+            }
+            // Remaining operators: show a simple name
+            _ => {
+                let _ = writeln!(out, "{indent}{:?}", std::mem::discriminant(self));
+            }
+        }
+    }
+}
+
+/// Format a logical expression compactly for EXPLAIN output.
+fn fmt_expr(expr: &LogicalExpression) -> String {
+    match expr {
+        LogicalExpression::Variable(name) => name.clone(),
+        LogicalExpression::Property { variable, property } => format!("{variable}.{property}"),
+        LogicalExpression::Literal(val) => format!("{val}"),
+        LogicalExpression::Binary { left, op, right } => {
+            format!("{} {op:?} {}", fmt_expr(left), fmt_expr(right))
+        }
+        LogicalExpression::Unary { op, operand } => {
+            format!("{op:?} {}", fmt_expr(operand))
+        }
+        LogicalExpression::FunctionCall { name, args, .. } => {
+            let arg_strs: Vec<String> = args.iter().map(fmt_expr).collect();
+            format!("{name}({})", arg_strs.join(", "))
+        }
+        _ => format!("{expr:?}"),
+    }
+}
+
+/// Format a triple component for EXPLAIN output.
+fn fmt_triple_component(comp: &TripleComponent) -> String {
+    match comp {
+        TripleComponent::Variable(name) => format!("?{name}"),
+        TripleComponent::Iri(iri) => format!("<{iri}>"),
+        TripleComponent::Literal(val) => format!("{val}"),
+    }
+}
+
 /// Scan nodes from the graph.
 #[derive(Debug, Clone)]
 pub struct NodeScanOp {
@@ -415,6 +776,25 @@ pub enum AggregateFunction {
     PercentileCont,
 }
 
+/// Hint about how a filter will be executed at the physical level.
+///
+/// Set during EXPLAIN annotation to communicate pushdown decisions.
+#[derive(Debug, Clone)]
+pub enum PushdownHint {
+    /// Equality predicate resolved via a property index.
+    IndexLookup {
+        /// The indexed property name.
+        property: String,
+    },
+    /// Range predicate resolved via a range/btree index.
+    RangeScan {
+        /// The indexed property name.
+        property: String,
+    },
+    /// No index available, but label narrows the scan before filtering.
+    LabelFirst,
+}
+
 /// Filter rows based on a predicate.
 #[derive(Debug, Clone)]
 pub struct FilterOp {
@@ -422,6 +802,8 @@ pub struct FilterOp {
     pub predicate: LogicalExpression,
     /// Input operator.
     pub input: Box<LogicalOperator>,
+    /// Optional hint about pushdown strategy (populated by EXPLAIN).
+    pub pushdown_hint: Option<PushdownHint>,
 }
 
 /// Project specific columns.
@@ -1417,6 +1799,7 @@ mod tests {
                     label: Some("Person".into()),
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 

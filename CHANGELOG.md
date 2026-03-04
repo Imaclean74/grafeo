@@ -4,9 +4,16 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.14] - Unreleased
 
+### Added
+
+- **EXPLAIN statement**: `EXPLAIN <query>` in GQL and Cypher returns the optimized logical plan tree with operator names, parameters, and structure
+- **EXPLAIN pushdown hints**: EXPLAIN output annotates filters with execution strategy (`[index: prop]`, `[range: prop]`, `[label-first]`)
+- **WASM size optimization**: `wasm-opt -Oz` now applied during release builds for smaller binaries
+
 ### Changed
 
-- (placeholder for next release)
+- **Planner consolidation**: extracted shared planning logic (limit, skip, distinct, union, except, intersect, join, apply, etc.) into `planner/common.rs`, eliminating duplication between LPG and RDF planners
+- **Translator consolidation**: extracted 6 plan-builder functions (`wrap_filter`, `wrap_sort`, `wrap_skip`, `wrap_limit`, `wrap_distinct`, `wrap_return`) into `translator_common.rs`, replacing 100+ repeated operator constructions across all 7 translators
 
 ## [0.5.13] - 2026-03-04
 

@@ -209,60 +209,14 @@ impl super::Planner {
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (left_op, left_columns) = self.plan_operator(&left_join.left)?;
         let (right_op, right_columns) = self.plan_operator(&left_join.right)?;
-
-        // Find common variables between left and right for join keys
-        let mut probe_keys = Vec::new();
-        let mut build_keys = Vec::new();
-
-        for (right_idx, right_col) in right_columns.iter().enumerate() {
-            if let Some(left_idx) = left_columns.iter().position(|c| c == right_col) {
-                probe_keys.push(left_idx);
-                build_keys.push(right_idx);
-            }
-        }
-
-        // The HashJoin outputs all left columns + all right columns.
-        // Build the full join output columns for the join operator.
-        let mut join_columns = left_columns.clone();
-        join_columns.extend(right_columns.clone());
-        let join_schema = self.derive_schema_from_columns(&join_columns);
-
-        let join_op: Box<dyn Operator> = Box::new(HashJoinOperator::new(
+        let schema_fn = |cols: &[String]| self.derive_schema_from_columns(cols);
+        Ok(super::common::build_left_join(
             left_op,
             right_op,
-            probe_keys,
-            build_keys,
-            PhysicalJoinType::Left,
-            join_schema,
-        ));
-
-        // Deduplicate: keep left columns, then only right columns not already
-        // present on the left. This prevents HashMap overwrites in downstream
-        // operators (e.g. RETURN) that map variable names to column indices.
-        let left_set: std::collections::HashSet<&str> =
-            left_columns.iter().map(String::as_str).collect();
-        let mut keep_indices: Vec<usize> = (0..left_columns.len()).collect();
-        let mut output_columns = left_columns.clone();
-        for (right_idx, right_col) in right_columns.iter().enumerate() {
-            if !left_set.contains(right_col.as_str()) {
-                keep_indices.push(left_columns.len() + right_idx);
-                output_columns.push(right_col.clone());
-            }
-        }
-
-        // If there are duplicates, add a ProjectOperator to strip them
-        if keep_indices.len() < join_columns.len() {
-            let proj_exprs: Vec<ProjectExpr> = keep_indices
-                .iter()
-                .map(|&i| ProjectExpr::Column(i))
-                .collect();
-            let proj_types: Vec<LogicalType> =
-                keep_indices.iter().map(|_| LogicalType::Any).collect();
-            let operator = Box::new(ProjectOperator::new(join_op, proj_exprs, proj_types));
-            Ok((operator, output_columns))
-        } else {
-            Ok((join_op, output_columns))
-        }
+            &left_columns,
+            &right_columns,
+            schema_fn,
+        ))
     }
 
     /// Plans an ANTI JOIN operator (for WHERE NOT EXISTS patterns).
@@ -272,33 +226,14 @@ impl super::Planner {
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (left_op, left_columns) = self.plan_operator(&anti_join.left)?;
         let (right_op, right_columns) = self.plan_operator(&anti_join.right)?;
-
-        // Anti-join only keeps left columns (filters out matching rows)
-        let columns = left_columns.clone();
-
-        // Find common variables between left and right for join keys
-        let mut probe_keys = Vec::new();
-        let mut build_keys = Vec::new();
-
-        for (right_idx, right_col) in right_columns.iter().enumerate() {
-            if let Some(left_idx) = left_columns.iter().position(|c| c == right_col) {
-                probe_keys.push(left_idx);
-                build_keys.push(right_idx);
-            }
-        }
-
-        let output_schema = self.derive_schema_from_columns(&columns);
-
-        let operator: Box<dyn Operator> = Box::new(HashJoinOperator::new(
+        let schema = self.derive_schema_from_columns(&left_columns);
+        Ok(super::common::build_anti_join(
             left_op,
             right_op,
-            probe_keys,
-            build_keys,
-            PhysicalJoinType::Anti,
-            output_schema,
-        ));
-
-        Ok((operator, columns))
+            left_columns,
+            &right_columns,
+            schema,
+        ))
     }
 
     /// Plans an unwind operator.

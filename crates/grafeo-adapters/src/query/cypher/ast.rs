@@ -26,6 +26,8 @@ pub enum Statement {
         /// Whether to keep duplicates (UNION ALL vs UNION DISTINCT).
         all: bool,
     },
+    /// EXPLAIN: returns the query plan without executing.
+    Explain(Box<Statement>),
 }
 
 /// A complete Cypher query.

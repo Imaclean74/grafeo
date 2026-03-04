@@ -14,10 +14,9 @@ use grafeo_common::utils::error::{Error, Result};
 use grafeo_core::execution::DataChunk;
 use grafeo_core::execution::operators::JoinType;
 use grafeo_core::execution::operators::{
-    BinaryFilterOp, DistinctOperator, FilterExpression, FilterOperator, HashAggregateOperator,
-    JoinCondition, LimitOperator, NestedLoopJoinOperator, Operator, OperatorError, Predicate,
-    ProjectExpr, ProjectOperator, SimpleAggregateOperator, SingleRowOperator, SkipOperator,
-    SortOperator, UnaryFilterOp,
+    BinaryFilterOp, FilterExpression, FilterOperator, HashAggregateOperator, JoinCondition,
+    NestedLoopJoinOperator, Operator, OperatorError, Predicate, ProjectExpr, ProjectOperator,
+    SimpleAggregateOperator, SingleRowOperator, SortOperator, UnaryFilterOp,
 };
 use grafeo_core::graph::rdf::{Literal, RdfStore, Term, Triple, TriplePattern};
 
@@ -318,26 +317,31 @@ impl RdfPlanner {
 
     /// Plans a DISTINCT operator.
     fn plan_distinct(&self, distinct: &DistinctOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        use crate::query::planner::common;
         let (input_op, columns) = self.plan_operator(&distinct.input)?;
-        let output_schema = derive_rdf_schema(&columns);
-        let operator = Box::new(DistinctOperator::new(input_op, output_schema));
-        Ok((operator, columns))
+        let schema = derive_rdf_schema(&columns);
+        Ok(common::build_distinct(
+            input_op,
+            columns,
+            distinct.columns.as_deref(),
+            schema,
+        ))
     }
 
     /// Plans a LIMIT operator.
     fn plan_limit(&self, limit: &LimitOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        use crate::query::planner::common;
         let (input_op, columns) = self.plan_operator(&limit.input)?;
-        let output_schema = derive_rdf_schema(&columns);
-        let operator = Box::new(LimitOperator::new(input_op, limit.count, output_schema));
-        Ok((operator, columns))
+        let schema = derive_rdf_schema(&columns);
+        Ok(common::build_limit(input_op, columns, limit.count, schema))
     }
 
     /// Plans a SKIP operator.
     fn plan_skip(&self, skip: &SkipOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        use crate::query::planner::common;
         let (input_op, columns) = self.plan_operator(&skip.input)?;
-        let output_schema = derive_rdf_schema(&columns);
-        let operator = Box::new(SkipOperator::new(input_op, skip.count, output_schema));
-        Ok((operator, columns))
+        let schema = derive_rdf_schema(&columns);
+        Ok(common::build_skip(input_op, columns, skip.count, schema))
     }
 
     /// Plans a SORT operator.
@@ -684,41 +688,18 @@ impl RdfPlanner {
     }
 
     /// Plans an ANTI JOIN operator (for SPARQL MINUS).
-    ///
-    /// Note: NestedLoopJoinOperator doesn't properly implement Anti join semantics.
-    /// For now, we use HashJoinOperator for anti-joins which does support it.
     fn plan_anti_join(&self, join: &AntiJoinOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
-        use grafeo_core::execution::operators::HashJoinOperator;
-
+        use crate::query::planner::common;
         let (left_op, left_columns) = self.plan_operator(&join.left)?;
         let (right_op, right_columns) = self.plan_operator(&join.right)?;
-
-        // Find shared variables for anti-join matching
-        let mut left_keys: Vec<usize> = Vec::new();
-        let mut right_keys: Vec<usize> = Vec::new();
-        for (left_idx, left_col) in left_columns.iter().enumerate() {
-            for (right_idx, right_col) in right_columns.iter().enumerate() {
-                if left_col == right_col {
-                    left_keys.push(left_idx);
-                    right_keys.push(right_idx);
-                }
-            }
-        }
-
-        // Output is just left columns (anti-join filters out matching rows)
-        let columns = left_columns.clone();
-        let output_schema = derive_rdf_schema(&columns);
-
-        // Use HashJoinOperator which properly implements Anti join
-        let operator = Box::new(HashJoinOperator::new(
+        let schema = derive_rdf_schema(&left_columns);
+        Ok(common::build_anti_join(
             left_op,
             right_op,
-            left_keys,
-            right_keys,
-            JoinType::Anti,
-            output_schema,
-        ));
-        Ok((operator, columns))
+            left_columns,
+            &right_columns,
+            schema,
+        ))
     }
 
     /// Plans a UNION operator.
@@ -3013,15 +2994,8 @@ fn resolve_expression(
     }
 }
 
-/// Converts an expression to a string for column naming.
-fn expression_to_string(expr: &LogicalExpression) -> String {
-    match expr {
-        LogicalExpression::Variable(name) => name.clone(),
-        LogicalExpression::Property { variable, property } => format!("{variable}.{property}"),
-        LogicalExpression::Literal(value) => format!("{value:?}"),
-        _ => "expr".to_string(),
-    }
-}
+// expression_to_string is now in planner/common.rs
+use crate::query::planner::common::expression_to_string;
 
 /// Converts a value to its string representation.
 fn value_to_string(value: &Value) -> String {

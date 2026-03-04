@@ -596,6 +596,7 @@ mod tests {
         let filter = FilterOp {
             predicate: LogicalExpression::Literal(grafeo_common::types::Value::Bool(true)),
             input: Box::new(LogicalOperator::Empty),
+            pushdown_hint: None,
         };
         let cost = model.filter_cost(&filter, 1000.0);
 

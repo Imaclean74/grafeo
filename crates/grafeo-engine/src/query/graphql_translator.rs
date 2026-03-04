@@ -11,11 +11,13 @@
 //! - Scalar fields → Return projections
 
 use crate::query::plan::{
-    BinaryOp, CreateNodeOp, DeleteNodeOp, ExpandDirection, ExpandOp, FilterOp, LimitOp,
-    LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp, PathMode, ReturnItem, ReturnOp,
-    SetPropertyOp, SkipOp, SortKey, SortOp, SortOrder,
+    BinaryOp, CreateNodeOp, DeleteNodeOp, ExpandDirection, ExpandOp, LogicalExpression,
+    LogicalOperator, LogicalPlan, NodeScanOp, PathMode, ReturnItem, SetPropertyOp, SortKey,
+    SortOrder,
 };
-use crate::query::translator_common::{VarGen, capitalize_first};
+use crate::query::translator_common::{
+    VarGen, capitalize_first, wrap_filter, wrap_limit, wrap_return, wrap_skip, wrap_sort,
+};
 use grafeo_adapters::query::graphql::{self, ast};
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
 use std::collections::HashMap;
@@ -188,14 +190,14 @@ impl GraphQLTranslator {
         plan = if let Some(selection_set) = &field.selection_set {
             self.translate_selection_set(selection_set, plan, &var)?
         } else {
-            LogicalOperator::Return(ReturnOp {
-                items: vec![ReturnItem {
+            wrap_return(
+                plan,
+                vec![ReturnItem {
                     expression: LogicalExpression::Variable(var),
                     alias: None,
                 }],
-                distinct: false,
-                input: Box::new(plan),
-            })
+                false,
+            )
         };
 
         Ok(LogicalPlan::new(plan))
@@ -272,10 +274,7 @@ impl GraphQLTranslator {
         });
 
         // Apply filter
-        plan = LogicalOperator::Filter(FilterOp {
-            predicate: filter_predicate,
-            input: Box::new(plan),
-        });
+        plan = wrap_filter(plan, filter_predicate);
 
         // Set the properties
         plan = LogicalOperator::SetProperty(SetPropertyOp {
@@ -290,14 +289,14 @@ impl GraphQLTranslator {
         plan = if let Some(selection_set) = &field.selection_set {
             self.translate_selection_set(selection_set, plan, &var)?
         } else {
-            LogicalOperator::Return(ReturnOp {
-                items: vec![ReturnItem {
+            wrap_return(
+                plan,
+                vec![ReturnItem {
                     expression: LogicalExpression::Variable(var),
                     alias: None,
                 }],
-                distinct: false,
-                input: Box::new(plan),
-            })
+                false,
+            )
         };
 
         Ok(LogicalPlan::new(plan))
@@ -348,10 +347,7 @@ impl GraphQLTranslator {
         });
 
         // Apply filter
-        plan = LogicalOperator::Filter(FilterOp {
-            predicate: filter_predicate,
-            input: Box::new(plan),
-        });
+        plan = wrap_filter(plan, filter_predicate);
 
         // Delete the node (GraphQL mutations are like DETACH DELETE)
         plan = LogicalOperator::DeleteNode(DeleteNodeOp {
@@ -380,10 +376,7 @@ impl GraphQLTranslator {
         // Apply filters (excluding pagination and orderBy)
         if !extracted.filters.is_empty() {
             let filter = self.translate_filter_arguments(&extracted.filters, &var)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate: filter,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, filter);
         }
 
         // Process nested selection set
@@ -391,38 +384,29 @@ impl GraphQLTranslator {
             plan = self.translate_selection_set(selection_set, plan, &var)?;
         } else {
             // No nested selection, return the whole node
-            plan = LogicalOperator::Return(ReturnOp {
-                items: vec![ReturnItem {
+            plan = wrap_return(
+                plan,
+                vec![ReturnItem {
                     expression: LogicalExpression::Variable(var),
                     alias: field.alias.clone(),
                 }],
-                distinct: false,
-                input: Box::new(plan),
-            });
+                false,
+            );
         }
 
         // Apply ordering (before pagination)
         if let Some(keys) = extracted.order_by {
-            plan = LogicalOperator::Sort(SortOp {
-                keys,
-                input: Box::new(plan),
-            });
+            plan = wrap_sort(plan, keys);
         }
 
         // Apply skip BEFORE limit
         if let Some(count) = extracted.skip {
-            plan = LogicalOperator::Skip(SkipOp {
-                count,
-                input: Box::new(plan),
-            });
+            plan = wrap_skip(plan, count);
         }
 
         // Apply limit
         if let Some(count) = extracted.first {
-            plan = LogicalOperator::Limit(LimitOp {
-                count,
-                input: Box::new(plan),
-            });
+            plan = wrap_limit(plan, count);
         }
 
         Ok(plan)
@@ -494,11 +478,7 @@ impl GraphQLTranslator {
 
         // Wrap in Return if we have items
         if !return_items.is_empty() {
-            Ok(LogicalOperator::Return(ReturnOp {
-                items: return_items,
-                distinct: false,
-                input: Box::new(plan),
-            }))
+            Ok(wrap_return(plan, return_items, false))
         } else {
             Ok(plan)
         }
@@ -560,16 +540,16 @@ impl GraphQLTranslator {
                     // Inline fragment with type condition
                     if let Some(type_cond) = &inline.type_condition {
                         // Add type check filter: type_cond IN labels(var)
-                        plan = LogicalOperator::Filter(FilterOp {
-                            predicate: LogicalExpression::Binary {
+                        plan = wrap_filter(
+                            plan,
+                            LogicalExpression::Binary {
                                 left: Box::new(LogicalExpression::Literal(
                                     grafeo_common::types::Value::String(type_cond.clone().into()),
                                 )),
                                 op: BinaryOp::In,
                                 right: Box::new(LogicalExpression::Labels(current_var.to_string())),
                             },
-                            input: Box::new(plan),
-                        });
+                        );
                     }
                     // Process inline fragment's selection set
                     let (new_plan, items) =
@@ -609,10 +589,7 @@ impl GraphQLTranslator {
         // Apply argument filters
         if !field.arguments.is_empty() {
             let filter = self.translate_arguments(&field.arguments, &to_var)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate: filter,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, filter);
         }
 
         // Collect nested selection items (without wrapping in Return)

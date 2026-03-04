@@ -24,6 +24,8 @@ pub enum Statement {
     },
     /// A session or transaction command.
     SessionCommand(SessionCommand),
+    /// EXPLAIN: returns the query plan without executing.
+    Explain(Box<Statement>),
 }
 
 /// GQL transaction isolation level (ISO/IEC 39075 Section 19).

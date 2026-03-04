@@ -753,6 +753,7 @@ impl Optimizer {
                     // Can't push through, keep filter on top
                     LogicalOperator::Filter(FilterOp {
                         predicate,
+                        pushdown_hint: None,
                         input: Box::new(LogicalOperator::Project(proj)),
                     })
                 }
@@ -792,6 +793,7 @@ impl Optimizer {
                     // Keep filter after expand
                     LogicalOperator::Filter(FilterOp {
                         predicate,
+                        pushdown_hint: None,
                         input: Box::new(LogicalOperator::Expand(expand)),
                     })
                 }
@@ -818,6 +820,7 @@ impl Optimizer {
                     // Uses both sides - keep above join
                     LogicalOperator::Filter(FilterOp {
                         predicate,
+                        pushdown_hint: None,
                         input: Box::new(LogicalOperator::Join(join)),
                     })
                 }
@@ -826,18 +829,21 @@ impl Optimizer {
             // Cannot push through Aggregate (predicate refers to aggregated values)
             LogicalOperator::Aggregate(agg) => LogicalOperator::Filter(FilterOp {
                 predicate,
+                pushdown_hint: None,
                 input: Box::new(LogicalOperator::Aggregate(agg)),
             }),
 
             // For NodeScan, we've reached the bottom - keep filter on top
             LogicalOperator::NodeScan(scan) => LogicalOperator::Filter(FilterOp {
                 predicate,
+                pushdown_hint: None,
                 input: Box::new(LogicalOperator::NodeScan(scan)),
             }),
 
             // For other operators, keep filter on top
             other => LogicalOperator::Filter(FilterOp {
                 predicate,
+                pushdown_hint: None,
                 input: Box::new(other),
             }),
         }
@@ -1081,6 +1087,7 @@ mod tests {
                     label: Some("Person".to_string()),
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 
@@ -1118,6 +1125,7 @@ mod tests {
                     op: BinaryOp::Gt,
                     right: Box::new(LogicalExpression::Literal(Value::Int64(30))),
                 },
+                pushdown_hint: None,
                 input: Box::new(LogicalOperator::Expand(ExpandOp {
                     from_variable: "a".to_string(),
                     to_variable: "b".to_string(),
@@ -1175,6 +1183,7 @@ mod tests {
                     op: BinaryOp::Gt,
                     right: Box::new(LogicalExpression::Literal(Value::Int64(30))),
                 },
+                pushdown_hint: None,
                 input: Box::new(LogicalOperator::Expand(ExpandOp {
                     from_variable: "a".to_string(),
                     to_variable: "b".to_string(),
@@ -1264,6 +1273,7 @@ mod tests {
                     label: None,
                     input: None,
                 })),
+                pushdown_hint: None,
             })),
         }));
 
@@ -1345,6 +1355,7 @@ mod tests {
                 op: BinaryOp::Gt,
                 right: Box::new(LogicalExpression::Literal(Value::Int64(30))),
             },
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Project(ProjectOp {
                 projections: vec![Projection {
                     expression: LogicalExpression::Variable("n".to_string()),
@@ -1380,6 +1391,7 @@ mod tests {
                 op: BinaryOp::Gt,
                 right: Box::new(LogicalExpression::Literal(Value::Int64(30))),
             },
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Project(ProjectOp {
                 projections: vec![Projection {
                     expression: LogicalExpression::Property {
@@ -1413,6 +1425,7 @@ mod tests {
 
         let plan = LogicalPlan::new(LogicalOperator::Filter(FilterOp {
             predicate: LogicalExpression::Literal(Value::Bool(true)),
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Limit(LimitOp {
                 count: 10,
                 input: Box::new(LogicalOperator::NodeScan(NodeScanOp {
@@ -1440,6 +1453,7 @@ mod tests {
 
         let plan = LogicalPlan::new(LogicalOperator::Filter(FilterOp {
             predicate: LogicalExpression::Literal(Value::Bool(true)),
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Sort(SortOp {
                 keys: vec![SortKey {
                     expression: LogicalExpression::Variable("n".to_string()),
@@ -1470,6 +1484,7 @@ mod tests {
 
         let plan = LogicalPlan::new(LogicalOperator::Filter(FilterOp {
             predicate: LogicalExpression::Literal(Value::Bool(true)),
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Distinct(DistinctOp {
                 input: Box::new(LogicalOperator::NodeScan(NodeScanOp {
                     variable: "n".to_string(),
@@ -1501,6 +1516,7 @@ mod tests {
                 op: BinaryOp::Gt,
                 right: Box::new(LogicalExpression::Literal(Value::Int64(10))),
             },
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Aggregate(AggregateOp {
                 group_by: vec![],
                 aggregates: vec![AggregateExpr {
@@ -1544,6 +1560,7 @@ mod tests {
                 op: BinaryOp::Gt,
                 right: Box::new(LogicalExpression::Literal(Value::Int64(30))),
             },
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Join(JoinOp {
                 left: Box::new(LogicalOperator::NodeScan(NodeScanOp {
                     variable: "a".to_string(),
@@ -1585,6 +1602,7 @@ mod tests {
                 op: BinaryOp::Eq,
                 right: Box::new(LogicalExpression::Literal(Value::String("Acme".into()))),
             },
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Join(JoinOp {
                 left: Box::new(LogicalOperator::NodeScan(NodeScanOp {
                     variable: "a".to_string(),
@@ -1629,6 +1647,7 @@ mod tests {
                     property: "a_id".to_string(),
                 }),
             },
+            pushdown_hint: None,
             input: Box::new(LogicalOperator::Join(JoinOp {
                 left: Box::new(LogicalOperator::NodeScan(NodeScanOp {
                     variable: "a".to_string(),
@@ -1842,6 +1861,7 @@ mod tests {
             distinct: false,
             input: Box::new(LogicalOperator::Filter(FilterOp {
                 predicate: LogicalExpression::Literal(Value::Bool(true)),
+                pushdown_hint: None,
                 input: Box::new(LogicalOperator::Skip(SkipOp {
                     count: 5,
                     input: Box::new(LogicalOperator::NodeScan(NodeScanOp {
@@ -1879,6 +1899,7 @@ mod tests {
                     op: BinaryOp::Gt,
                     right: Box::new(LogicalExpression::Literal(Value::Int64(1))),
                 },
+                pushdown_hint: None,
                 input: Box::new(LogicalOperator::Filter(FilterOp {
                     predicate: LogicalExpression::Binary {
                         left: Box::new(LogicalExpression::Property {
@@ -1888,6 +1909,7 @@ mod tests {
                         op: BinaryOp::Lt,
                         right: Box::new(LogicalExpression::Literal(Value::Int64(10))),
                     },
+                    pushdown_hint: None,
                     input: Box::new(LogicalOperator::NodeScan(NodeScanOp {
                         variable: "n".to_string(),
                         label: None,

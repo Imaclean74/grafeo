@@ -4,10 +4,13 @@
 
 use crate::query::plan::{
     AddGraphOp, AggregateExpr, AggregateFunction, AggregateOp, AntiJoinOp, BinaryOp, BindOp,
-    ClearGraphOp, CopyGraphOp, CreateGraphOp, DeleteTripleOp, DistinctOp, DropGraphOp, FilterOp,
-    InsertTripleOp, JoinOp, JoinType, LeftJoinOp, LimitOp, LoadGraphOp, LogicalExpression,
-    LogicalOperator, LogicalPlan, ModifyOp, MoveGraphOp, ProjectOp, Projection, SkipOp, SortKey,
-    SortOp, SortOrder, TripleComponent, TripleScanOp, TripleTemplate, UnaryOp, UnionOp,
+    ClearGraphOp, CopyGraphOp, CreateGraphOp, DeleteTripleOp, DropGraphOp, InsertTripleOp, JoinOp,
+    JoinType, LeftJoinOp, LoadGraphOp, LogicalExpression, LogicalOperator, LogicalPlan, ModifyOp,
+    MoveGraphOp, ProjectOp, Projection, SortKey, SortOrder, TripleComponent, TripleScanOp,
+    TripleTemplate, UnaryOp, UnionOp,
+};
+use crate::query::translator_common::{
+    wrap_distinct, wrap_filter, wrap_limit, wrap_skip, wrap_sort,
 };
 use grafeo_adapters::query::sparql::{self, ast};
 use grafeo_common::types::Value;
@@ -129,10 +132,7 @@ impl SparqlTranslator {
                 })
                 .collect::<Result<Vec<_>>>()?;
 
-            plan = LogicalOperator::Sort(SortOp {
-                keys,
-                input: Box::new(plan),
-            });
+            plan = wrap_sort(plan, keys);
         }
 
         // Apply projection before DISTINCT (so dedup operates on projected columns only)
@@ -148,26 +148,17 @@ impl SparqlTranslator {
 
         // Apply DISTINCT/REDUCED (after projection, before OFFSET/LIMIT)
         if select.modifier == ast::SelectModifier::Distinct {
-            plan = LogicalOperator::Distinct(DistinctOp {
-                input: Box::new(plan),
-                columns: None,
-            });
+            plan = wrap_distinct(plan);
         }
 
         // Apply OFFSET
         if let Some(offset) = select.solution_modifiers.offset {
-            plan = LogicalOperator::Skip(SkipOp {
-                count: offset as usize,
-                input: Box::new(plan),
-            });
+            plan = wrap_skip(plan, offset as usize);
         }
 
         // Apply LIMIT
         if let Some(limit) = select.solution_modifiers.limit {
-            plan = LogicalOperator::Limit(LimitOp {
-                count: limit as usize,
-                input: Box::new(plan),
-            });
+            plan = wrap_limit(plan, limit as usize);
         }
 
         Ok(LogicalPlan::new(plan))
@@ -178,10 +169,7 @@ impl SparqlTranslator {
         let plan = self.translate_graph_pattern(&ask.where_clause)?;
 
         // Limit to 1 result for efficiency
-        let plan = LogicalOperator::Limit(LimitOp {
-            count: 1,
-            input: Box::new(plan),
-        });
+        let plan = wrap_limit(plan, 1);
 
         Ok(LogicalPlan::new(plan))
     }
@@ -194,10 +182,7 @@ impl SparqlTranslator {
         // Apply solution modifiers
         let mut plan = plan;
         if let Some(limit) = construct.solution_modifiers.limit {
-            plan = LogicalOperator::Limit(LimitOp {
-                count: limit as usize,
-                input: Box::new(plan),
-            });
+            plan = wrap_limit(plan, limit as usize);
         }
 
         // The template will be processed at execution time
@@ -655,10 +640,7 @@ impl SparqlTranslator {
                         })
                         .unwrap();
 
-                    plan = LogicalOperator::Filter(FilterOp {
-                        predicate: combined,
-                        input: Box::new(plan),
-                    });
+                    plan = wrap_filter(plan, combined);
                 }
 
                 Ok(plan)
@@ -687,10 +669,7 @@ impl SparqlTranslator {
                 // Standalone FILTER - handled in Group translation, but support direct call
                 // This can happen when Filter is the top-level pattern
                 let predicate = self.translate_expression(expr)?;
-                Ok(LogicalOperator::Filter(FilterOp {
-                    predicate,
-                    input: Box::new(LogicalOperator::Empty),
-                }))
+                Ok(wrap_filter(LogicalOperator::Empty, predicate))
             }
 
             ast::GraphPattern::Bind {
@@ -1473,10 +1452,7 @@ impl SparqlTranslator {
                 })
                 .unwrap();
 
-            Ok(LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(scan),
-            }))
+            Ok(wrap_filter(scan, predicate))
         };
 
         if has_forward && has_inverse {
@@ -1523,10 +1499,7 @@ impl SparqlTranslator {
         let union = LogicalOperator::Union(UnionOp { inputs: branches });
 
         // Wrap in Distinct to deduplicate across depths
-        Ok(LogicalOperator::Distinct(DistinctOp {
-            input: Box::new(union),
-            columns: None,
-        }))
+        Ok(wrap_distinct(union))
     }
 
     /// Translates a `ZeroOrMore` property path (`path*`) using bounded expansion.
@@ -1581,10 +1554,7 @@ impl SparqlTranslator {
         }
 
         let union = LogicalOperator::Union(UnionOp { inputs: branches });
-        Ok(LogicalOperator::Distinct(DistinctOp {
-            input: Box::new(union),
-            columns: None,
-        }))
+        Ok(wrap_distinct(union))
     }
 
     /// Translates a `ZeroOrOne` property path (`path?`).
@@ -1634,10 +1604,7 @@ impl SparqlTranslator {
         branches.push(one_hop);
 
         let union = LogicalOperator::Union(UnionOp { inputs: branches });
-        Ok(LogicalOperator::Distinct(DistinctOp {
-            input: Box::new(union),
-            columns: None,
-        }))
+        Ok(wrap_distinct(union))
     }
 
     /// Translates a property path at a fixed depth (number of hops).
@@ -1765,6 +1732,7 @@ impl SparqlTranslator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::plan::{LimitOp, SkipOp, SortOp};
 
     // === Basic SELECT Tests ===
 

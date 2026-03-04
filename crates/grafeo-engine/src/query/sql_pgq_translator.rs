@@ -6,12 +6,13 @@
 
 use crate::query::plan::{
     AggregateExpr, AggregateOp, BinaryOp, CallProcedureOp, CreatePropertyGraphOp, ExpandDirection,
-    ExpandOp, FilterOp, LimitOp, LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp,
-    PathMode, ProcedureYield, PropertyGraphEdgeTable, PropertyGraphNodeTable, ReturnItem, ReturnOp,
-    SkipOp, SortKey, SortOp, SortOrder, UnaryOp,
+    ExpandOp, LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp, PathMode,
+    ProcedureYield, PropertyGraphEdgeTable, PropertyGraphNodeTable, ReturnItem, SortKey, SortOrder,
+    UnaryOp,
 };
 use crate::query::translator_common::{
-    combine_with_and, is_aggregate_function, to_aggregate_function,
+    combine_with_and, is_aggregate_function, to_aggregate_function, wrap_filter, wrap_limit,
+    wrap_return, wrap_skip, wrap_sort,
 };
 use grafeo_adapters::query::sql_pgq::{self, ast};
 use grafeo_common::types::Value;
@@ -65,10 +66,7 @@ impl SqlPgqTranslator {
         // 2. Translate SQL WHERE → Filter (below Return)
         if let Some(where_expr) = &select.where_clause {
             let predicate = self.translate_sql_expression(where_expr, table_alias, &column_map)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         // 3. Translate ORDER BY → Sort (below Return)
@@ -90,26 +88,17 @@ impl SqlPgqTranslator {
                 })
                 .collect::<Result<_>>()?;
 
-            plan = LogicalOperator::Sort(SortOp {
-                keys,
-                input: Box::new(plan),
-            });
+            plan = wrap_sort(plan, keys);
         }
 
         // 4. Translate OFFSET → Skip (below Return, after Sort)
         if let Some(offset) = select.offset {
-            plan = LogicalOperator::Skip(SkipOp {
-                count: offset as usize,
-                input: Box::new(plan),
-            });
+            plan = wrap_skip(plan, offset as usize);
         }
 
         // 5. Translate LIMIT → Limit (below Return, after Skip)
         if let Some(limit) = select.limit {
-            plan = LogicalOperator::Limit(LimitOp {
-                count: limit as usize,
-                input: Box::new(plan),
-            });
+            plan = wrap_limit(plan, limit as usize);
         }
 
         // 6. Translate COLUMNS clause → Return (outermost projection)
@@ -182,11 +171,7 @@ impl SqlPgqTranslator {
                         }
                     })
                     .collect();
-                plan = LogicalOperator::Return(ReturnOp {
-                    items: return_items,
-                    distinct: false,
-                    input: Box::new(plan),
-                });
+                plan = wrap_return(plan, return_items, false);
             }
         }
 
@@ -221,10 +206,7 @@ impl SqlPgqTranslator {
         // Apply WHERE filter on yielded rows
         if let Some(where_clause) = &call.where_clause {
             let predicate = self.translate_expression(&where_clause.expression, None)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         // Apply RETURN clause (ORDER BY, SKIP, LIMIT, projection)
@@ -245,30 +227,21 @@ impl SqlPgqTranslator {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                plan = LogicalOperator::Sort(SortOp {
-                    keys,
-                    input: Box::new(plan),
-                });
+                plan = wrap_sort(plan, keys);
             }
 
             // Apply SKIP
             if let Some(skip_expr) = &return_clause.skip
                 && let ast::Expression::Literal(ast::Literal::Integer(n)) = skip_expr
             {
-                plan = LogicalOperator::Skip(SkipOp {
-                    count: *n as usize,
-                    input: Box::new(plan),
-                });
+                plan = wrap_skip(plan, *n as usize);
             }
 
             // Apply LIMIT
             if let Some(limit_expr) = &return_clause.limit
                 && let ast::Expression::Literal(ast::Literal::Integer(n)) = limit_expr
             {
-                plan = LogicalOperator::Limit(LimitOp {
-                    count: *n as usize,
-                    input: Box::new(plan),
-                });
+                plan = wrap_limit(plan, *n as usize);
             }
 
             // Apply RETURN projection (only when explicit items are present)
@@ -284,11 +257,7 @@ impl SqlPgqTranslator {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                plan = LogicalOperator::Return(ReturnOp {
-                    items: return_items,
-                    distinct: return_clause.distinct,
-                    input: Box::new(plan),
-                });
+                plan = wrap_return(plan, return_items, return_clause.distinct);
             }
         }
 
@@ -346,10 +315,7 @@ impl SqlPgqTranslator {
         // Add filters for inline properties (e.g., {city: 'NYC'})
         if !node.properties.is_empty() {
             let predicate = self.build_property_predicate(&variable, &node.properties)?;
-            plan = LogicalOperator::Filter(FilterOp {
-                predicate,
-                input: Box::new(plan),
-            });
+            plan = wrap_filter(plan, predicate);
         }
 
         Ok(plan)
@@ -416,8 +382,9 @@ impl SqlPgqTranslator {
 
         // Add label filter on the target node if present
         if let Some(label) = target_label {
-            Ok(LogicalOperator::Filter(FilterOp {
-                predicate: LogicalExpression::FunctionCall {
+            Ok(wrap_filter(
+                expand,
+                LogicalExpression::FunctionCall {
                     name: "hasLabel".into(),
                     args: vec![
                         LogicalExpression::Variable(to_variable),
@@ -425,8 +392,7 @@ impl SqlPgqTranslator {
                     ],
                     distinct: false,
                 },
-                input: Box::new(expand),
-            }))
+            ))
         } else {
             Ok(expand)
         }
@@ -450,11 +416,7 @@ impl SqlPgqTranslator {
             })
             .collect::<Result<_>>()?;
 
-        Ok(LogicalOperator::Return(ReturnOp {
-            items,
-            distinct: false,
-            input: Box::new(input),
-        }))
+        Ok(wrap_return(input, items, false))
     }
 
     // ==================== Expression Translation ====================
