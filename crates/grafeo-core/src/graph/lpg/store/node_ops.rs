@@ -318,9 +318,8 @@ impl LpgStore {
         use smallvec::SmallVec;
 
         let nodes = self.nodes.read();
-        let chain = match nodes.get(&id) {
-            Some(c) => c,
-            None => return Vec::new(),
+        let Some(chain) = nodes.get(&id) else {
+            return Vec::new();
         };
 
         let id_to_label = self.id_to_label.read();

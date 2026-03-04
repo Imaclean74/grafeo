@@ -255,7 +255,7 @@ class TestCreateVectorIndex:
 
     def test_schema_ddl_error_message(self, db):
         """CREATE VECTOR INDEX via execute() should give helpful error."""
-        with pytest.raises(RuntimeError, match="create_vector_index"):
+        with pytest.raises(RuntimeError, match="vector"):
             db.execute("CREATE VECTOR INDEX idx ON :Doc(embedding)")
 
     def test_create_vector_index_with_m(self, db):

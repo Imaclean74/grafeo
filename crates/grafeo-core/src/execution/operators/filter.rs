@@ -2240,6 +2240,7 @@ impl ExpressionPredicate {
                 let val = self.eval_expr(&args[0], chunk, row)?;
                 match val {
                     Value::Path { nodes, .. } => Some(Value::List(nodes)),
+                    Value::Map(map) => map.get(&PropertyKey::from("nodes")).cloned(),
                     Value::List(items) => {
                         // Legacy: alternating node, edge, node, edge, ...
                         let nodes: Vec<Value> = items.iter().step_by(2).cloned().collect();
@@ -2256,6 +2257,7 @@ impl ExpressionPredicate {
                 let val = self.eval_expr(&args[0], chunk, row)?;
                 match val {
                     Value::Path { edges, .. } => Some(Value::List(edges)),
+                    Value::Map(map) => map.get(&PropertyKey::from("edges")).cloned(),
                     Value::List(items) => {
                         // Legacy: alternating node, edge, node, edge, ...
                         let edges: Vec<Value> = items.iter().skip(1).step_by(2).cloned().collect();

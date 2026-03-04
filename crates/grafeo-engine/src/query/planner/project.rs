@@ -147,8 +147,8 @@ impl super::Planner {
                                     // Try direct column first, then path detail column
                                     let path_col = format!("_path_length_{var_name}");
                                     let col_idx = variable_columns
-                                        .get(var_name)
-                                        .or_else(|| variable_columns.get(&path_col))
+                                        .get(&path_col)
+                                        .or_else(|| variable_columns.get(var_name))
                                         .ok_or_else(|| {
                                             Error::Internal(format!(
                                                 "Variable '{}' not found in input",
@@ -181,8 +181,8 @@ impl super::Planner {
                                     };
                                     let path_col = format!("_path_{suffix}_{var_name}");
                                     let col_idx = variable_columns
-                                        .get(var_name)
-                                        .or_else(|| variable_columns.get(&path_col))
+                                        .get(&path_col)
+                                        .or_else(|| variable_columns.get(var_name))
                                         .ok_or_else(|| {
                                             Error::Internal(format!(
                                                 "Variable '{var_name}' not found in input",

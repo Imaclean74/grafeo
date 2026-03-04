@@ -246,9 +246,8 @@ impl LpgStore {
     #[cfg(not(feature = "tiered-storage"))]
     pub fn get_edge_history(&self, id: EdgeId) -> Vec<(EpochId, Option<EpochId>, Edge)> {
         let edges = self.edges.read();
-        let chain = match edges.get(&id) {
-            Some(c) => c,
-            None => return Vec::new(),
+        let Some(chain) = edges.get(&id) else {
+            return Vec::new();
         };
 
         let id_to_type = self.id_to_edge_type.read();

@@ -1266,7 +1266,7 @@ impl GqlTranslator {
         if let Some(ref label_expr) = node.label_expression {
             // Only add filter for non-simple expressions (simple Label already used in NodeScan)
             if !matches!(label_expr, ast::LabelExpression::Label(_)) {
-                let predicate = self.translate_label_expression(&variable, label_expr);
+                let predicate = Self::translate_label_expression(&variable, label_expr);
                 plan = LogicalOperator::Filter(FilterOp {
                     predicate,
                     input: Box::new(plan),
@@ -1297,7 +1297,6 @@ impl GqlTranslator {
 
     /// Translates a label expression into a filter predicate using hasLabel() calls.
     fn translate_label_expression(
-        &self,
         variable: &str,
         expr: &ast::LabelExpression,
     ) -> LogicalExpression {
@@ -1312,25 +1311,25 @@ impl GqlTranslator {
             },
             ast::LabelExpression::Conjunction(operands) => {
                 let mut iter = operands.iter();
-                let first = self.translate_label_expression(variable, iter.next().unwrap());
+                let first = Self::translate_label_expression(variable, iter.next().unwrap());
                 iter.fold(first, |acc, op| LogicalExpression::Binary {
                     left: Box::new(acc),
                     op: BinaryOp::And,
-                    right: Box::new(self.translate_label_expression(variable, op)),
+                    right: Box::new(Self::translate_label_expression(variable, op)),
                 })
             }
             ast::LabelExpression::Disjunction(operands) => {
                 let mut iter = operands.iter();
-                let first = self.translate_label_expression(variable, iter.next().unwrap());
+                let first = Self::translate_label_expression(variable, iter.next().unwrap());
                 iter.fold(first, |acc, op| LogicalExpression::Binary {
                     left: Box::new(acc),
                     op: BinaryOp::Or,
-                    right: Box::new(self.translate_label_expression(variable, op)),
+                    right: Box::new(Self::translate_label_expression(variable, op)),
                 })
             }
             ast::LabelExpression::Negation(inner) => LogicalExpression::Unary {
                 op: UnaryOp::Not,
-                operand: Box::new(self.translate_label_expression(variable, inner)),
+                operand: Box::new(Self::translate_label_expression(variable, inner)),
             },
             ast::LabelExpression::Wildcard => LogicalExpression::Literal(Value::Bool(true)),
         }
@@ -1489,7 +1488,7 @@ impl GqlTranslator {
 
             // Add filter for target node labels (colon syntax or IS expression)
             if let Some(ref label_expr) = edge.target.label_expression {
-                let predicate = self.translate_label_expression(&target_var, label_expr);
+                let predicate = Self::translate_label_expression(&target_var, label_expr);
                 plan = LogicalOperator::Filter(FilterOp {
                     predicate,
                     input: Box::new(plan),
