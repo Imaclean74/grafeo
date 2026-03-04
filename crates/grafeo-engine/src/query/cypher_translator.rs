@@ -4,12 +4,12 @@
 //! that can be optimized and executed.
 
 use crate::query::plan::{
-    AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, BinaryOp, CallProcedureOp,
+    AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp, CallProcedureOp,
     CreateEdgeOp, CreateNodeOp, DeleteNodeOp, DistinctOp, ExpandDirection, ExpandOp, FilterOp,
     LeftJoinOp, LimitOp, ListPredicateKind, LogicalExpression, LogicalOperator, LogicalPlan,
-    MergeOp, MergeRelationshipOp, NodeScanOp, ProcedureYield, ProjectOp, Projection, RemoveLabelOp,
-    ReturnItem, ReturnOp, SetPropertyOp, ShortestPathOp, SkipOp, SortKey, SortOp, SortOrder,
-    UnaryOp, UnionOp, UnwindOp,
+    MapProjectionEntry, MergeOp, MergeRelationshipOp, NodeScanOp, PathMode, ProcedureYield,
+    ProjectOp, Projection, RemoveLabelOp, ReturnItem, ReturnOp, SetPropertyOp, ShortestPathOp,
+    SkipOp, SortKey, SortOp, SortOrder, UnaryOp, UnionOp, UnwindOp,
 };
 use crate::query::translator_common::{
     combine_with_and, is_aggregate_function, to_aggregate_function,
@@ -17,7 +17,7 @@ use crate::query::translator_common::{
 use grafeo_adapters::query::cypher::{self, ast};
 use grafeo_common::types::Value;
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
 /// Translates a Cypher query string to a logical plan.
@@ -32,13 +32,23 @@ struct CypherTranslator {
     /// Variables bound to edges (from MATCH relationship patterns or MERGE relationships).
     /// Used to set `is_edge: true` on `SetPropertyOp` when the SET target is an edge variable.
     edge_variables: RefCell<HashSet<String>>,
+    /// Counter for generating unique anonymous variable names.
+    anon_counter: Cell<u32>,
 }
 
 impl CypherTranslator {
     fn new() -> Self {
         Self {
             edge_variables: RefCell::new(HashSet::new()),
+            anon_counter: Cell::new(0),
         }
+    }
+
+    /// Generates a unique anonymous variable name.
+    fn next_anon_var(&self) -> String {
+        let id = self.anon_counter.get();
+        self.anon_counter.set(id + 1);
+        format!("_anon_{id}")
     }
 
     /// Records a variable as an edge variable.
@@ -60,15 +70,15 @@ impl CypherTranslator {
             ast::Statement::Merge(merge) => self.translate_merge_statement(merge),
             ast::Statement::Delete(_) => Err(Error::Query(QueryError::new(
                 QueryErrorKind::Semantic,
-                "DELETE not yet supported",
+                "Standalone DELETE requires a preceding MATCH clause. Use: MATCH (n) WHERE ... DELETE n",
             ))),
             ast::Statement::Set(_) => Err(Error::Query(QueryError::new(
                 QueryErrorKind::Semantic,
-                "SET not yet supported",
+                "Standalone SET requires a preceding MATCH clause. Use: MATCH (n) WHERE ... SET n.prop = value",
             ))),
             ast::Statement::Remove(_) => Err(Error::Query(QueryError::new(
                 QueryErrorKind::Semantic,
-                "REMOVE not yet supported",
+                "Standalone REMOVE requires a preceding MATCH clause. Use: MATCH (n) WHERE ... REMOVE n.prop",
             ))),
             ast::Statement::Union { queries, all } => {
                 let inputs: Vec<LogicalOperator> = queries
@@ -134,6 +144,10 @@ impl CypherTranslator {
             ast::Clause::Set(set_clause) => self.translate_set(set_clause, input),
             ast::Clause::Remove(remove_clause) => self.translate_remove(remove_clause, input),
             ast::Clause::Call(call) => self.translate_call_clause(call, input),
+            ast::Clause::CallSubquery(inner_query) => {
+                self.translate_call_subquery(inner_query, input)
+            }
+            ast::Clause::ForEach(foreach) => self.translate_foreach(foreach, input),
         }
     }
 
@@ -163,6 +177,66 @@ impl CypherTranslator {
             arguments,
             yield_items,
         }))
+    }
+
+    /// Translates `CALL { subquery }` to an Apply operator.
+    fn translate_call_subquery(
+        &self,
+        inner: &ast::Query,
+        input: Option<LogicalOperator>,
+    ) -> Result<LogicalOperator> {
+        // Translate the inner subquery
+        let mut inner_plan: Option<LogicalOperator> = None;
+        for clause in &inner.clauses {
+            inner_plan = Some(self.translate_clause(clause, inner_plan)?);
+        }
+        let inner_plan = inner_plan.ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "CALL subquery requires at least one clause",
+            ))
+        })?;
+
+        match input {
+            Some(outer) => Ok(LogicalOperator::Apply(ApplyOp {
+                input: Box::new(outer),
+                subplan: Box::new(inner_plan),
+            })),
+            None => Ok(inner_plan),
+        }
+    }
+
+    /// Translates `FOREACH (var IN list | clauses)` to Unwind + mutation pipeline.
+    fn translate_foreach(
+        &self,
+        foreach: &ast::ForEachClause,
+        input: Option<LogicalOperator>,
+    ) -> Result<LogicalOperator> {
+        let input = input.ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "FOREACH requires preceding input (e.g., a MATCH clause)",
+            ))
+        })?;
+
+        let list_expr = self.translate_expression(&foreach.list)?;
+
+        // Unwind the list into individual rows
+        let unwind = LogicalOperator::Unwind(UnwindOp {
+            input: Box::new(input),
+            expression: list_expr,
+            variable: foreach.variable.clone(),
+            ordinality_var: None,
+            offset_var: None,
+        });
+
+        // Chain the inner mutation clauses
+        let mut plan = unwind;
+        for clause in &foreach.clauses {
+            plan = self.translate_clause(clause, Some(plan))?;
+        }
+
+        Ok(plan)
     }
 
     fn translate_match(
@@ -246,7 +320,10 @@ impl CypherTranslator {
         node: &ast::NodePattern,
         input: Option<LogicalOperator>,
     ) -> Result<LogicalOperator> {
-        let variable = node.variable.clone().unwrap_or_else(|| "_anon".to_string());
+        let variable = node
+            .variable
+            .clone()
+            .unwrap_or_else(|| self.next_anon_var());
         let label = node.labels.first().cloned();
 
         let mut plan = LogicalOperator::NodeScan(NodeScanOp {
@@ -441,14 +518,14 @@ impl CypherTranslator {
                 ast::Direction::Undirected => ExpandDirection::Both,
             };
 
-            let edge_type = rel.types.first().cloned();
+            let edge_types = rel.types.clone();
             let all_paths = matches!(path_function, ast::PathFunction::AllShortestPaths);
 
             plan = LogicalOperator::ShortestPath(ShortestPathOp {
                 input: Box::new(plan),
                 source_var,
                 target_var,
-                edge_type,
+                edge_types,
                 direction,
                 path_alias: path_alias.to_string(),
                 all_paths,
@@ -469,12 +546,12 @@ impl CypherTranslator {
         if let Some(ref ev) = edge_variable {
             self.register_edge_variable(ev);
         }
-        let edge_type = rel.types.first().cloned();
+        let edge_types = rel.types.clone();
         let to_variable = rel
             .target
             .variable
             .clone()
-            .unwrap_or_else(|| "_anon".to_string());
+            .unwrap_or_else(|| self.next_anon_var());
         let target_label = rel.target.labels.first().cloned();
 
         let direction = match rel.direction {
@@ -494,11 +571,12 @@ impl CypherTranslator {
             to_variable: to_variable.clone(),
             edge_variable,
             direction,
-            edge_type,
+            edge_types,
             min_hops,
             max_hops,
             input: Box::new(input),
             path_alias,
+            path_mode: PathMode::Walk,
         });
 
         if let Some(label) = target_label {
@@ -997,8 +1075,12 @@ impl CypherTranslator {
                 }
             }
             ast::Expression::Unary { op, operand } => {
-                let unary_op = self.translate_unary_op(*op)?;
                 let (agg, sub) = self.extract_wrapped_aggregate(operand, synthetic_alias)?;
+                // Unary positive is identity: just return the operand
+                if *op == ast::UnaryOp::Pos {
+                    return Ok((agg, sub));
+                }
+                let unary_op = self.translate_unary_op(*op)?;
                 Ok((
                     agg,
                     LogicalExpression::Unary {
@@ -1162,7 +1244,10 @@ impl CypherTranslator {
     ) -> Result<LogicalOperator> {
         match pattern {
             ast::Pattern::Node(node) => {
-                let variable = node.variable.clone().unwrap_or_else(|| "_anon".to_string());
+                let variable = node
+                    .variable
+                    .clone()
+                    .unwrap_or_else(|| self.next_anon_var());
                 let labels = node.labels.clone();
                 let properties: Vec<(String, LogicalExpression)> = node
                     .properties
@@ -1187,7 +1272,7 @@ impl CypherTranslator {
                         .target
                         .variable
                         .clone()
-                        .unwrap_or_else(|| "_anon".to_string());
+                        .unwrap_or_else(|| self.next_anon_var());
                     let edge_type = rel
                         .types
                         .first()
@@ -1454,6 +1539,10 @@ impl CypherTranslator {
             }
             ast::Expression::Unary { op, operand } => {
                 let operand_expr = self.translate_expression(operand)?;
+                // Unary positive is identity: just return the operand
+                if *op == ast::UnaryOp::Pos {
+                    return Ok(operand_expr);
+                }
                 let unary_op = self.translate_unary_op(*op)?;
 
                 Ok(LogicalExpression::Unary {
@@ -1581,18 +1670,71 @@ impl CypherTranslator {
                     predicate: Box::new(self.translate_expression(predicate)?),
                 })
             }
-            ast::Expression::PatternComprehension { .. } => Err(Error::Query(QueryError::new(
-                QueryErrorKind::Semantic,
-                "Pattern comprehension not yet supported",
-            ))),
+            ast::Expression::PatternComprehension {
+                pattern,
+                where_clause,
+                projection,
+            } => {
+                // Build a subplan from the pattern
+                let pattern_plan = self.translate_pattern(pattern, None)?;
+                // Apply optional WHERE filter
+                let subplan = if let Some(where_expr) = where_clause {
+                    let pred = self.translate_expression(where_expr)?;
+                    LogicalOperator::Filter(FilterOp {
+                        input: Box::new(pattern_plan),
+                        predicate: pred,
+                    })
+                } else {
+                    pattern_plan
+                };
+                let proj = self.translate_expression(projection)?;
+                Ok(LogicalExpression::PatternComprehension {
+                    subplan: Box::new(subplan),
+                    projection: Box::new(proj),
+                })
+            }
+            ast::Expression::MapProjection { base, entries } => {
+                let ir_entries = entries
+                    .iter()
+                    .map(|entry| match entry {
+                        ast::MapProjectionEntry::PropertySelector(name) => {
+                            Ok(MapProjectionEntry::PropertySelector(name.clone()))
+                        }
+                        ast::MapProjectionEntry::LiteralEntry(key, expr) => {
+                            let translated = self.translate_expression(expr)?;
+                            Ok(MapProjectionEntry::LiteralEntry(key.clone(), translated))
+                        }
+                        ast::MapProjectionEntry::AllProperties => {
+                            Ok(MapProjectionEntry::AllProperties)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(LogicalExpression::MapProjection {
+                    base: base.clone(),
+                    entries: ir_entries,
+                })
+            }
+            ast::Expression::Reduce {
+                accumulator,
+                initial,
+                variable,
+                list,
+                expression,
+            } => Ok(LogicalExpression::Reduce {
+                accumulator: accumulator.clone(),
+                initial: Box::new(self.translate_expression(initial)?),
+                variable: variable.clone(),
+                list: Box::new(self.translate_expression(list)?),
+                expression: Box::new(self.translate_expression(expression)?),
+            }),
             ast::Expression::Exists(inner_query) => {
                 let inner_plan = self.translate_exists_subquery(inner_query)?;
                 Ok(LogicalExpression::ExistsSubquery(Box::new(inner_plan)))
             }
-            ast::Expression::CountSubquery(_) => Err(Error::Query(QueryError::new(
-                QueryErrorKind::Semantic,
-                "COUNT subquery not yet supported",
-            ))),
+            ast::Expression::CountSubquery(inner_query) => {
+                let inner_plan = self.translate_exists_subquery(inner_query)?;
+                Ok(LogicalExpression::CountSubquery(Box::new(inner_plan)))
+            }
         }
     }
 
@@ -1652,12 +1794,7 @@ impl CypherTranslator {
             ast::BinaryOp::Mul => BinaryOp::Mul,
             ast::BinaryOp::Div => BinaryOp::Div,
             ast::BinaryOp::Mod => BinaryOp::Mod,
-            ast::BinaryOp::Pow => {
-                return Err(Error::Query(QueryError::new(
-                    QueryErrorKind::Semantic,
-                    "Power operator not yet supported",
-                )));
-            }
+            ast::BinaryOp::Pow => BinaryOp::Pow,
             ast::BinaryOp::Concat => BinaryOp::Concat,
             ast::BinaryOp::StartsWith => BinaryOp::StartsWith,
             ast::BinaryOp::EndsWith => BinaryOp::EndsWith,
@@ -1832,7 +1969,7 @@ mod tests {
 
         let expand = find_expand(&plan.root).expect("Expected Expand");
         assert_eq!(expand.direction, ExpandDirection::Outgoing);
-        assert_eq!(expand.edge_type.as_deref(), Some("KNOWS"));
+        assert_eq!(expand.edge_types, vec!["KNOWS".to_string()]);
     }
 
     #[test]
@@ -2562,6 +2699,365 @@ mod tests {
             } else {
                 panic!("Expected Filter, got {:?}", ret.input);
             }
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    // === Map Projection Tests ===
+
+    #[test]
+    fn test_translate_map_projection() {
+        let plan = translate("MATCH (p:Person) RETURN p { .name, .age }").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            if let LogicalExpression::MapProjection { base, entries } = &ret.items[0].expression {
+                assert_eq!(base, "p");
+                assert_eq!(entries.len(), 2);
+                assert!(
+                    matches!(&entries[0], MapProjectionEntry::PropertySelector(s) if s == "name")
+                );
+                assert!(
+                    matches!(&entries[1], MapProjectionEntry::PropertySelector(s) if s == "age")
+                );
+            } else {
+                panic!(
+                    "Expected MapProjection expression, got {:?}",
+                    ret.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    // === reduce() Tests ===
+
+    #[test]
+    fn test_translate_reduce() {
+        let plan = translate("MATCH (n) RETURN reduce(acc = 0, x IN [1,2,3] | acc + x)").unwrap();
+
+        // Walk past possible Aggregate wrapping to find the Reduce expression
+        fn find_reduce_expr(op: &LogicalOperator) -> Option<&LogicalExpression> {
+            match op {
+                LogicalOperator::Return(ret) => {
+                    for item in &ret.items {
+                        if matches!(&item.expression, LogicalExpression::Reduce { .. }) {
+                            return Some(&item.expression);
+                        }
+                    }
+                    find_reduce_expr(&ret.input)
+                }
+                LogicalOperator::Aggregate(agg) => {
+                    // Check group_by expressions
+                    for expr in &agg.group_by {
+                        if matches!(expr, LogicalExpression::Reduce { .. }) {
+                            return Some(expr);
+                        }
+                    }
+                    find_reduce_expr(&agg.input)
+                }
+                _ => None,
+            }
+        }
+
+        let reduce_expr =
+            find_reduce_expr(&plan.root).expect("Expected Reduce expression in the plan");
+
+        if let LogicalExpression::Reduce {
+            accumulator,
+            initial,
+            variable,
+            list,
+            expression,
+        } = reduce_expr
+        {
+            assert_eq!(accumulator, "acc");
+            assert!(matches!(
+                initial.as_ref(),
+                LogicalExpression::Literal(Value::Int64(0))
+            ));
+            assert_eq!(variable, "x");
+            // The list should be a List of 3 items
+            if let LogicalExpression::List(items) = list.as_ref() {
+                assert_eq!(items.len(), 3);
+            } else {
+                panic!("Expected List for reduce iteration, got {:?}", list);
+            }
+            // The body should be acc + x (Binary Add)
+            if let LogicalExpression::Binary { op, .. } = expression.as_ref() {
+                assert_eq!(*op, BinaryOp::Add);
+            } else {
+                panic!("Expected Binary Add in reduce body, got {:?}", expression);
+            }
+        } else {
+            panic!("Expected Reduce, got {:?}", reduce_expr);
+        }
+    }
+
+    // === Pattern Comprehension Tests ===
+
+    #[test]
+    fn test_translate_pattern_comprehension() {
+        let plan = translate("MATCH (p:Person) RETURN [(p)-[:KNOWS]->(f) | f.name]").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            if let LogicalExpression::PatternComprehension {
+                subplan,
+                projection,
+            } = &ret.items[0].expression
+            {
+                // The subplan should contain an Expand (for the pattern)
+                fn has_expand(op: &LogicalOperator) -> bool {
+                    match op {
+                        LogicalOperator::Expand(_) => true,
+                        LogicalOperator::Filter(f) => has_expand(&f.input),
+                        _ => false,
+                    }
+                }
+                assert!(
+                    has_expand(subplan),
+                    "Expected pattern comprehension subplan to contain Expand"
+                );
+                // The projection should be f.name (Property access)
+                assert!(
+                    matches!(
+                        projection.as_ref(),
+                        LogicalExpression::Property { variable, property }
+                        if variable == "f" && property == "name"
+                    ),
+                    "Expected projection to be f.name, got {:?}",
+                    projection
+                );
+            } else {
+                panic!(
+                    "Expected PatternComprehension, got {:?}",
+                    ret.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    // === COUNT Subquery Tests ===
+
+    #[test]
+    fn test_translate_count_subquery() {
+        let plan =
+            translate("MATCH (p:Person) RETURN COUNT { MATCH (p)-[:KNOWS]->() } AS cnt").unwrap();
+
+        // The COUNT subquery should appear as a CountSubquery expression
+        fn find_count_subquery(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Return(ret) => {
+                    ret.items
+                        .iter()
+                        .any(|item| matches!(&item.expression, LogicalExpression::CountSubquery(_)))
+                        || find_count_subquery(&ret.input)
+                }
+                LogicalOperator::Aggregate(agg) => {
+                    agg.group_by
+                        .iter()
+                        .any(|expr| matches!(expr, LogicalExpression::CountSubquery(_)))
+                        || find_count_subquery(&agg.input)
+                }
+                _ => false,
+            }
+        }
+
+        assert!(
+            find_count_subquery(&plan.root),
+            "Expected CountSubquery in the plan, got {:?}",
+            plan.root
+        );
+    }
+
+    // === CALL Subquery Tests ===
+
+    #[test]
+    fn test_translate_call_subquery() {
+        let plan = translate(
+            "MATCH (p:Person) CALL { WITH p MATCH (p)-[:KNOWS]->(f) RETURN count(f) AS cnt } RETURN p.name, cnt",
+        )
+        .unwrap();
+
+        // The plan should have an Apply operator for the CALL subquery
+        fn find_apply(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Apply(_) => true,
+                LogicalOperator::Return(ret) => find_apply(&ret.input),
+                LogicalOperator::Filter(f) => find_apply(&f.input),
+                LogicalOperator::Sort(s) => find_apply(&s.input),
+                _ => false,
+            }
+        }
+
+        assert!(
+            find_apply(&plan.root),
+            "Expected Apply operator for CALL subquery"
+        );
+
+        // Verify the final RETURN has two items
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(
+                ret.items.len(),
+                2,
+                "Expected 2 return items (p.name and cnt)"
+            );
+        } else {
+            panic!("Expected Return at root");
+        }
+    }
+
+    // === FOREACH Tests ===
+
+    #[test]
+    fn test_translate_foreach() {
+        let plan = translate("MATCH (n:Person) FOREACH (x IN [1,2,3] | SET n.x = 1)").unwrap();
+
+        // FOREACH translates to Unwind + mutation pipeline
+        // The plan should contain an Unwind operator somewhere
+        fn find_unwind(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Unwind(_) => true,
+                LogicalOperator::SetProperty(s) => find_unwind(&s.input),
+                LogicalOperator::Filter(f) => find_unwind(&f.input),
+                LogicalOperator::Return(r) => find_unwind(&r.input),
+                _ => false,
+            }
+        }
+
+        assert!(
+            find_unwind(&plan.root),
+            "FOREACH should produce an Unwind operator in the plan"
+        );
+
+        // The root should be a SetProperty (the inner SET clause)
+        assert!(
+            matches!(&plan.root, LogicalOperator::SetProperty(_)),
+            "Expected SetProperty at root for FOREACH with SET, got {:?}",
+            std::mem::discriminant(&plan.root)
+        );
+    }
+
+    // === Basic Query Translation Tests ===
+
+    #[test]
+    fn test_translate_match_with_multiple_labels() {
+        // Multi-label node patterns
+        let plan = translate("MATCH (n:Person:Employee) RETURN n").unwrap();
+        assert!(matches!(&plan.root, LogicalOperator::Return(_)));
+    }
+
+    #[test]
+    fn test_translate_standalone_return() {
+        // RETURN without MATCH (pure expression evaluation)
+        let plan = translate("RETURN 2 * 3").unwrap();
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            // The expression should be a Binary Mul of 2 * 3
+            if let LogicalExpression::Binary { op, left, right } = &ret.items[0].expression {
+                assert_eq!(*op, BinaryOp::Mul);
+                assert!(matches!(
+                    left.as_ref(),
+                    LogicalExpression::Literal(Value::Int64(2))
+                ));
+                assert!(matches!(
+                    right.as_ref(),
+                    LogicalExpression::Literal(Value::Int64(3))
+                ));
+            } else {
+                panic!("Expected Binary expression");
+            }
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    #[test]
+    fn test_translate_undirected_relationship() {
+        let plan = translate("MATCH (a:Person)-[:FRIEND]-(b:Person) RETURN a, b").unwrap();
+
+        fn find_expand(op: &LogicalOperator) -> Option<&ExpandOp> {
+            match op {
+                LogicalOperator::Expand(e) => Some(e),
+                LogicalOperator::Return(r) => find_expand(&r.input),
+                LogicalOperator::Filter(f) => find_expand(&f.input),
+                _ => None,
+            }
+        }
+
+        let expand = find_expand(&plan.root).expect("Expected Expand");
+        assert_eq!(expand.direction, ExpandDirection::Both);
+        assert_eq!(expand.edge_types, vec!["FRIEND".to_string()]);
+    }
+
+    #[test]
+    fn test_translate_match_with_return_alias() {
+        let plan = translate("MATCH (n:Person) RETURN n.name AS personName").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            assert_eq!(ret.items[0].alias.as_deref(), Some("personName"));
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    #[test]
+    fn test_translate_multiple_return_items() {
+        let plan = translate("MATCH (n:Person) RETURN n.name, n.age, n.city").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 3);
+        } else {
+            panic!("Expected Return");
+        }
+    }
+
+    #[test]
+    fn test_translate_list_predicate_all() {
+        let plan = translate("MATCH (n) WHERE all(x IN [1,2,3] WHERE x > 0) RETURN n").unwrap();
+
+        fn find_filter(op: &LogicalOperator) -> Option<&FilterOp> {
+            match op {
+                LogicalOperator::Filter(f) => Some(f),
+                LogicalOperator::Return(r) => find_filter(&r.input),
+                _ => None,
+            }
+        }
+
+        let filter = find_filter(&plan.root).expect("Expected Filter");
+        assert!(
+            matches!(
+                &filter.predicate,
+                LogicalExpression::ListPredicate {
+                    kind: ListPredicateKind::All,
+                    ..
+                }
+            ),
+            "Expected ListPredicate(All), got {:?}",
+            filter.predicate
+        );
+    }
+
+    #[test]
+    fn test_translate_list_comprehension() {
+        let plan = translate("MATCH (n) RETURN [x IN [1,2,3] WHERE x > 1 | x * 2]").unwrap();
+
+        if let LogicalOperator::Return(ret) = &plan.root {
+            assert_eq!(ret.items.len(), 1);
+            assert!(
+                matches!(
+                    &ret.items[0].expression,
+                    LogicalExpression::ListComprehension { .. }
+                ),
+                "Expected ListComprehension, got {:?}",
+                ret.items[0].expression
+            );
         } else {
             panic!("Expected Return");
         }

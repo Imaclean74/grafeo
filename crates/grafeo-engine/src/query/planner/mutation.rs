@@ -32,18 +32,21 @@ impl super::Planner {
 
         let output_schema = self.derive_schema_from_columns(&columns);
 
-        let operator = Box::new(
-            CreateNodeOperator::new(
-                Arc::clone(&self.store),
-                input_op,
-                create.labels.clone(),
-                properties,
-                output_schema,
-                output_column,
-            )
-            .with_tx_context(self.viewing_epoch, self.tx_id),
-        );
+        let mut op = CreateNodeOperator::new(
+            Arc::clone(&self.store),
+            input_op,
+            create.labels.clone(),
+            properties,
+            output_schema,
+            output_column,
+        )
+        .with_tx_context(self.viewing_epoch, self.tx_id);
 
+        if let Some(ref validator) = self.validator {
+            op = op.with_validator(Arc::clone(validator));
+        }
+
+        let operator = Box::new(op);
         Ok((operator, columns))
     }
 
@@ -107,6 +110,9 @@ impl super::Planner {
 
         if let Some(col) = output_column {
             operator = operator.with_output_column(col);
+        }
+        if let Some(ref validator) = self.validator {
+            operator = operator.with_validator(Arc::clone(validator));
         }
 
         let operator = Box::new(operator);
@@ -626,7 +632,7 @@ impl super::Planner {
                 input_op,
                 source_column,
                 target_column,
-                sp.edge_type.clone(),
+                sp.edge_types.clone(),
                 direction,
             )
             .with_all_paths(sp.all_paths),
@@ -659,6 +665,19 @@ impl super::Planner {
         if resolved_name == "grafeo.procedures" || resolved_name == "procedures" {
             let result = procedures::procedures_result(registry);
             return self.plan_static_result(result, &call.yield_items);
+        }
+
+        // Check user-defined procedures first
+        if let Some(catalog) = &self.catalog {
+            let proc_name = if call.name.len() == 1 {
+                &call.name[0]
+            } else {
+                // For dotted names, try the last segment as procedure name
+                call.name.last().unwrap()
+            };
+            if let Some(proc_def) = catalog.get_procedure(proc_name) {
+                return self.plan_user_procedure(call, &proc_def);
+            }
         }
 
         // Look up the algorithm
@@ -746,6 +765,76 @@ impl super::Planner {
             column_indices,
             row_index: 0,
         });
+
+        Ok((operator, output_columns))
+    }
+
+    /// Plans a user-defined procedure call.
+    #[cfg(feature = "algos")]
+    fn plan_user_procedure(
+        &self,
+        call: &CallProcedureOp,
+        proc_def: &crate::catalog::ProcedureDefinition,
+    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        use crate::query::executor::user_procedure::UserProcedureOperator;
+
+        // Validate argument count
+        if call.arguments.len() != proc_def.params.len() {
+            return Err(Error::Internal(format!(
+                "Procedure '{}' expects {} arguments, got {}",
+                proc_def.name,
+                proc_def.params.len(),
+                call.arguments.len()
+            )));
+        }
+
+        // Evaluate arguments to values
+        let mut arg_values = Vec::new();
+        for arg in &call.arguments {
+            let val = crate::query::planner::eval_constant_expression(arg)?;
+            arg_values.push(val);
+        }
+
+        // Build parameter map: param_name -> value
+        let mut param_map = std::collections::HashMap::new();
+        for (param, value) in proc_def.params.iter().zip(arg_values) {
+            param_map.insert(param.0.clone(), value);
+        }
+
+        // Determine output columns
+        let return_columns: Vec<String> = proc_def.returns.iter().map(|r| r.0.clone()).collect();
+
+        let output_columns = if let Some(yield_items) = &call.yield_items {
+            yield_items
+                .iter()
+                .map(|item| {
+                    item.alias
+                        .clone()
+                        .unwrap_or_else(|| item.field_name.clone())
+                })
+                .collect()
+        } else {
+            return_columns.clone()
+        };
+
+        let yield_columns = call.yield_items.as_ref().map(|items| {
+            items
+                .iter()
+                .map(|item| item.field_name.clone())
+                .collect::<Vec<_>>()
+        });
+
+        let operator = Box::new(UserProcedureOperator::new(
+            proc_def.body.clone(),
+            param_map,
+            return_columns,
+            yield_columns,
+            Arc::clone(&self.store) as Arc<dyn GraphStoreMut>,
+            self.tx_manager.clone(),
+            self.tx_id,
+            self.viewing_epoch,
+            self.catalog.clone(),
+        ));
 
         Ok((operator, output_columns))
     }
@@ -851,21 +940,31 @@ impl super::Planner {
         // Determine if this is a node or edge using tracked edge columns
         let is_edge = set_prop.is_edge || self.edge_columns.borrow().contains(&set_prop.variable);
         let operator: Box<dyn Operator> = if is_edge {
-            Box::new(SetPropertyOperator::new_for_edge(
+            let mut op = SetPropertyOperator::new_for_edge(
                 Arc::clone(&self.store),
                 input_op,
                 entity_column,
                 properties,
                 output_schema,
-            ))
+            )
+            .with_replace(set_prop.replace);
+            if let Some(ref validator) = self.validator {
+                op = op.with_validator(Arc::clone(validator));
+            }
+            Box::new(op)
         } else {
-            Box::new(SetPropertyOperator::new_for_node(
+            let mut op = SetPropertyOperator::new_for_node(
                 Arc::clone(&self.store),
                 input_op,
                 entity_column,
                 properties,
                 output_schema,
-            ))
+            )
+            .with_replace(set_prop.replace);
+            if let Some(ref validator) = self.validator {
+                op = op.with_validator(Arc::clone(validator));
+            }
+            Box::new(op)
         };
 
         Ok((operator, output_columns))
@@ -928,25 +1027,7 @@ impl super::Planner {
             LogicalExpression::List(items) => {
                 let values: Option<Vec<Value>> =
                     items.iter().map(Self::try_fold_expression).collect();
-                let values = values?;
-                // All-numeric lists become vectors (matches Python list[float] behavior)
-                let all_numeric = !values.is_empty()
-                    && values
-                        .iter()
-                        .all(|v| matches!(v, Value::Float64(_) | Value::Int64(_)));
-                if all_numeric {
-                    let floats: Vec<f32> = values
-                        .iter()
-                        .filter_map(|v| match v {
-                            Value::Float64(f) => Some(*f as f32),
-                            Value::Int64(i) => Some(*i as f32),
-                            _ => None,
-                        })
-                        .collect();
-                    Some(Value::Vector(floats.into()))
-                } else {
-                    Some(Value::List(values.into()))
-                }
+                Some(Value::List(values?.into()))
             }
             LogicalExpression::FunctionCall { name, args, .. } => {
                 match name.to_lowercase().as_str() {
@@ -978,6 +1059,19 @@ impl super::Planner {
                     }
                     _ => None,
                 }
+            }
+            LogicalExpression::Map(entries) => {
+                let folded: Option<Vec<(String, Value)>> = entries
+                    .iter()
+                    .map(|(k, v)| Self::try_fold_expression(v).map(|val| (k.clone(), val)))
+                    .collect();
+                let folded = folded?;
+                let map: std::collections::BTreeMap<grafeo_common::types::PropertyKey, Value> =
+                    folded
+                        .into_iter()
+                        .map(|(k, v)| (grafeo_common::types::PropertyKey::from(k), v))
+                        .collect();
+                Some(Value::Map(std::sync::Arc::new(map)))
             }
             _ => None,
         }

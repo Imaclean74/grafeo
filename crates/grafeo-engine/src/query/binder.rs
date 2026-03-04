@@ -110,6 +110,12 @@ impl BindingContext {
     pub fn is_empty(&self) -> bool {
         self.variables.is_empty()
     }
+
+    /// Removes a variable from the context (used for temporary scoping).
+    pub fn remove_variable(&mut self, name: &str) {
+        self.variables.remove(name);
+        self.order.retain(|n| n != name);
+    }
 }
 
 /// Semantic binder for query plans.
@@ -586,6 +592,26 @@ impl Binder {
                 );
                 Ok(())
             }
+            LogicalOperator::Except(except) => {
+                self.bind_operator(&except.left)?;
+                self.bind_operator(&except.right)?;
+                Ok(())
+            }
+            LogicalOperator::Intersect(intersect) => {
+                self.bind_operator(&intersect.left)?;
+                self.bind_operator(&intersect.right)?;
+                Ok(())
+            }
+            LogicalOperator::Otherwise(otherwise) => {
+                self.bind_operator(&otherwise.left)?;
+                self.bind_operator(&otherwise.right)?;
+                Ok(())
+            }
+            LogicalOperator::Apply(apply) => {
+                self.bind_operator(&apply.input)?;
+                self.bind_operator(&apply.subplan)?;
+                Ok(())
+            }
             // DDL operators don't need binding — they're handled before the binder
             LogicalOperator::CreatePropertyGraph(_) => Ok(()),
             // Procedure calls: register yielded columns as variables for downstream operators
@@ -835,14 +861,18 @@ impl Binder {
     }
 
     /// Validates a return item.
-    fn validate_return_item(&self, item: &ReturnItem) -> Result<()> {
+    fn validate_return_item(&mut self, item: &ReturnItem) -> Result<()> {
         self.validate_expression(&item.expression)
     }
 
     /// Validates that an expression only references defined variables.
-    fn validate_expression(&self, expr: &LogicalExpression) -> Result<()> {
+    fn validate_expression(&mut self, expr: &LogicalExpression) -> Result<()> {
         match expr {
             LogicalExpression::Variable(name) => {
+                // "*" is a wildcard marker for RETURN *, expanded by the planner
+                if name == "*" {
+                    return Ok(());
+                }
                 if !self.context.contains(name) && !name.starts_with("_anon_") {
                     return Err(undefined_variable_error(name, &self.context, ""));
                 }
@@ -924,21 +954,11 @@ impl Binder {
                 }
                 Ok(())
             }
-            LogicalExpression::ListComprehension {
-                list_expr,
-                filter_expr,
-                map_expr,
-                ..
-            } => {
-                // Validate the list expression
+            LogicalExpression::ListComprehension { list_expr, .. } => {
+                // Validate the list expression against the outer context.
+                // The filter and map expressions use the iteration variable
+                // which is locally scoped, so we skip validating them here.
                 self.validate_expression(list_expr)?;
-                // Note: filter_expr and map_expr use the comprehension variable
-                // which is defined within the comprehension scope, so we don't
-                // need to validate it against the outer context
-                if let Some(filter) = filter_expr {
-                    self.validate_expression(filter)?;
-                }
-                self.validate_expression(map_expr)?;
                 Ok(())
             }
             LogicalExpression::ListPredicate { list_expr, .. } => {
@@ -953,6 +973,69 @@ impl Binder {
                 // Subqueries have their own binding context
                 // For now, just validate the structure exists
                 let _ = subquery; // Would need recursive binding
+                Ok(())
+            }
+            LogicalExpression::PatternComprehension { projection, .. } => {
+                // Subplan has its own scope; validate the projection expression
+                self.validate_expression(projection)
+            }
+            LogicalExpression::MapProjection { base, entries } => {
+                if !self.context.contains(base) && !base.starts_with("_anon_") {
+                    return Err(undefined_variable_error(
+                        base,
+                        &self.context,
+                        " in map projection",
+                    ));
+                }
+                for entry in entries {
+                    if let crate::query::plan::MapProjectionEntry::LiteralEntry(_, expr) = entry {
+                        self.validate_expression(expr)?;
+                    }
+                }
+                Ok(())
+            }
+            LogicalExpression::Reduce {
+                accumulator,
+                initial,
+                variable,
+                list,
+                expression,
+            } => {
+                self.validate_expression(initial)?;
+                self.validate_expression(list)?;
+                // accumulator and variable are locally scoped: inject them
+                // into context, validate body, then remove
+                let had_acc = self.context.contains(accumulator);
+                let had_var = self.context.contains(variable);
+                if !had_acc {
+                    self.context.add_variable(
+                        accumulator.clone(),
+                        VariableInfo {
+                            name: accumulator.clone(),
+                            data_type: LogicalType::Any,
+                            is_node: false,
+                            is_edge: false,
+                        },
+                    );
+                }
+                if !had_var {
+                    self.context.add_variable(
+                        variable.clone(),
+                        VariableInfo {
+                            name: variable.clone(),
+                            data_type: LogicalType::Any,
+                            is_node: false,
+                            is_edge: false,
+                        },
+                    );
+                }
+                self.validate_expression(expression)?;
+                if !had_acc {
+                    self.context.remove_variable(accumulator);
+                }
+                if !had_var {
+                    self.context.remove_variable(variable);
+                }
                 Ok(())
             }
         }
@@ -1168,7 +1251,7 @@ mod tests {
 
     #[test]
     fn test_bind_expand() {
-        use crate::query::plan::{ExpandDirection, ExpandOp};
+        use crate::query::plan::{ExpandDirection, ExpandOp, PathMode};
 
         let plan = LogicalPlan::new(LogicalOperator::Return(ReturnOp {
             items: vec![
@@ -1187,7 +1270,7 @@ mod tests {
                 to_variable: "b".to_string(),
                 edge_variable: Some("e".to_string()),
                 direction: ExpandDirection::Outgoing,
-                edge_type: Some("KNOWS".to_string()),
+                edge_types: vec!["KNOWS".to_string()],
                 min_hops: 1,
                 max_hops: Some(1),
                 input: Box::new(LogicalOperator::NodeScan(NodeScanOp {
@@ -1196,6 +1279,7 @@ mod tests {
                     input: None,
                 })),
                 path_alias: None,
+                path_mode: PathMode::Walk,
             })),
         }));
 
@@ -1215,7 +1299,7 @@ mod tests {
     #[test]
     fn test_bind_expand_from_undefined_variable() {
         // Tests that expanding from an undefined variable produces a clear error
-        use crate::query::plan::{ExpandDirection, ExpandOp};
+        use crate::query::plan::{ExpandDirection, ExpandOp, PathMode};
 
         let plan = LogicalPlan::new(LogicalOperator::Return(ReturnOp {
             items: vec![ReturnItem {
@@ -1228,7 +1312,7 @@ mod tests {
                 to_variable: "b".to_string(),
                 edge_variable: None,
                 direction: ExpandDirection::Outgoing,
-                edge_type: None,
+                edge_types: vec![],
                 min_hops: 1,
                 max_hops: Some(1),
                 input: Box::new(LogicalOperator::NodeScan(NodeScanOp {
@@ -1237,6 +1321,7 @@ mod tests {
                     input: None,
                 })),
                 path_alias: None,
+                path_mode: PathMode::Walk,
             })),
         }));
 
@@ -1748,7 +1833,7 @@ mod tests {
             })),
             source_var: "missing".to_string(), // not defined
             target_var: "b".to_string(),
-            edge_type: None,
+            edge_types: vec![],
             direction: ExpandDirection::Both,
             path_alias: "p".to_string(),
             all_paths: false,
@@ -1783,7 +1868,7 @@ mod tests {
             })),
             source_var: "a".to_string(),
             target_var: "b".to_string(),
-            edge_type: Some("ROAD".to_string()),
+            edge_types: vec!["ROAD".to_string()],
             direction: ExpandDirection::Outgoing,
             path_alias: "p".to_string(),
             all_paths: false,
@@ -1995,7 +2080,7 @@ mod tests {
 
     #[test]
     fn test_expand_rejects_non_node_source() {
-        use crate::query::plan::{ExpandDirection, ExpandOp, UnwindOp};
+        use crate::query::plan::{ExpandDirection, ExpandOp, PathMode, UnwindOp};
 
         // UNWIND [1,2] AS x  -- x is not a node
         // MATCH (x)-[:E]->(b)  -- should fail: x isn't a node
@@ -2010,7 +2095,7 @@ mod tests {
                 to_variable: "b".to_string(),
                 edge_variable: None,
                 direction: ExpandDirection::Outgoing,
-                edge_type: None,
+                edge_types: vec![],
                 min_hops: 1,
                 max_hops: Some(1),
                 input: Box::new(LogicalOperator::Unwind(UnwindOp {
@@ -2021,6 +2106,7 @@ mod tests {
                     input: Box::new(LogicalOperator::Empty),
                 })),
                 path_alias: None,
+                path_mode: PathMode::Walk,
             })),
         }));
 

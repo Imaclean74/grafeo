@@ -20,6 +20,7 @@ mod persistence;
 mod query;
 mod search;
 
+#[cfg(feature = "wal")]
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -37,6 +38,7 @@ use grafeo_core::graph::lpg::LpgStore;
 #[cfg(feature = "rdf")]
 use grafeo_core::graph::rdf::RdfStore;
 
+use crate::catalog::Catalog;
 use crate::config::Config;
 use crate::query::cache::QueryCache;
 use crate::session::Session;
@@ -69,6 +71,8 @@ pub struct GrafeoDB {
     pub(super) config: Config,
     /// The underlying graph store.
     pub(super) store: Arc<LpgStore>,
+    /// Schema and metadata catalog shared across sessions.
+    pub(super) catalog: Arc<Catalog>,
     /// RDF triple store (if RDF feature is enabled).
     #[cfg(feature = "rdf")]
     pub(super) rdf_store: Arc<RdfStore>,
@@ -188,6 +192,9 @@ impl GrafeoDB {
         };
         let buffer_manager = BufferManager::new(buffer_config);
 
+        // Create catalog early so WAL replay can restore schema definitions
+        let catalog = Arc::new(Catalog::new());
+
         // Initialize WAL if persistence is enabled
         #[cfg(feature = "wal")]
         let wal = if config.wal_enabled {
@@ -201,7 +208,7 @@ impl GrafeoDB {
                 if wal_path.exists() {
                     let recovery = WalRecovery::new(&wal_path);
                     let records = recovery.recover()?;
-                    Self::apply_wal_records(&store, &records)?;
+                    Self::apply_wal_records(&store, &catalog, &records)?;
                 }
 
                 // Open/create WAL manager with configured durability
@@ -238,6 +245,7 @@ impl GrafeoDB {
         Ok(Self {
             config,
             store,
+            catalog,
             #[cfg(feature = "rdf")]
             rdf_store,
             tx_manager,
@@ -301,6 +309,7 @@ impl GrafeoDB {
         Ok(Self {
             config,
             store: dummy_store,
+            catalog: Arc::new(Catalog::new()),
             #[cfg(feature = "rdf")]
             rdf_store: Arc::new(RdfStore::new()),
             tx_manager,
@@ -320,7 +329,11 @@ impl GrafeoDB {
 
     /// Applies WAL records to restore the database state.
     #[cfg(feature = "wal")]
-    fn apply_wal_records(store: &LpgStore, records: &[WalRecord]) -> Result<()> {
+    fn apply_wal_records(store: &LpgStore, catalog: &Catalog, records: &[WalRecord]) -> Result<()> {
+        use crate::catalog::{
+            EdgeTypeDefinition, NodeTypeDefinition, PropertyDataType, TypeConstraint, TypedProperty,
+        };
+
         for record in records {
             match record {
                 WalRecord::CreateNode { id, labels } => {
@@ -353,6 +366,186 @@ impl GrafeoDB {
                 WalRecord::RemoveNodeLabel { id, label } => {
                     store.remove_label(*id, label);
                 }
+
+                // Schema DDL replay
+                WalRecord::CreateNodeType {
+                    name,
+                    properties,
+                    constraints,
+                } => {
+                    let def = NodeTypeDefinition {
+                        name: name.clone(),
+                        properties: properties
+                            .iter()
+                            .map(|(n, t, nullable)| TypedProperty {
+                                name: n.clone(),
+                                data_type: PropertyDataType::from_type_name(t),
+                                nullable: *nullable,
+                                default_value: None,
+                            })
+                            .collect(),
+                        constraints: constraints
+                            .iter()
+                            .map(|(kind, props)| match kind.as_str() {
+                                "unique" => TypeConstraint::Unique(props.clone()),
+                                "primary_key" => TypeConstraint::PrimaryKey(props.clone()),
+                                "not_null" if !props.is_empty() => {
+                                    TypeConstraint::NotNull(props[0].clone())
+                                }
+                                _ => TypeConstraint::Unique(props.clone()),
+                            })
+                            .collect(),
+                    };
+                    let _ = catalog.register_node_type(def);
+                }
+                WalRecord::DropNodeType { name } => {
+                    let _ = catalog.drop_node_type(name);
+                }
+                WalRecord::CreateEdgeType {
+                    name,
+                    properties,
+                    constraints,
+                } => {
+                    let def = EdgeTypeDefinition {
+                        name: name.clone(),
+                        properties: properties
+                            .iter()
+                            .map(|(n, t, nullable)| TypedProperty {
+                                name: n.clone(),
+                                data_type: PropertyDataType::from_type_name(t),
+                                nullable: *nullable,
+                                default_value: None,
+                            })
+                            .collect(),
+                        constraints: constraints
+                            .iter()
+                            .map(|(kind, props)| match kind.as_str() {
+                                "unique" => TypeConstraint::Unique(props.clone()),
+                                "primary_key" => TypeConstraint::PrimaryKey(props.clone()),
+                                "not_null" if !props.is_empty() => {
+                                    TypeConstraint::NotNull(props[0].clone())
+                                }
+                                _ => TypeConstraint::Unique(props.clone()),
+                            })
+                            .collect(),
+                    };
+                    let _ = catalog.register_edge_type_def(def);
+                }
+                WalRecord::DropEdgeType { name } => {
+                    let _ = catalog.drop_edge_type_def(name);
+                }
+                WalRecord::CreateIndex { .. } | WalRecord::DropIndex { .. } => {
+                    // Index recreation is handled by the store on startup
+                    // (indexes are rebuilt from data, not WAL)
+                }
+                WalRecord::CreateConstraint { .. } | WalRecord::DropConstraint { .. } => {
+                    // Constraint definitions are part of type definitions
+                    // and replayed via CreateNodeType/CreateEdgeType
+                }
+                WalRecord::CreateGraphType {
+                    name,
+                    node_types,
+                    edge_types,
+                    open,
+                } => {
+                    use crate::catalog::GraphTypeDefinition;
+                    let def = GraphTypeDefinition {
+                        name: name.clone(),
+                        allowed_node_types: node_types.clone(),
+                        allowed_edge_types: edge_types.clone(),
+                        open: *open,
+                    };
+                    let _ = catalog.register_graph_type(def);
+                }
+                WalRecord::DropGraphType { name } => {
+                    let _ = catalog.drop_graph_type(name);
+                }
+                WalRecord::CreateSchema { name } => {
+                    let _ = catalog.register_schema_namespace(name.clone());
+                }
+                WalRecord::DropSchema { name } => {
+                    let _ = catalog.drop_schema_namespace(name);
+                }
+
+                WalRecord::AlterNodeType { name, alterations } => {
+                    for (action, prop_name, type_name, nullable) in alterations {
+                        match action.as_str() {
+                            "add" => {
+                                let prop = TypedProperty {
+                                    name: prop_name.clone(),
+                                    data_type: PropertyDataType::from_type_name(type_name),
+                                    nullable: *nullable,
+                                    default_value: None,
+                                };
+                                let _ = catalog.alter_node_type_add_property(name, prop);
+                            }
+                            "drop" => {
+                                let _ = catalog.alter_node_type_drop_property(name, prop_name);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                WalRecord::AlterEdgeType { name, alterations } => {
+                    for (action, prop_name, type_name, nullable) in alterations {
+                        match action.as_str() {
+                            "add" => {
+                                let prop = TypedProperty {
+                                    name: prop_name.clone(),
+                                    data_type: PropertyDataType::from_type_name(type_name),
+                                    nullable: *nullable,
+                                    default_value: None,
+                                };
+                                let _ = catalog.alter_edge_type_add_property(name, prop);
+                            }
+                            "drop" => {
+                                let _ = catalog.alter_edge_type_drop_property(name, prop_name);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                WalRecord::AlterGraphType { name, alterations } => {
+                    for (action, type_name) in alterations {
+                        match action.as_str() {
+                            "add_node" => {
+                                let _ =
+                                    catalog.alter_graph_type_add_node_type(name, type_name.clone());
+                            }
+                            "drop_node" => {
+                                let _ = catalog.alter_graph_type_drop_node_type(name, type_name);
+                            }
+                            "add_edge" => {
+                                let _ =
+                                    catalog.alter_graph_type_add_edge_type(name, type_name.clone());
+                            }
+                            "drop_edge" => {
+                                let _ = catalog.alter_graph_type_drop_edge_type(name, type_name);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                WalRecord::CreateProcedure {
+                    name,
+                    params,
+                    returns,
+                    body,
+                } => {
+                    use crate::catalog::ProcedureDefinition;
+                    let def = ProcedureDefinition {
+                        name: name.clone(),
+                        params: params.clone(),
+                        returns: returns.clone(),
+                        body: body.clone(),
+                    };
+                    let _ = catalog.register_procedure(def);
+                }
+                WalRecord::DropProcedure { name } => {
+                    let _ = catalog.drop_procedure(name);
+                }
+
                 WalRecord::TxCommit { .. }
                 | WalRecord::TxAbort { .. }
                 | WalRecord::Checkpoint { .. } => {
@@ -393,6 +586,7 @@ impl GrafeoDB {
                 Arc::clone(ext_store),
                 Arc::clone(&self.tx_manager),
                 Arc::clone(&self.query_cache),
+                Arc::clone(&self.catalog),
                 self.config.adaptive.clone(),
                 self.config.factorized_execution,
                 self.config.graph_model,
@@ -408,6 +602,7 @@ impl GrafeoDB {
             Arc::clone(&self.rdf_store),
             Arc::clone(&self.tx_manager),
             Arc::clone(&self.query_cache),
+            Arc::clone(&self.catalog),
             self.config.adaptive.clone(),
             self.config.factorized_execution,
             self.config.graph_model,
@@ -420,6 +615,7 @@ impl GrafeoDB {
             Arc::clone(&self.store),
             Arc::clone(&self.tx_manager),
             Arc::clone(&self.query_cache),
+            Arc::clone(&self.catalog),
             self.config.adaptive.clone(),
             self.config.factorized_execution,
             self.config.graph_model,
@@ -428,10 +624,15 @@ impl GrafeoDB {
             self.config.gc_interval,
         );
 
+        #[cfg(feature = "wal")]
+        if let Some(ref wal) = self.wal {
+            session.set_wal(Arc::clone(wal));
+        }
+
         #[cfg(feature = "cdc")]
         session.set_cdc_log(Arc::clone(&self.cdc_log));
 
-        // Suppress unused_mut when cdc is disabled
+        // Suppress unused_mut when cdc/wal are disabled
         let _ = &mut session;
 
         session
@@ -471,6 +672,24 @@ impl GrafeoDB {
     #[must_use]
     pub fn store(&self) -> &Arc<LpgStore> {
         &self.store
+    }
+
+    // === Named Graph Management ===
+
+    /// Creates a named graph. Returns `true` if created, `false` if it already exists.
+    pub fn create_graph(&self, name: &str) -> bool {
+        self.store.create_graph(name)
+    }
+
+    /// Drops a named graph. Returns `true` if dropped, `false` if it did not exist.
+    pub fn drop_graph(&self, name: &str) -> bool {
+        self.store.drop_graph(name)
+    }
+
+    /// Returns all named graph names.
+    #[must_use]
+    pub fn list_graphs(&self) -> Vec<String> {
+        self.store.graph_names()
     }
 
     /// Returns the graph store as a trait object.
@@ -648,9 +867,37 @@ pub struct QueryResult {
     pub execution_time_ms: Option<f64>,
     /// Number of rows scanned during query execution (estimate).
     pub rows_scanned: Option<u64>,
+    /// Status message for DDL and session commands (e.g., "Created node type 'Person'").
+    pub status_message: Option<String>,
 }
 
 impl QueryResult {
+    /// Creates a fully empty query result (no columns, no rows).
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            columns: Vec::new(),
+            column_types: Vec::new(),
+            rows: Vec::new(),
+            execution_time_ms: None,
+            rows_scanned: None,
+            status_message: None,
+        }
+    }
+
+    /// Creates a query result with only a status message (for DDL commands).
+    #[must_use]
+    pub fn status(msg: impl Into<String>) -> Self {
+        Self {
+            columns: Vec::new(),
+            column_types: Vec::new(),
+            rows: Vec::new(),
+            execution_time_ms: None,
+            rows_scanned: None,
+            status_message: Some(msg.into()),
+        }
+    }
+
     /// Creates a new empty query result.
     #[must_use]
     pub fn new(columns: Vec<String>) -> Self {
@@ -661,6 +908,7 @@ impl QueryResult {
             rows: Vec::new(),
             execution_time_ms: None,
             rows_scanned: None,
+            status_message: None,
         }
     }
 
@@ -676,6 +924,7 @@ impl QueryResult {
             rows: Vec::new(),
             execution_time_ms: None,
             rows_scanned: None,
+            status_message: None,
         }
     }
 

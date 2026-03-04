@@ -160,6 +160,20 @@ pub enum LogicalOperator {
     /// - Combining multiple vector sources with graph structure
     VectorJoin(VectorJoinOp),
 
+    // ==================== Set Operations ====================
+    /// Set difference: rows in left that are not in right.
+    Except(ExceptOp),
+
+    /// Set intersection: rows common to all inputs.
+    Intersect(IntersectOp),
+
+    /// Fallback: use left result if non-empty, otherwise right.
+    Otherwise(OtherwiseOp),
+
+    // ==================== Correlated Subquery ====================
+    /// Apply (lateral join): evaluate a subplan per input row.
+    Apply(ApplyOp),
+
     // ==================== DDL Operators ====================
     /// Define a property graph schema (SQL/PGQ DDL).
     CreatePropertyGraph(CreatePropertyGraphOp),
@@ -167,6 +181,69 @@ pub enum LogicalOperator {
     // ==================== Procedure Call Operators ====================
     /// Invoke a stored procedure (CALL ... YIELD).
     CallProcedure(CallProcedureOp),
+}
+
+impl LogicalOperator {
+    /// Returns `true` if this operator or any of its children perform mutations.
+    #[must_use]
+    pub fn has_mutations(&self) -> bool {
+        match self {
+            // Direct mutation operators
+            Self::CreateNode(_)
+            | Self::CreateEdge(_)
+            | Self::DeleteNode(_)
+            | Self::DeleteEdge(_)
+            | Self::SetProperty(_)
+            | Self::AddLabel(_)
+            | Self::RemoveLabel(_)
+            | Self::Merge(_)
+            | Self::MergeRelationship(_)
+            | Self::InsertTriple(_)
+            | Self::DeleteTriple(_)
+            | Self::Modify(_)
+            | Self::ClearGraph(_)
+            | Self::CreateGraph(_)
+            | Self::DropGraph(_)
+            | Self::LoadGraph(_)
+            | Self::CopyGraph(_)
+            | Self::MoveGraph(_)
+            | Self::AddGraph(_)
+            | Self::CreatePropertyGraph(_) => true,
+
+            // Operators with an `input` child
+            Self::Filter(op) => op.input.has_mutations(),
+            Self::Project(op) => op.input.has_mutations(),
+            Self::Aggregate(op) => op.input.has_mutations(),
+            Self::Limit(op) => op.input.has_mutations(),
+            Self::Skip(op) => op.input.has_mutations(),
+            Self::Sort(op) => op.input.has_mutations(),
+            Self::Distinct(op) => op.input.has_mutations(),
+            Self::Unwind(op) => op.input.has_mutations(),
+            Self::Bind(op) => op.input.has_mutations(),
+            Self::MapCollect(op) => op.input.has_mutations(),
+            Self::Return(op) => op.input.has_mutations(),
+            Self::VectorScan(_) | Self::VectorJoin(_) => false,
+
+            // Operators with two children
+            Self::Join(op) => op.left.has_mutations() || op.right.has_mutations(),
+            Self::LeftJoin(op) => op.left.has_mutations() || op.right.has_mutations(),
+            Self::AntiJoin(op) => op.left.has_mutations() || op.right.has_mutations(),
+            Self::Except(op) => op.left.has_mutations() || op.right.has_mutations(),
+            Self::Intersect(op) => op.left.has_mutations() || op.right.has_mutations(),
+            Self::Otherwise(op) => op.left.has_mutations() || op.right.has_mutations(),
+            Self::Union(op) => op.inputs.iter().any(|i| i.has_mutations()),
+            Self::Apply(op) => op.input.has_mutations() || op.subplan.has_mutations(),
+
+            // Leaf operators (read-only)
+            Self::NodeScan(_)
+            | Self::EdgeScan(_)
+            | Self::Expand(_)
+            | Self::TripleScan(_)
+            | Self::ShortestPath(_)
+            | Self::Empty
+            | Self::CallProcedure(_) => false,
+        }
+    }
 }
 
 /// Scan nodes from the graph.
@@ -185,10 +262,24 @@ pub struct NodeScanOp {
 pub struct EdgeScanOp {
     /// Variable name to bind the edge to.
     pub variable: String,
-    /// Optional edge type filter.
-    pub edge_type: Option<String>,
+    /// Edge type filter (empty = match all types).
+    pub edge_types: Vec<String>,
     /// Child operator (if any).
     pub input: Option<Box<LogicalOperator>>,
+}
+
+/// Path traversal mode for variable-length expansion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PathMode {
+    /// Allows repeated nodes and edges (default).
+    #[default]
+    Walk,
+    /// No repeated edges.
+    Trail,
+    /// No repeated nodes except endpoints.
+    Simple,
+    /// No repeated nodes at all.
+    Acyclic,
 }
 
 /// Expand from nodes to their neighbors.
@@ -202,8 +293,8 @@ pub struct ExpandOp {
     pub edge_variable: Option<String>,
     /// Direction of expansion.
     pub direction: ExpandDirection,
-    /// Optional edge type filter.
-    pub edge_type: Option<String>,
+    /// Edge type filter (empty = match all types, multiple = match any).
+    pub edge_types: Vec<String>,
     /// Minimum hops (for variable-length patterns).
     pub min_hops: u32,
     /// Maximum hops (for variable-length patterns).
@@ -213,6 +304,8 @@ pub struct ExpandOp {
     /// Path alias for variable-length patterns (e.g., `p` in `p = (a)-[*1..3]->(b)`).
     /// When set, a path length column will be output under this name.
     pub path_alias: Option<String>,
+    /// Path traversal mode (WALK, TRAIL, SIMPLE, ACYCLIC).
+    pub path_mode: PathMode,
 }
 
 /// Direction for edge expansion.
@@ -526,6 +619,49 @@ pub struct UnionOp {
     pub inputs: Vec<LogicalOperator>,
 }
 
+/// Set difference: rows in left that are not in right.
+#[derive(Debug, Clone)]
+pub struct ExceptOp {
+    /// Left input.
+    pub left: Box<LogicalOperator>,
+    /// Right input (rows to exclude).
+    pub right: Box<LogicalOperator>,
+    /// If true, preserve duplicates (EXCEPT ALL); if false, deduplicate (EXCEPT DISTINCT).
+    pub all: bool,
+}
+
+/// Set intersection: rows common to both inputs.
+#[derive(Debug, Clone)]
+pub struct IntersectOp {
+    /// Left input.
+    pub left: Box<LogicalOperator>,
+    /// Right input.
+    pub right: Box<LogicalOperator>,
+    /// If true, preserve duplicates (INTERSECT ALL); if false, deduplicate (INTERSECT DISTINCT).
+    pub all: bool,
+}
+
+/// Fallback operator: use left result if non-empty, otherwise use right.
+#[derive(Debug, Clone)]
+pub struct OtherwiseOp {
+    /// Primary input (preferred).
+    pub left: Box<LogicalOperator>,
+    /// Fallback input (used only if left produces zero rows).
+    pub right: Box<LogicalOperator>,
+}
+
+/// Apply (lateral join): evaluate a subplan for each row of the outer input.
+///
+/// The subplan can reference variables bound by the outer input. Results are
+/// concatenated (cross-product per row).
+#[derive(Debug, Clone)]
+pub struct ApplyOp {
+    /// Outer input providing rows.
+    pub input: Box<LogicalOperator>,
+    /// Subplan to evaluate per outer row.
+    pub subplan: Box<LogicalOperator>,
+}
+
 /// Left outer join for OPTIONAL patterns.
 #[derive(Debug, Clone)]
 pub struct LeftJoinOp {
@@ -648,8 +784,8 @@ pub struct ShortestPathOp {
     pub source_var: String,
     /// Variable name for the target node.
     pub target_var: String,
-    /// Optional edge type filter.
-    pub edge_type: Option<String>,
+    /// Edge type filter (empty = match all types, multiple = match any).
+    pub edge_types: Vec<String>,
     /// Direction of edge traversal.
     pub direction: ExpandDirection,
     /// Variable name to bind the path result.
@@ -1097,6 +1233,50 @@ pub enum LogicalExpression {
 
     /// COUNT subquery.
     CountSubquery(Box<LogicalOperator>),
+
+    /// Map projection: `node { .prop1, .prop2, key: expr, .* }`.
+    MapProjection {
+        /// The base variable name.
+        base: String,
+        /// Projection entries (property selectors, literal entries, all-properties).
+        entries: Vec<MapProjectionEntry>,
+    },
+
+    /// reduce() accumulator: `reduce(acc = init, x IN list | expr)`.
+    Reduce {
+        /// Accumulator variable name.
+        accumulator: String,
+        /// Initial value for the accumulator.
+        initial: Box<LogicalExpression>,
+        /// Iteration variable name.
+        variable: String,
+        /// List to iterate over.
+        list: Box<LogicalExpression>,
+        /// Body expression evaluated per iteration (references both accumulator and variable).
+        expression: Box<LogicalExpression>,
+    },
+
+    /// Pattern comprehension: `[(pattern) WHERE pred | expr]`.
+    ///
+    /// Executes the inner subplan, evaluates the projection for each row,
+    /// and collects the results into a list.
+    PatternComprehension {
+        /// The subplan produced by translating the pattern (+optional WHERE).
+        subplan: Box<LogicalOperator>,
+        /// The projection expression evaluated for each match.
+        projection: Box<LogicalExpression>,
+    },
+}
+
+/// An entry in a map projection.
+#[derive(Debug, Clone)]
+pub enum MapProjectionEntry {
+    /// `.propertyName`: shorthand for `propertyName: base.propertyName`.
+    PropertySelector(String),
+    /// `key: expression`: explicit key-value pair.
+    LiteralEntry(String, LogicalExpression),
+    /// `.*`: include all properties of the base entity.
+    AllProperties,
 }
 
 /// The kind of list predicate function.

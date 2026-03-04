@@ -2,6 +2,79 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
+## [0.5.13] - 2026-03-04
+
+### Completed
+
+- **GQL**: full compliance with ISO/IEC 39075:2024 (Graph Query Language), covering all features practical for a graph database
+- **Cypher**: improved compliance with openCypher v9 specification, plus common additions (e.g., pattern comprehension, CALL subqueries, FOREACH)
+- **SPARQL**: improved compliance with W3C SPARQL 1.1 implementation, but no 1.2 features (e.g., SPARQL Star)
+
+#### Infrastructure
+
+- **LPG named graphs**: multi-graph support mirroring the RDF named graph architecture, with per-graph independent storage, labels, indexes, and MVCC versioning
+- **Session state management**: current graph, time zone, and session parameters with interior mutability
+- **Database-level graph management**: `create_graph()`, `drop_graph()`, `list_graphs()` public API
+- **Apply operator**: correlated subquery execution (per-row subplan evaluation) for CALL, VALUE, NEXT, and pattern comprehensions
+- **Temporal types**: `Date`, `Time`, `Duration` with ISO 8601 parsing, arithmetic, comparison, and component extraction across GQL, Cypher, and SPARQL
+- **Temporal JSON encoding**: `{"$date": "..."}`, `{"$time": "..."}`, `{"$duration": "..."}` for parameter passing and result serialization
+- **Python temporal bindings**: `datetime.date` and `datetime.time` round-trip; Duration as dict `{"months", "days", "nanos"}`
+
+#### Schema / DDL System
+
+- **Full schema DDL**: `CREATE`/`DROP` for NODE TYPE, EDGE TYPE, GRAPH TYPE, INDEX, CONSTRAINT, and SCHEMA, all executable via GQL queries
+- **Type definitions**: `CREATE NODE TYPE Person (name STRING NOT NULL, age INT64)` with property types and nullability
+- **Index DDL**: `CREATE INDEX ... FOR (n:Label) ON (n.property) [USING TEXT|VECTOR|BTREE]` for property, text, vector, and B-tree indexes
+- **Constraint DDL**: `CREATE CONSTRAINT ... UNIQUE|NOT NULL|NODE KEY|EXISTS` with enforcement on writes
+- **Constraint enforcement**: NOT NULL, type validation, and UNIQUE constraints validated during node/edge creation and property mutation
+- **OR REPLACE**: `CREATE OR REPLACE NODE TYPE|EDGE TYPE|GRAPH TYPE` for atomic drop-and-create
+- **IF NOT EXISTS / IF EXISTS**: conditional creation and dropping for all DDL statement types
+- **Graph types**: `CREATE GRAPH TYPE name { node_types: [...], edge_types: [...] }` for graph type definitions
+- **Schema namespaces**: `CREATE SCHEMA name` / `DROP SCHEMA name` for namespace management
+- **WAL persistence**: all schema DDL changes survive crash recovery via WAL logging and replay
+
+#### Time-Travel
+
+- **Time-travel queries**: `execute_at_epoch(query, epoch)` on both `GrafeoDB` and `Session` runs any query with historical epoch-based visibility, seeing the database as it existed at a past epoch
+- **Session viewing epoch**: `set_viewing_epoch(epoch)` / `clear_viewing_epoch()` on `Session` for persistent time-travel mode across multiple queries
+- **GQL session parameter**: `SESSION SET PARAMETER viewing_epoch = <epoch>` and `SESSION RESET` for time-travel via standard GQL syntax
+- **Point lookups at epoch**: `get_node_at_epoch(id, epoch)` and `get_edge_at_epoch(id, epoch)` on `GrafeoDB` for pure epoch-based visibility without transaction context
+- **Version history**: `get_node_history(id)` and `get_edge_history(id)` return all versions with creation/deletion epochs, newest first
+- **ValidityTs type**: reverse-ordered validity timestamp for future disk-backed key encoding (newest versions sort first in key order)
+
+#### GQL Spec Compliance (78% to ~97%)
+
+- **LIKE operator**: SQL pattern matching with `%` and `_` wildcards now works in WHERE clauses
+- **CAST to temporal types**: `CAST(expr AS DATE/TIME/DATETIME/DURATION/LIST)` desugars to conversion functions
+- **Temporal conversion functions**: `toDate()`, `toTime()`, `toDatetime()`, `toDuration()`, `toList()` aliases
+- **SET map operations**: `SET n = {map}` (replace all properties) and `SET n += {map}` (merge) now execute correctly
+- **NODETACH DELETE**: bare `DELETE n` now errors if the node has connected edges (ISO default), use `DETACH DELETE` instead
+- **RETURN * / WITH ***: wildcard return and pass-through now work correctly in the binder and planner
+- **List comprehensions in RETURN**: `[x IN list WHERE pred | transform]` now works in RETURN clauses
+- **List predicates in RETURN**: `all()`, `any()`, `none()`, `single()` now work in RETURN clauses
+- **Transaction characteristics**: `START TRANSACTION [READ ONLY | READ WRITE] [ISOLATION LEVEL ...]` with read-only enforcement blocking mutations
+- **Zoned temporal types**: `ZONED DATETIME` and `ZONED TIME` with fixed UTC offset, CAST support, and component extraction
+- **ALTER DDL**: `ALTER NODE TYPE`, `ALTER EDGE TYPE`, `ALTER GRAPH TYPE` for adding/dropping properties and type members
+- **CREATE GRAPH TYPED**: `CREATE GRAPH name TYPED type_name` binds a graph instance to a registered graph type
+- **Stored procedures**: `CREATE [OR REPLACE] PROCEDURE name(params) RETURNS (cols) AS { body }`, `DROP PROCEDURE`, execution via `CALL`
+- **List property storage**: `reduce()` and list operations now work correctly after INSERT with list-valued properties
+
+### Fixed
+
+- **Epoch-only visibility in scan/expand operators**: time-travel queries now use pure epoch-based visibility (`get_node_at_epoch`) instead of transaction-aware checks that bypassed epoch filtering when both sides used `TxId::SYSTEM`
+- **LIKE parser bug**: `LIKE` token existed but was never consumed as an infix operator in the GQL parser
+- **RETURN * binder rejection**: binder incorrectly rejected `*` as an undefined variable instead of passing it to the planner for expansion
+- **ListComprehension/ListPredicate in projections**: planner now handles these expression types in RETURN clauses instead of erroring
+
+- **Cypher standalone DELETE/SET/REMOVE errors**: error messages now correctly indicate a preceding MATCH clause is required
+- **Cypher power operator**: `^` no longer returns an error in the translator
+- **Cypher anonymous variable collisions**: anonymous nodes/edges now use unique counter-based names instead of a bare `"_anon"` string
+- **Temporal comparison in optimized paths**: 10 `compare_values` functions across zone maps, property columns, factorized filters, sort operators, and statistics now handle Date/Time/Timestamp (previously silently returned false for ordering operators)
+
+### Improved
+
+- **Test coverage**: 80+ GQL parser tests (was 44), 23 GQL lexer tests (was 12), 137 Python GQL compliance tests (was 100), new SPARQL and Cypher compliance tests
+
 ## [0.5.12] - 2026-03-02
 
 ### Added

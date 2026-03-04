@@ -21,6 +21,7 @@
 
 pub mod accumulator;
 mod aggregate;
+mod apply;
 mod distinct;
 mod expand;
 mod factorized_aggregate;
@@ -37,6 +38,7 @@ mod project;
 pub mod push;
 mod scan;
 mod scan_vector;
+mod set_ops;
 mod shortest_path;
 pub mod single_row;
 mod sort;
@@ -48,6 +50,7 @@ mod vector_join;
 
 pub use accumulator::{AggregateExpr, AggregateFunction, HashableValue};
 pub use aggregate::{HashAggregateOperator, SimpleAggregateOperator};
+pub use apply::ApplyOperator;
 pub use distinct::DistinctOperator;
 pub use expand::ExpandOperator;
 pub use factorized_aggregate::{
@@ -73,8 +76,9 @@ pub use limit::{LimitOperator, LimitSkipOperator, SkipOperator};
 pub use map_collect::MapCollectOperator;
 pub use merge::{MergeOperator, MergeRelationshipConfig, MergeRelationshipOperator};
 pub use mutation::{
-    AddLabelOperator, CreateEdgeOperator, CreateNodeOperator, DeleteEdgeOperator,
-    DeleteNodeOperator, PropertySource, RemoveLabelOperator, SetPropertyOperator,
+    AddLabelOperator, ConstraintValidator, CreateEdgeOperator, CreateNodeOperator,
+    DeleteEdgeOperator, DeleteNodeOperator, PropertySource, RemoveLabelOperator,
+    SetPropertyOperator,
 };
 pub use project::{ProjectExpr, ProjectOperator};
 pub use push::{
@@ -86,12 +90,13 @@ pub use push::{
 pub use push::{SpillableAggregatePushOperator, SpillableSortPushOperator};
 pub use scan::ScanOperator;
 pub use scan_vector::VectorScanOperator;
+pub use set_ops::{ExceptOperator, IntersectOperator, OtherwiseOperator};
 pub use shortest_path::ShortestPathOperator;
 pub use single_row::{EmptyOperator, NodeListOperator, SingleRowOperator};
 pub use sort::{NullOrder, SortDirection, SortKey, SortOperator};
 pub use union::UnionOperator;
 pub use unwind::UnwindOperator;
-pub use variable_length_expand::VariableLengthExpandOperator;
+pub use variable_length_expand::{PathMode as ExecutionPathMode, VariableLengthExpandOperator};
 pub use vector_join::VectorJoinOperator;
 
 use thiserror::Error;
@@ -223,6 +228,9 @@ pub enum OperatorError {
     /// Execution error.
     #[error("execution error: {0}")]
     Execution(String),
+    /// Schema constraint violation during a write operation.
+    #[error("constraint violation: {0}")]
+    ConstraintViolation(String),
 }
 
 /// The core trait for pull-based operators.

@@ -63,6 +63,14 @@ impl HashKey {
                 HashKey::String(format!("{b:?}"))
             }
             Value::Timestamp(t) => HashKey::Int64(t.as_micros()),
+            Value::Date(d) => HashKey::Int64(d.as_days() as i64),
+            Value::Time(t) => HashKey::Int64(t.as_nanos() as i64),
+            Value::Duration(d) => HashKey::Composite(vec![
+                HashKey::Int64(d.months()),
+                HashKey::Int64(d.days()),
+                HashKey::Int64(d.nanos()),
+            ]),
+            Value::ZonedDatetime(zdt) => HashKey::Int64(zdt.as_timestamp().as_micros()),
             Value::List(items) => {
                 HashKey::Composite(items.iter().map(HashKey::from_value).collect())
             }
@@ -86,6 +94,11 @@ impl HashKey {
                         .map(|f| HashKey::Int64(f.to_bits() as i64))
                         .collect(),
                 )
+            }
+            Value::Path { nodes, edges } => {
+                let mut parts: Vec<_> = nodes.iter().map(HashKey::from_value).collect();
+                parts.extend(edges.iter().map(HashKey::from_value));
+                HashKey::Composite(parts)
             }
         }
     }

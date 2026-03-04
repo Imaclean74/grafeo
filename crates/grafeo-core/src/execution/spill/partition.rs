@@ -500,6 +500,22 @@ fn hash_key(key: &[Value]) -> u64 {
                 6u8.hash(&mut hasher);
                 t.hash(&mut hasher);
             }
+            Value::Date(d) => {
+                10u8.hash(&mut hasher);
+                d.hash(&mut hasher);
+            }
+            Value::Time(t) => {
+                11u8.hash(&mut hasher);
+                t.hash(&mut hasher);
+            }
+            Value::Duration(d) => {
+                12u8.hash(&mut hasher);
+                d.hash(&mut hasher);
+            }
+            Value::ZonedDatetime(zdt) => {
+                14u8.hash(&mut hasher);
+                zdt.hash(&mut hasher);
+            }
             Value::List(l) => {
                 7u8.hash(&mut hasher);
                 l.len().hash(&mut hasher);
@@ -515,6 +531,11 @@ fn hash_key(key: &[Value]) -> u64 {
                 for &f in v.iter().take(4) {
                     f.to_bits().hash(&mut hasher);
                 }
+            }
+            Value::Path { nodes, edges } => {
+                13u8.hash(&mut hasher);
+                nodes.len().hash(&mut hasher);
+                edges.len().hash(&mut hasher);
             }
         }
     }

@@ -16,6 +16,7 @@ use grafeo_core::graph::lpg::{Edge, LpgStore, Node};
 #[cfg(feature = "rdf")]
 use grafeo_core::graph::rdf::RdfStore;
 
+use crate::catalog::{Catalog, CatalogConstraintValidator};
 use crate::config::{AdaptiveConfig, GraphModel};
 use crate::database::QueryResult;
 use crate::query::cache::QueryCache;
@@ -31,6 +32,8 @@ pub struct Session {
     store: Arc<LpgStore>,
     /// Graph store trait object for pluggable storage backends.
     graph_store: Arc<dyn GraphStoreMut>,
+    /// Schema and metadata catalog shared across sessions.
+    catalog: Arc<Catalog>,
     /// RDF triple store (if RDF feature is enabled).
     #[cfg(feature = "rdf")]
     rdf_store: Arc<RdfStore>,
@@ -38,8 +41,12 @@ pub struct Session {
     tx_manager: Arc<TransactionManager>,
     /// Query cache shared across sessions.
     query_cache: Arc<QueryCache>,
-    /// Current transaction ID (if any).
-    current_tx: Option<TxId>,
+    /// Current transaction ID (if any). Behind a Mutex so that GQL commands
+    /// (`START TRANSACTION`, `COMMIT`, `ROLLBACK`) can manage transactions
+    /// from within `execute(&self)`.
+    current_tx: parking_lot::Mutex<Option<TxId>>,
+    /// Whether the current transaction is read-only (blocks mutations).
+    read_only_tx: parking_lot::Mutex<bool>,
     /// Whether the session is in auto-commit mode.
     auto_commit: bool,
     /// Adaptive execution configuration.
@@ -56,12 +63,24 @@ pub struct Session {
     /// GC every N commits (0 = disabled).
     gc_interval: usize,
     /// Node count at the start of the current transaction (for PreparedCommit stats).
-    tx_start_node_count: usize,
+    tx_start_node_count: AtomicUsize,
     /// Edge count at the start of the current transaction (for PreparedCommit stats).
-    tx_start_edge_count: usize,
+    tx_start_edge_count: AtomicUsize,
+    /// WAL for logging schema changes.
+    #[cfg(feature = "wal")]
+    wal: Option<Arc<grafeo_adapters::storage::wal::LpgWal>>,
     /// CDC log for change tracking.
     #[cfg(feature = "cdc")]
     cdc_log: Arc<crate::cdc::CdcLog>,
+    /// Current graph name (for multi-graph USE GRAPH support). None = default graph.
+    current_graph: parking_lot::Mutex<Option<String>>,
+    /// Session time zone override.
+    time_zone: parking_lot::Mutex<Option<String>>,
+    /// Session-level parameters (SET PARAMETER).
+    session_params:
+        parking_lot::Mutex<std::collections::HashMap<String, grafeo_common::types::Value>>,
+    /// Override epoch for time-travel queries (None = use transaction/current epoch).
+    viewing_epoch_override: parking_lot::Mutex<Option<EpochId>>,
 }
 
 impl Session {
@@ -71,6 +90,7 @@ impl Session {
         store: Arc<LpgStore>,
         tx_manager: Arc<TransactionManager>,
         query_cache: Arc<QueryCache>,
+        catalog: Arc<Catalog>,
         adaptive_config: AdaptiveConfig,
         factorized_execution: bool,
         graph_model: GraphModel,
@@ -82,11 +102,13 @@ impl Session {
         Self {
             store,
             graph_store,
+            catalog,
             #[cfg(feature = "rdf")]
             rdf_store: Arc::new(RdfStore::new()),
             tx_manager,
             query_cache,
-            current_tx: None,
+            current_tx: parking_lot::Mutex::new(None),
+            read_only_tx: parking_lot::Mutex::new(false),
             auto_commit: true,
             adaptive_config,
             factorized_execution,
@@ -94,11 +116,23 @@ impl Session {
             query_timeout,
             commit_counter,
             gc_interval,
-            tx_start_node_count: 0,
-            tx_start_edge_count: 0,
+            tx_start_node_count: AtomicUsize::new(0),
+            tx_start_edge_count: AtomicUsize::new(0),
+            #[cfg(feature = "wal")]
+            wal: None,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
+            current_graph: parking_lot::Mutex::new(None),
+            time_zone: parking_lot::Mutex::new(None),
+            session_params: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            viewing_epoch_override: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Sets the WAL for this session (shared with the database).
+    #[cfg(feature = "wal")]
+    pub(crate) fn set_wal(&mut self, wal: Arc<grafeo_adapters::storage::wal::LpgWal>) {
+        self.wal = Some(wal);
     }
 
     /// Sets the CDC log for this session (shared with the database).
@@ -115,6 +149,7 @@ impl Session {
         rdf_store: Arc<RdfStore>,
         tx_manager: Arc<TransactionManager>,
         query_cache: Arc<QueryCache>,
+        catalog: Arc<Catalog>,
         adaptive_config: AdaptiveConfig,
         factorized_execution: bool,
         graph_model: GraphModel,
@@ -126,10 +161,12 @@ impl Session {
         Self {
             store,
             graph_store,
+            catalog,
             rdf_store,
             tx_manager,
             query_cache,
-            current_tx: None,
+            current_tx: parking_lot::Mutex::new(None),
+            read_only_tx: parking_lot::Mutex::new(false),
             auto_commit: true,
             adaptive_config,
             factorized_execution,
@@ -137,10 +174,16 @@ impl Session {
             query_timeout,
             commit_counter,
             gc_interval,
-            tx_start_node_count: 0,
-            tx_start_edge_count: 0,
+            tx_start_node_count: AtomicUsize::new(0),
+            tx_start_edge_count: AtomicUsize::new(0),
+            #[cfg(feature = "wal")]
+            wal: None,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
+            current_graph: parking_lot::Mutex::new(None),
+            time_zone: parking_lot::Mutex::new(None),
+            session_params: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            viewing_epoch_override: parking_lot::Mutex::new(None),
         }
     }
 
@@ -153,6 +196,7 @@ impl Session {
         store: Arc<dyn GraphStoreMut>,
         tx_manager: Arc<TransactionManager>,
         query_cache: Arc<QueryCache>,
+        catalog: Arc<Catalog>,
         adaptive_config: AdaptiveConfig,
         factorized_execution: bool,
         graph_model: GraphModel,
@@ -163,11 +207,13 @@ impl Session {
         Self {
             store: Arc::new(LpgStore::new()), // dummy for LpgStore-specific ops
             graph_store: store,
+            catalog,
             #[cfg(feature = "rdf")]
             rdf_store: Arc::new(RdfStore::new()),
             tx_manager,
             query_cache,
-            current_tx: None,
+            current_tx: parking_lot::Mutex::new(None),
+            read_only_tx: parking_lot::Mutex::new(false),
             auto_commit: true,
             adaptive_config,
             factorized_execution,
@@ -175,10 +221,16 @@ impl Session {
             query_timeout,
             commit_counter,
             gc_interval,
-            tx_start_node_count: 0,
-            tx_start_edge_count: 0,
+            tx_start_node_count: AtomicUsize::new(0),
+            tx_start_edge_count: AtomicUsize::new(0),
+            #[cfg(feature = "wal")]
+            wal: None,
             #[cfg(feature = "cdc")]
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
+            current_graph: parking_lot::Mutex::new(None),
+            time_zone: parking_lot::Mutex::new(None),
+            session_params: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            viewing_epoch_override: parking_lot::Mutex::new(None),
         }
     }
 
@@ -186,6 +238,87 @@ impl Session {
     #[must_use]
     pub fn graph_model(&self) -> GraphModel {
         self.graph_model
+    }
+
+    // === Session State Management ===
+
+    /// Sets the current graph for this session (USE GRAPH).
+    pub fn use_graph(&self, name: &str) {
+        *self.current_graph.lock() = Some(name.to_string());
+    }
+
+    /// Returns the current graph name, if any.
+    #[must_use]
+    pub fn current_graph(&self) -> Option<String> {
+        self.current_graph.lock().clone()
+    }
+
+    /// Sets the session time zone.
+    pub fn set_time_zone(&self, tz: &str) {
+        *self.time_zone.lock() = Some(tz.to_string());
+    }
+
+    /// Returns the session time zone, if set.
+    #[must_use]
+    pub fn time_zone(&self) -> Option<String> {
+        self.time_zone.lock().clone()
+    }
+
+    /// Sets a session parameter.
+    pub fn set_parameter(&self, key: &str, value: grafeo_common::types::Value) {
+        self.session_params.lock().insert(key.to_string(), value);
+    }
+
+    /// Gets a session parameter by cloning it.
+    #[must_use]
+    pub fn get_parameter(&self, key: &str) -> Option<grafeo_common::types::Value> {
+        self.session_params.lock().get(key).cloned()
+    }
+
+    /// Resets all session state to defaults.
+    pub fn reset_session(&self) {
+        *self.current_graph.lock() = None;
+        *self.time_zone.lock() = None;
+        self.session_params.lock().clear();
+        *self.viewing_epoch_override.lock() = None;
+    }
+
+    // --- Time-travel API ---
+
+    /// Sets a viewing epoch override for time-travel queries.
+    ///
+    /// While set, all queries on this session see the database as it existed
+    /// at the given epoch. Use [`clear_viewing_epoch`](Self::clear_viewing_epoch)
+    /// to return to normal behavior.
+    pub fn set_viewing_epoch(&self, epoch: EpochId) {
+        *self.viewing_epoch_override.lock() = Some(epoch);
+    }
+
+    /// Clears the viewing epoch override, returning to normal behavior.
+    pub fn clear_viewing_epoch(&self) {
+        *self.viewing_epoch_override.lock() = None;
+    }
+
+    /// Returns the current viewing epoch override, if any.
+    #[must_use]
+    pub fn viewing_epoch(&self) -> Option<EpochId> {
+        *self.viewing_epoch_override.lock()
+    }
+
+    /// Returns all versions of a node with their creation/deletion epochs.
+    ///
+    /// Properties and labels reflect the current state (not versioned per-epoch).
+    #[must_use]
+    pub fn get_node_history(&self, id: NodeId) -> Vec<(EpochId, Option<EpochId>, Node)> {
+        self.store.get_node_history(id)
+    }
+
+    /// Returns all versions of an edge with their creation/deletion epochs.
+    ///
+    /// Properties reflect the current state (not versioned per-epoch).
+    #[must_use]
+    pub fn get_edge_history(&self, id: EdgeId) -> Vec<(EpochId, Option<EpochId>, Edge)> {
+        self.store.get_edge_history(id)
     }
 
     /// Checks that the session's graph model supports LPG operations.
@@ -196,6 +329,849 @@ impl Session {
             )));
         }
         Ok(())
+    }
+
+    /// Executes a session or transaction command, returning an empty result.
+    #[cfg(feature = "gql")]
+    fn execute_session_command(
+        &self,
+        cmd: grafeo_adapters::query::gql::ast::SessionCommand,
+    ) -> Result<QueryResult> {
+        use grafeo_adapters::query::gql::ast::{SessionCommand, TransactionIsolationLevel};
+        use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind};
+
+        match cmd {
+            SessionCommand::CreateGraph {
+                name,
+                if_not_exists,
+                typed,
+            } => {
+                let created = self.store.create_graph(&name);
+                if !created && !if_not_exists {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        format!("Graph '{name}' already exists"),
+                    )));
+                }
+                // Bind to graph type if specified
+                if let Some(type_name) = typed
+                    && let Err(e) = self.catalog.bind_graph_type(&name, type_name.clone())
+                {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    )));
+                }
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::DropGraph { name, if_exists } => {
+                let dropped = self.store.drop_graph(&name);
+                if !dropped && !if_exists {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        format!("Graph '{name}' does not exist"),
+                    )));
+                }
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::UseGraph(name) => {
+                // Verify graph exists (default graph is always valid)
+                if !name.eq_ignore_ascii_case("default") && self.store.graph(&name).is_none() {
+                    return Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        format!("Graph '{name}' does not exist"),
+                    )));
+                }
+                self.use_graph(&name);
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionSetGraph(name) => {
+                self.use_graph(&name);
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionSetTimeZone(tz) => {
+                self.set_time_zone(&tz);
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionSetParameter(key, expr) => {
+                if key.eq_ignore_ascii_case("viewing_epoch") {
+                    match Self::eval_integer_literal(&expr) {
+                        Some(n) if n >= 0 => {
+                            self.set_viewing_epoch(EpochId::new(n as u64));
+                            Ok(QueryResult::status(format!("Set viewing_epoch to {n}")))
+                        }
+                        _ => Err(Error::Query(QueryError::new(
+                            QueryErrorKind::Semantic,
+                            "viewing_epoch must be a non-negative integer literal",
+                        ))),
+                    }
+                } else {
+                    // For now, store parameter name with Null value.
+                    // Full expression evaluation would require building and executing a plan.
+                    self.set_parameter(&key, Value::Null);
+                    Ok(QueryResult::empty())
+                }
+            }
+            SessionCommand::SessionReset => {
+                self.reset_session();
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::SessionClose => {
+                self.reset_session();
+                Ok(QueryResult::empty())
+            }
+            SessionCommand::StartTransaction {
+                read_only,
+                isolation_level,
+            } => {
+                let engine_level = isolation_level.map(|l| match l {
+                    TransactionIsolationLevel::ReadCommitted => {
+                        crate::transaction::IsolationLevel::ReadCommitted
+                    }
+                    TransactionIsolationLevel::SnapshotIsolation => {
+                        crate::transaction::IsolationLevel::SnapshotIsolation
+                    }
+                    TransactionIsolationLevel::Serializable => {
+                        crate::transaction::IsolationLevel::Serializable
+                    }
+                });
+                self.begin_tx_inner(read_only, engine_level)?;
+                Ok(QueryResult::status("Transaction started"))
+            }
+            SessionCommand::Commit => {
+                self.commit_inner()?;
+                Ok(QueryResult::status("Transaction committed"))
+            }
+            SessionCommand::Rollback => {
+                self.rollback_inner()?;
+                Ok(QueryResult::status("Transaction rolled back"))
+            }
+        }
+    }
+
+    /// Logs a WAL record for a schema change (no-op if WAL is not enabled).
+    #[cfg(feature = "wal")]
+    fn log_schema_wal(&self, record: &grafeo_adapters::storage::wal::WalRecord) {
+        if let Some(ref wal) = self.wal
+            && let Err(e) = wal.log(record)
+        {
+            tracing::warn!("Failed to log schema change to WAL: {}", e);
+        }
+    }
+
+    /// Executes a schema DDL command, returning a status result.
+    #[cfg(feature = "gql")]
+    fn execute_schema_command(
+        &self,
+        cmd: grafeo_adapters::query::gql::ast::SchemaStatement,
+    ) -> Result<QueryResult> {
+        use crate::catalog::{
+            EdgeTypeDefinition, NodeTypeDefinition, PropertyDataType, TypedProperty,
+        };
+        use grafeo_adapters::query::gql::ast::SchemaStatement;
+        #[cfg(feature = "wal")]
+        use grafeo_adapters::storage::wal::WalRecord;
+        use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind};
+
+        /// Logs a WAL record for schema changes. Compiles to nothing without `wal`.
+        macro_rules! wal_log {
+            ($self:expr, $record:expr) => {
+                #[cfg(feature = "wal")]
+                $self.log_schema_wal(&$record);
+            };
+        }
+
+        match cmd {
+            SchemaStatement::CreateNodeType(stmt) => {
+                #[cfg(feature = "wal")]
+                let props_for_wal: Vec<(String, String, bool)> = stmt
+                    .properties
+                    .iter()
+                    .map(|p| (p.name.clone(), p.data_type.clone(), p.nullable))
+                    .collect();
+                let def = NodeTypeDefinition {
+                    name: stmt.name.clone(),
+                    properties: stmt
+                        .properties
+                        .iter()
+                        .map(|p| TypedProperty {
+                            name: p.name.clone(),
+                            data_type: PropertyDataType::from_type_name(&p.data_type),
+                            nullable: p.nullable,
+                            default_value: None,
+                        })
+                        .collect(),
+                    constraints: Vec::new(),
+                };
+                let result = if stmt.or_replace {
+                    let _ = self.catalog.drop_node_type(&stmt.name);
+                    self.catalog.register_node_type(def)
+                } else {
+                    self.catalog.register_node_type(def)
+                };
+                match result {
+                    Ok(()) => {
+                        wal_log!(
+                            self,
+                            WalRecord::CreateNodeType {
+                                name: stmt.name.clone(),
+                                properties: props_for_wal,
+                                constraints: Vec::new(),
+                            }
+                        );
+                        Ok(QueryResult::status(format!(
+                            "Created node type '{}'",
+                            stmt.name
+                        )))
+                    }
+                    Err(e) if stmt.if_not_exists => {
+                        let _ = e;
+                        Ok(QueryResult::status("No change"))
+                    }
+                    Err(e) => Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    ))),
+                }
+            }
+            SchemaStatement::CreateEdgeType(stmt) => {
+                #[cfg(feature = "wal")]
+                let props_for_wal: Vec<(String, String, bool)> = stmt
+                    .properties
+                    .iter()
+                    .map(|p| (p.name.clone(), p.data_type.clone(), p.nullable))
+                    .collect();
+                let def = EdgeTypeDefinition {
+                    name: stmt.name.clone(),
+                    properties: stmt
+                        .properties
+                        .iter()
+                        .map(|p| TypedProperty {
+                            name: p.name.clone(),
+                            data_type: PropertyDataType::from_type_name(&p.data_type),
+                            nullable: p.nullable,
+                            default_value: None,
+                        })
+                        .collect(),
+                    constraints: Vec::new(),
+                };
+                let result = if stmt.or_replace {
+                    let _ = self.catalog.drop_edge_type_def(&stmt.name);
+                    self.catalog.register_edge_type_def(def)
+                } else {
+                    self.catalog.register_edge_type_def(def)
+                };
+                match result {
+                    Ok(()) => {
+                        wal_log!(
+                            self,
+                            WalRecord::CreateEdgeType {
+                                name: stmt.name.clone(),
+                                properties: props_for_wal,
+                                constraints: Vec::new(),
+                            }
+                        );
+                        Ok(QueryResult::status(format!(
+                            "Created edge type '{}'",
+                            stmt.name
+                        )))
+                    }
+                    Err(e) if stmt.if_not_exists => {
+                        let _ = e;
+                        Ok(QueryResult::status("No change"))
+                    }
+                    Err(e) => Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    ))),
+                }
+            }
+            SchemaStatement::CreateVectorIndex(stmt) => {
+                Self::create_vector_index_on_store(
+                    &self.store,
+                    &stmt.node_label,
+                    &stmt.property,
+                    stmt.dimensions,
+                    stmt.metric.as_deref(),
+                )?;
+                wal_log!(
+                    self,
+                    WalRecord::CreateIndex {
+                        name: stmt.name.clone(),
+                        label: stmt.node_label.clone(),
+                        property: stmt.property.clone(),
+                        index_type: "vector".to_string(),
+                    }
+                );
+                Ok(QueryResult::status(format!(
+                    "Created vector index '{}'",
+                    stmt.name
+                )))
+            }
+            SchemaStatement::DropNodeType { name, if_exists } => {
+                match self.catalog.drop_node_type(&name) {
+                    Ok(()) => {
+                        wal_log!(self, WalRecord::DropNodeType { name: name.clone() });
+                        Ok(QueryResult::status(format!("Dropped node type '{name}'")))
+                    }
+                    Err(e) if if_exists => {
+                        let _ = e;
+                        Ok(QueryResult::status("No change"))
+                    }
+                    Err(e) => Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    ))),
+                }
+            }
+            SchemaStatement::DropEdgeType { name, if_exists } => {
+                match self.catalog.drop_edge_type_def(&name) {
+                    Ok(()) => {
+                        wal_log!(self, WalRecord::DropEdgeType { name: name.clone() });
+                        Ok(QueryResult::status(format!("Dropped edge type '{name}'")))
+                    }
+                    Err(e) if if_exists => {
+                        let _ = e;
+                        Ok(QueryResult::status("No change"))
+                    }
+                    Err(e) => Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    ))),
+                }
+            }
+            SchemaStatement::CreateIndex(stmt) => {
+                use grafeo_adapters::query::gql::ast::IndexKind;
+                let index_type_str = match stmt.index_kind {
+                    IndexKind::Property => "property",
+                    IndexKind::BTree => "btree",
+                    IndexKind::Text => "text",
+                    IndexKind::Vector => "vector",
+                };
+                match stmt.index_kind {
+                    IndexKind::Property | IndexKind::BTree => {
+                        for prop in &stmt.properties {
+                            self.store.create_property_index(prop);
+                        }
+                    }
+                    IndexKind::Text => {
+                        for prop in &stmt.properties {
+                            Self::create_text_index_on_store(&self.store, &stmt.label, prop)?;
+                        }
+                    }
+                    IndexKind::Vector => {
+                        for prop in &stmt.properties {
+                            Self::create_vector_index_on_store(
+                                &self.store,
+                                &stmt.label,
+                                prop,
+                                stmt.options.dimensions,
+                                stmt.options.metric.as_deref(),
+                            )?;
+                        }
+                    }
+                }
+                #[cfg(feature = "wal")]
+                for prop in &stmt.properties {
+                    wal_log!(
+                        self,
+                        WalRecord::CreateIndex {
+                            name: stmt.name.clone(),
+                            label: stmt.label.clone(),
+                            property: prop.clone(),
+                            index_type: index_type_str.to_string(),
+                        }
+                    );
+                }
+                Ok(QueryResult::status(format!(
+                    "Created {} index '{}'",
+                    index_type_str, stmt.name
+                )))
+            }
+            SchemaStatement::DropIndex { name, if_exists } => {
+                // Try to drop property index by name
+                let dropped = self.store.drop_property_index(&name);
+                if dropped || if_exists {
+                    if dropped {
+                        wal_log!(self, WalRecord::DropIndex { name: name.clone() });
+                    }
+                    Ok(QueryResult::status(if dropped {
+                        format!("Dropped index '{name}'")
+                    } else {
+                        "No change".to_string()
+                    }))
+                } else {
+                    Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        format!("Index '{name}' does not exist"),
+                    )))
+                }
+            }
+            SchemaStatement::CreateConstraint(stmt) => {
+                use grafeo_adapters::query::gql::ast::ConstraintKind;
+                let kind_str = match stmt.constraint_kind {
+                    ConstraintKind::Unique => "unique",
+                    ConstraintKind::NodeKey => "node_key",
+                    ConstraintKind::NotNull => "not_null",
+                    ConstraintKind::Exists => "exists",
+                };
+                let constraint_name = stmt
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("{}_{kind_str}", stmt.label));
+                wal_log!(
+                    self,
+                    WalRecord::CreateConstraint {
+                        name: constraint_name.clone(),
+                        label: stmt.label.clone(),
+                        properties: stmt.properties.clone(),
+                        kind: kind_str.to_string(),
+                    }
+                );
+                Ok(QueryResult::status(format!(
+                    "Created {kind_str} constraint '{constraint_name}'"
+                )))
+            }
+            SchemaStatement::DropConstraint { name, if_exists } => {
+                let _ = if_exists;
+                wal_log!(self, WalRecord::DropConstraint { name: name.clone() });
+                Ok(QueryResult::status(format!("Dropped constraint '{name}'")))
+            }
+            SchemaStatement::CreateGraphType(stmt) => {
+                use crate::catalog::GraphTypeDefinition;
+                let def = GraphTypeDefinition {
+                    name: stmt.name.clone(),
+                    allowed_node_types: stmt.node_types.clone(),
+                    allowed_edge_types: stmt.edge_types.clone(),
+                    open: stmt.open,
+                };
+                let result = if stmt.or_replace {
+                    // Drop existing first, ignore error if not found
+                    let _ = self.catalog.drop_graph_type(&stmt.name);
+                    self.catalog.register_graph_type(def)
+                } else {
+                    self.catalog.register_graph_type(def)
+                };
+                match result {
+                    Ok(()) => {
+                        wal_log!(
+                            self,
+                            WalRecord::CreateGraphType {
+                                name: stmt.name.clone(),
+                                node_types: stmt.node_types,
+                                edge_types: stmt.edge_types,
+                                open: stmt.open,
+                            }
+                        );
+                        Ok(QueryResult::status(format!(
+                            "Created graph type '{}'",
+                            stmt.name
+                        )))
+                    }
+                    Err(e) if stmt.if_not_exists => {
+                        let _ = e;
+                        Ok(QueryResult::status("No change"))
+                    }
+                    Err(e) => Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    ))),
+                }
+            }
+            SchemaStatement::DropGraphType { name, if_exists } => {
+                match self.catalog.drop_graph_type(&name) {
+                    Ok(()) => {
+                        wal_log!(self, WalRecord::DropGraphType { name: name.clone() });
+                        Ok(QueryResult::status(format!("Dropped graph type '{name}'")))
+                    }
+                    Err(e) if if_exists => {
+                        let _ = e;
+                        Ok(QueryResult::status("No change"))
+                    }
+                    Err(e) => Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    ))),
+                }
+            }
+            SchemaStatement::CreateSchema {
+                name,
+                if_not_exists,
+            } => match self.catalog.register_schema_namespace(name.clone()) {
+                Ok(()) => {
+                    wal_log!(self, WalRecord::CreateSchema { name: name.clone() });
+                    Ok(QueryResult::status(format!("Created schema '{name}'")))
+                }
+                Err(e) if if_not_exists => {
+                    let _ = e;
+                    Ok(QueryResult::status("No change"))
+                }
+                Err(e) => Err(Error::Query(QueryError::new(
+                    QueryErrorKind::Semantic,
+                    e.to_string(),
+                ))),
+            },
+            SchemaStatement::DropSchema { name, if_exists } => {
+                match self.catalog.drop_schema_namespace(&name) {
+                    Ok(()) => {
+                        wal_log!(self, WalRecord::DropSchema { name: name.clone() });
+                        Ok(QueryResult::status(format!("Dropped schema '{name}'")))
+                    }
+                    Err(e) if if_exists => {
+                        let _ = e;
+                        Ok(QueryResult::status("No change"))
+                    }
+                    Err(e) => Err(Error::Query(QueryError::new(
+                        QueryErrorKind::Semantic,
+                        e.to_string(),
+                    ))),
+                }
+            }
+            SchemaStatement::AlterNodeType(stmt) => {
+                use grafeo_adapters::query::gql::ast::TypeAlteration;
+                let mut wal_alts = Vec::new();
+                for alt in &stmt.alterations {
+                    match alt {
+                        TypeAlteration::AddProperty(prop) => {
+                            let typed = TypedProperty {
+                                name: prop.name.clone(),
+                                data_type: PropertyDataType::from_type_name(&prop.data_type),
+                                nullable: prop.nullable,
+                                default_value: None,
+                            };
+                            self.catalog
+                                .alter_node_type_add_property(&stmt.name, typed)
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push((
+                                "add".to_string(),
+                                prop.name.clone(),
+                                prop.data_type.clone(),
+                                prop.nullable,
+                            ));
+                        }
+                        TypeAlteration::DropProperty(name) => {
+                            self.catalog
+                                .alter_node_type_drop_property(&stmt.name, name)
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push(("drop".to_string(), name.clone(), String::new(), false));
+                        }
+                    }
+                }
+                wal_log!(
+                    self,
+                    WalRecord::AlterNodeType {
+                        name: stmt.name.clone(),
+                        alterations: wal_alts,
+                    }
+                );
+                Ok(QueryResult::status(format!(
+                    "Altered node type '{}'",
+                    stmt.name
+                )))
+            }
+            SchemaStatement::AlterEdgeType(stmt) => {
+                use grafeo_adapters::query::gql::ast::TypeAlteration;
+                let mut wal_alts = Vec::new();
+                for alt in &stmt.alterations {
+                    match alt {
+                        TypeAlteration::AddProperty(prop) => {
+                            let typed = TypedProperty {
+                                name: prop.name.clone(),
+                                data_type: PropertyDataType::from_type_name(&prop.data_type),
+                                nullable: prop.nullable,
+                                default_value: None,
+                            };
+                            self.catalog
+                                .alter_edge_type_add_property(&stmt.name, typed)
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push((
+                                "add".to_string(),
+                                prop.name.clone(),
+                                prop.data_type.clone(),
+                                prop.nullable,
+                            ));
+                        }
+                        TypeAlteration::DropProperty(name) => {
+                            self.catalog
+                                .alter_edge_type_drop_property(&stmt.name, name)
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push(("drop".to_string(), name.clone(), String::new(), false));
+                        }
+                    }
+                }
+                wal_log!(
+                    self,
+                    WalRecord::AlterEdgeType {
+                        name: stmt.name.clone(),
+                        alterations: wal_alts,
+                    }
+                );
+                Ok(QueryResult::status(format!(
+                    "Altered edge type '{}'",
+                    stmt.name
+                )))
+            }
+            SchemaStatement::AlterGraphType(stmt) => {
+                use grafeo_adapters::query::gql::ast::GraphTypeAlteration;
+                let mut wal_alts = Vec::new();
+                for alt in &stmt.alterations {
+                    match alt {
+                        GraphTypeAlteration::AddNodeType(name) => {
+                            self.catalog
+                                .alter_graph_type_add_node_type(&stmt.name, name.clone())
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push(("add_node_type".to_string(), name.clone()));
+                        }
+                        GraphTypeAlteration::DropNodeType(name) => {
+                            self.catalog
+                                .alter_graph_type_drop_node_type(&stmt.name, name)
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push(("drop_node_type".to_string(), name.clone()));
+                        }
+                        GraphTypeAlteration::AddEdgeType(name) => {
+                            self.catalog
+                                .alter_graph_type_add_edge_type(&stmt.name, name.clone())
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push(("add_edge_type".to_string(), name.clone()));
+                        }
+                        GraphTypeAlteration::DropEdgeType(name) => {
+                            self.catalog
+                                .alter_graph_type_drop_edge_type(&stmt.name, name)
+                                .map_err(|e| {
+                                    Error::Query(QueryError::new(
+                                        QueryErrorKind::Semantic,
+                                        e.to_string(),
+                                    ))
+                                })?;
+                            wal_alts.push(("drop_edge_type".to_string(), name.clone()));
+                        }
+                    }
+                }
+                wal_log!(
+                    self,
+                    WalRecord::AlterGraphType {
+                        name: stmt.name.clone(),
+                        alterations: wal_alts,
+                    }
+                );
+                Ok(QueryResult::status(format!(
+                    "Altered graph type '{}'",
+                    stmt.name
+                )))
+            }
+            SchemaStatement::CreateProcedure(stmt) => {
+                use crate::catalog::ProcedureDefinition;
+
+                let def = ProcedureDefinition {
+                    name: stmt.name.clone(),
+                    params: stmt
+                        .params
+                        .iter()
+                        .map(|p| (p.name.clone(), p.param_type.clone()))
+                        .collect(),
+                    returns: stmt
+                        .returns
+                        .iter()
+                        .map(|r| (r.name.clone(), r.return_type.clone()))
+                        .collect(),
+                    body: stmt.body.clone(),
+                };
+
+                if stmt.or_replace {
+                    self.catalog.replace_procedure(def).map_err(|e| {
+                        Error::Query(QueryError::new(QueryErrorKind::Semantic, e.to_string()))
+                    })?;
+                } else {
+                    match self.catalog.register_procedure(def) {
+                        Ok(()) => {}
+                        Err(_) if stmt.if_not_exists => {
+                            return Ok(QueryResult::empty());
+                        }
+                        Err(e) => {
+                            return Err(Error::Query(QueryError::new(
+                                QueryErrorKind::Semantic,
+                                e.to_string(),
+                            )));
+                        }
+                    }
+                }
+
+                wal_log!(
+                    self,
+                    WalRecord::CreateProcedure {
+                        name: stmt.name.clone(),
+                        params: stmt
+                            .params
+                            .iter()
+                            .map(|p| (p.name.clone(), p.param_type.clone()))
+                            .collect(),
+                        returns: stmt
+                            .returns
+                            .iter()
+                            .map(|r| (r.name.clone(), r.return_type.clone()))
+                            .collect(),
+                        body: stmt.body,
+                    }
+                );
+                Ok(QueryResult::status(format!(
+                    "Created procedure '{}'",
+                    stmt.name
+                )))
+            }
+            SchemaStatement::DropProcedure { name, if_exists } => {
+                match self.catalog.drop_procedure(&name) {
+                    Ok(()) => {}
+                    Err(_) if if_exists => {
+                        return Ok(QueryResult::empty());
+                    }
+                    Err(e) => {
+                        return Err(Error::Query(QueryError::new(
+                            QueryErrorKind::Semantic,
+                            e.to_string(),
+                        )));
+                    }
+                }
+                wal_log!(self, WalRecord::DropProcedure { name: name.clone() });
+                Ok(QueryResult::status(format!("Dropped procedure '{name}'")))
+            }
+        }
+    }
+
+    /// Creates a vector index on the store by scanning existing nodes.
+    #[cfg(all(feature = "gql", feature = "vector-index"))]
+    fn create_vector_index_on_store(
+        store: &LpgStore,
+        label: &str,
+        property: &str,
+        dimensions: Option<usize>,
+        metric: Option<&str>,
+    ) -> Result<()> {
+        use grafeo_common::types::{PropertyKey, Value};
+        use grafeo_common::utils::error::Error;
+        use grafeo_core::index::vector::{DistanceMetric, HnswConfig, HnswIndex};
+
+        let metric = match metric {
+            Some(m) => DistanceMetric::from_str(m).ok_or_else(|| {
+                Error::Internal(format!(
+                    "Unknown distance metric '{m}'. Use: cosine, euclidean, dot_product, manhattan"
+                ))
+            })?,
+            None => DistanceMetric::Cosine,
+        };
+
+        let prop_key = PropertyKey::new(property);
+        let mut found_dims: Option<usize> = dimensions;
+        let mut vectors: Vec<(grafeo_common::types::NodeId, Vec<f32>)> = Vec::new();
+
+        for node in store.nodes_with_label(label) {
+            if let Some(Value::Vector(v)) = node.properties.get(&prop_key) {
+                if let Some(expected) = found_dims {
+                    if v.len() != expected {
+                        return Err(Error::Internal(format!(
+                            "Vector dimension mismatch: expected {expected}, found {} on node {}",
+                            v.len(),
+                            node.id.0
+                        )));
+                    }
+                } else {
+                    found_dims = Some(v.len());
+                }
+                vectors.push((node.id, v.to_vec()));
+            }
+        }
+
+        let Some(dims) = found_dims else {
+            return Err(Error::Internal(format!(
+                "No vector properties found on :{label}({property}) and no dimensions specified"
+            )));
+        };
+
+        let config = HnswConfig::new(dims, metric);
+        let index = HnswIndex::with_capacity(config, vectors.len());
+        let accessor = grafeo_core::index::vector::PropertyVectorAccessor::new(store, property);
+        for (node_id, vec) in &vectors {
+            index.insert(*node_id, vec, &accessor);
+        }
+
+        store.add_vector_index(label, property, Arc::new(index));
+        Ok(())
+    }
+
+    /// Stub for when vector-index feature is not enabled.
+    #[cfg(all(feature = "gql", not(feature = "vector-index")))]
+    fn create_vector_index_on_store(
+        _store: &LpgStore,
+        _label: &str,
+        _property: &str,
+        _dimensions: Option<usize>,
+        _metric: Option<&str>,
+    ) -> Result<()> {
+        Err(grafeo_common::utils::error::Error::Internal(
+            "Vector index support requires the 'vector-index' feature".to_string(),
+        ))
+    }
+
+    /// Creates a text index on the store by scanning existing nodes.
+    #[cfg(all(feature = "gql", feature = "text-index"))]
+    fn create_text_index_on_store(store: &LpgStore, label: &str, property: &str) -> Result<()> {
+        use grafeo_common::types::{PropertyKey, Value};
+        use grafeo_core::index::text::{BM25Config, InvertedIndex};
+
+        let mut index = InvertedIndex::new(BM25Config::default());
+        let prop_key = PropertyKey::new(property);
+
+        let nodes = store.nodes_by_label(label);
+        for node_id in nodes {
+            if let Some(Value::String(text)) = store.get_node_property(node_id, &prop_key) {
+                index.insert(node_id, text.as_str());
+            }
+        }
+
+        store.add_text_index(label, property, Arc::new(parking_lot::RwLock::new(index)));
+        Ok(())
+    }
+
+    /// Stub for when text-index feature is not enabled.
+    #[cfg(all(feature = "gql", not(feature = "text-index")))]
+    fn create_text_index_on_store(_store: &LpgStore, _label: &str, _property: &str) -> Result<()> {
+        Err(grafeo_common::utils::error::Error::Internal(
+            "Text index support requires the 'text-index' feature".to_string(),
+        ))
     }
 
     /// Executes a GQL query.
@@ -229,25 +1205,45 @@ impl Session {
         self.require_lpg("GQL")?;
 
         use crate::query::{
-            Executor, Planner, binder::Binder, cache::CacheKey, gql_translator,
-            optimizer::Optimizer, processor::QueryLanguage,
+            Executor, binder::Binder, cache::CacheKey, gql_translator, optimizer::Optimizer,
+            processor::QueryLanguage,
         };
 
         let start_time = std::time::Instant::now();
 
+        // Parse and translate, checking for session/schema commands first
+        let translation = gql_translator::translate_full(query)?;
+        let logical_plan = match translation {
+            gql_translator::GqlTranslationResult::SessionCommand(cmd) => {
+                return self.execute_session_command(cmd);
+            }
+            gql_translator::GqlTranslationResult::SchemaCommand(cmd) => {
+                // All DDL is a write operation
+                if *self.read_only_tx.lock() {
+                    return Err(grafeo_common::utils::error::Error::Transaction(
+                        grafeo_common::utils::error::TransactionError::ReadOnly,
+                    ));
+                }
+                return self.execute_schema_command(cmd);
+            }
+            gql_translator::GqlTranslationResult::Plan(plan) => {
+                // Block mutations in read-only transactions
+                if *self.read_only_tx.lock() && plan.root.has_mutations() {
+                    return Err(grafeo_common::utils::error::Error::Transaction(
+                        grafeo_common::utils::error::TransactionError::ReadOnly,
+                    ));
+                }
+                plan
+            }
+        };
+
         // Create cache key for this query
         let cache_key = CacheKey::new(query, QueryLanguage::Gql);
 
-        // Try to get cached optimized plan
+        // Try to get cached optimized plan, or use the plan we just translated
         let optimized_plan = if let Some(cached_plan) = self.query_cache.get_optimized(&cache_key) {
-            // Cache hit - skip parsing, translation, binding, and optimization
             cached_plan
         } else {
-            // Cache miss - run full pipeline
-
-            // Parse and translate the query to a logical plan
-            let logical_plan = gql_translator::translate(query)?;
-
             // Semantic validation
             let mut binder = Binder::new();
             let _binding_context = binder.bind(&logical_plan)?;
@@ -267,13 +1263,7 @@ impl Session {
 
         // Convert to physical plan with transaction context
         // (Physical planning cannot be cached as it depends on transaction state)
-        let planner = Planner::with_context(
-            Arc::clone(&self.graph_store),
-            Arc::clone(&self.tx_manager),
-            tx_id,
-            viewing_epoch,
-        )
-        .with_factorized_execution(self.factorized_execution);
+        let planner = self.create_planner(viewing_epoch, tx_id);
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // Execute the plan
@@ -288,6 +1278,22 @@ impl Session {
         result.rows_scanned = Some(rows_scanned);
 
         Ok(result)
+    }
+
+    /// Executes a GQL query with visibility at the specified epoch.
+    ///
+    /// This enables time-travel queries: the query sees the database
+    /// as it existed at the given epoch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if parsing or execution fails.
+    #[cfg(feature = "gql")]
+    pub fn execute_at_epoch(&self, query: &str, epoch: EpochId) -> Result<QueryResult> {
+        let previous = self.viewing_epoch_override.lock().replace(epoch);
+        let result = self.execute(query);
+        *self.viewing_epoch_override.lock() = previous;
+        result
     }
 
     /// Executes a GQL query with parameters.
@@ -360,8 +1366,8 @@ impl Session {
     #[cfg(feature = "cypher")]
     pub fn execute_cypher(&self, query: &str) -> Result<QueryResult> {
         use crate::query::{
-            Executor, Planner, binder::Binder, cache::CacheKey, cypher_translator,
-            optimizer::Optimizer, processor::QueryLanguage,
+            Executor, binder::Binder, cache::CacheKey, cypher_translator, optimizer::Optimizer,
+            processor::QueryLanguage,
         };
 
         // Create cache key for this query
@@ -392,13 +1398,7 @@ impl Session {
         let (viewing_epoch, tx_id) = self.get_transaction_context();
 
         // Convert to physical plan with transaction context
-        let planner = Planner::with_context(
-            Arc::clone(&self.graph_store),
-            Arc::clone(&self.tx_manager),
-            tx_id,
-            viewing_epoch,
-        )
-        .with_factorized_execution(self.factorized_execution);
+        let planner = self.create_planner(viewing_epoch, tx_id);
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // Execute the plan
@@ -433,9 +1433,7 @@ impl Session {
     /// ```
     #[cfg(feature = "gremlin")]
     pub fn execute_gremlin(&self, query: &str) -> Result<QueryResult> {
-        use crate::query::{
-            Executor, Planner, binder::Binder, gremlin_translator, optimizer::Optimizer,
-        };
+        use crate::query::{Executor, binder::Binder, gremlin_translator, optimizer::Optimizer};
 
         // Parse and translate the query to a logical plan
         let logical_plan = gremlin_translator::translate(query)?;
@@ -452,13 +1450,7 @@ impl Session {
         let (viewing_epoch, tx_id) = self.get_transaction_context();
 
         // Convert to physical plan with transaction context
-        let planner = Planner::with_context(
-            Arc::clone(&self.graph_store),
-            Arc::clone(&self.tx_manager),
-            tx_id,
-            viewing_epoch,
-        )
-        .with_factorized_execution(self.factorized_execution);
+        let planner = self.create_planner(viewing_epoch, tx_id);
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // Execute the plan
@@ -525,9 +1517,7 @@ impl Session {
     /// ```
     #[cfg(feature = "graphql")]
     pub fn execute_graphql(&self, query: &str) -> Result<QueryResult> {
-        use crate::query::{
-            Executor, Planner, binder::Binder, graphql_translator, optimizer::Optimizer,
-        };
+        use crate::query::{Executor, binder::Binder, graphql_translator, optimizer::Optimizer};
 
         // Parse and translate the query to a logical plan
         let logical_plan = graphql_translator::translate(query)?;
@@ -544,13 +1534,7 @@ impl Session {
         let (viewing_epoch, tx_id) = self.get_transaction_context();
 
         // Convert to physical plan with transaction context
-        let planner = Planner::with_context(
-            Arc::clone(&self.graph_store),
-            Arc::clone(&self.tx_manager),
-            tx_id,
-            viewing_epoch,
-        )
-        .with_factorized_execution(self.factorized_execution);
+        let planner = self.create_planner(viewing_epoch, tx_id);
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // Execute the plan
@@ -619,8 +1603,8 @@ impl Session {
     #[cfg(feature = "sql-pgq")]
     pub fn execute_sql(&self, query: &str) -> Result<QueryResult> {
         use crate::query::{
-            Executor, Planner, binder::Binder, cache::CacheKey, optimizer::Optimizer,
-            plan::LogicalOperator, processor::QueryLanguage, sql_pgq_translator,
+            Executor, binder::Binder, cache::CacheKey, optimizer::Optimizer, plan::LogicalOperator,
+            processor::QueryLanguage, sql_pgq_translator,
         };
 
         // Parse and translate (always needed to check for DDL)
@@ -639,6 +1623,7 @@ impl Session {
                 ))]],
                 execution_time_ms: None,
                 rows_scanned: None,
+                status_message: None,
             });
         }
 
@@ -667,13 +1652,7 @@ impl Session {
         let (viewing_epoch, tx_id) = self.get_transaction_context();
 
         // Convert to physical plan with transaction context
-        let planner = Planner::with_context(
-            Arc::clone(&self.graph_store),
-            Arc::clone(&self.tx_manager),
-            tx_id,
-            viewing_epoch,
-        )
-        .with_factorized_execution(self.factorized_execution);
+        let planner = self.create_planner(viewing_epoch, tx_id);
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // Execute the plan
@@ -734,7 +1713,8 @@ impl Session {
         let optimized_plan = optimizer.optimize(logical_plan)?;
 
         // Convert to physical plan using RDF planner
-        let planner = RdfPlanner::new(Arc::clone(&self.rdf_store)).with_tx_id(self.current_tx);
+        let planner =
+            RdfPlanner::new(Arc::clone(&self.rdf_store)).with_tx_id(*self.current_tx.lock());
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // Execute the plan
@@ -864,19 +1844,7 @@ impl Session {
     /// # }
     /// ```
     pub fn begin_tx(&mut self) -> Result<()> {
-        if self.current_tx.is_some() {
-            return Err(grafeo_common::utils::error::Error::Transaction(
-                grafeo_common::utils::error::TransactionError::InvalidState(
-                    "Transaction already active".to_string(),
-                ),
-            ));
-        }
-
-        self.tx_start_node_count = self.store.node_count();
-        self.tx_start_edge_count = self.store.edge_count();
-        let tx_id = self.tx_manager.begin();
-        self.current_tx = Some(tx_id);
-        Ok(())
+        self.begin_tx_inner(false, None)
     }
 
     /// Begins a transaction with a specific isolation level.
@@ -890,7 +1858,17 @@ impl Session {
         &mut self,
         isolation_level: crate::transaction::IsolationLevel,
     ) -> Result<()> {
-        if self.current_tx.is_some() {
+        self.begin_tx_inner(false, Some(isolation_level))
+    }
+
+    /// Core transaction begin logic, usable from both `&mut self` and `&self` paths.
+    fn begin_tx_inner(
+        &self,
+        read_only: bool,
+        isolation_level: Option<crate::transaction::IsolationLevel>,
+    ) -> Result<()> {
+        let mut current = self.current_tx.lock();
+        if current.is_some() {
             return Err(grafeo_common::utils::error::Error::Transaction(
                 grafeo_common::utils::error::TransactionError::InvalidState(
                     "Transaction already active".to_string(),
@@ -898,10 +1876,17 @@ impl Session {
             ));
         }
 
-        self.tx_start_node_count = self.store.node_count();
-        self.tx_start_edge_count = self.store.edge_count();
-        let tx_id = self.tx_manager.begin_with_isolation(isolation_level);
-        self.current_tx = Some(tx_id);
+        self.tx_start_node_count
+            .store(self.store.node_count(), Ordering::Relaxed);
+        self.tx_start_edge_count
+            .store(self.store.edge_count(), Ordering::Relaxed);
+        let tx_id = if let Some(level) = isolation_level {
+            self.tx_manager.begin_with_isolation(level)
+        } else {
+            self.tx_manager.begin()
+        };
+        *current = Some(tx_id);
+        *self.read_only_tx.lock() = read_only;
         Ok(())
     }
 
@@ -913,7 +1898,12 @@ impl Session {
     ///
     /// Returns an error if no transaction is active.
     pub fn commit(&mut self) -> Result<()> {
-        let tx_id = self.current_tx.take().ok_or_else(|| {
+        self.commit_inner()
+    }
+
+    /// Core commit logic, usable from both `&mut self` and `&self` paths.
+    fn commit_inner(&self) -> Result<()> {
+        let tx_id = self.current_tx.lock().take().ok_or_else(|| {
             grafeo_common::utils::error::Error::Transaction(
                 grafeo_common::utils::error::TransactionError::InvalidState(
                     "No active transaction".to_string(),
@@ -931,6 +1921,9 @@ impl Session {
         // convenience lookups (edge_type, get_edge, get_node) that use
         // store.current_epoch() can see versions created at the latest epoch.
         self.store.sync_epoch(self.tx_manager.current_epoch());
+
+        // Reset read-only flag
+        *self.read_only_tx.lock() = false;
 
         // Auto-GC: periodically prune old MVCC versions
         if self.gc_interval > 0 {
@@ -969,13 +1962,21 @@ impl Session {
     /// # }
     /// ```
     pub fn rollback(&mut self) -> Result<()> {
-        let tx_id = self.current_tx.take().ok_or_else(|| {
+        self.rollback_inner()
+    }
+
+    /// Core rollback logic, usable from both `&mut self` and `&self` paths.
+    fn rollback_inner(&self) -> Result<()> {
+        let tx_id = self.current_tx.lock().take().ok_or_else(|| {
             grafeo_common::utils::error::Error::Transaction(
                 grafeo_common::utils::error::TransactionError::InvalidState(
                     "No active transaction".to_string(),
                 ),
             )
         })?;
+
+        // Reset read-only flag
+        *self.read_only_tx.lock() = false;
 
         // Discard uncommitted versions in the LPG store
         self.store.discard_uncommitted_versions(tx_id);
@@ -991,13 +1992,13 @@ impl Session {
     /// Returns whether a transaction is active.
     #[must_use]
     pub fn in_transaction(&self) -> bool {
-        self.current_tx.is_some()
+        self.current_tx.lock().is_some()
     }
 
     /// Returns the current transaction ID, if any.
     #[must_use]
     pub(crate) fn current_tx_id(&self) -> Option<TxId> {
-        self.current_tx
+        *self.current_tx.lock()
     }
 
     /// Returns a reference to the transaction manager.
@@ -1009,13 +2010,19 @@ impl Session {
     /// Returns the store's current node count and the count at transaction start.
     #[must_use]
     pub(crate) fn node_count_delta(&self) -> (usize, usize) {
-        (self.tx_start_node_count, self.store.node_count())
+        (
+            self.tx_start_node_count.load(Ordering::Relaxed),
+            self.store.node_count(),
+        )
     }
 
     /// Returns the store's current edge count and the count at transaction start.
     #[must_use]
     pub(crate) fn edge_count_delta(&self) -> (usize, usize) {
-        (self.tx_start_edge_count, self.store.edge_count())
+        (
+            self.tx_start_edge_count.load(Ordering::Relaxed),
+            self.store.edge_count(),
+        )
     }
 
     /// Prepares the current transaction for a two-phase commit.
@@ -1072,6 +2079,15 @@ impl Session {
         self.query_timeout.map(|d| Instant::now() + d)
     }
 
+    /// Evaluates a simple integer literal from a session parameter expression.
+    fn eval_integer_literal(expr: &grafeo_adapters::query::gql::ast::Expression) -> Option<i64> {
+        use grafeo_adapters::query::gql::ast::{Expression, Literal};
+        match expr {
+            Expression::Literal(Literal::Integer(n)) => Some(*n),
+            _ => None,
+        }
+    }
+
     /// Returns the current transaction context for MVCC visibility.
     ///
     /// Returns `(viewing_epoch, tx_id)` where:
@@ -1079,17 +2095,42 @@ impl Session {
     /// - `tx_id` is the current transaction ID (if in a transaction)
     #[must_use]
     fn get_transaction_context(&self) -> (EpochId, Option<TxId>) {
-        if let Some(tx_id) = self.current_tx {
-            // In a transaction - use the transaction's start epoch
+        // Time-travel override takes precedence (read-only, no tx context)
+        if let Some(epoch) = *self.viewing_epoch_override.lock() {
+            return (epoch, None);
+        }
+
+        if let Some(tx_id) = *self.current_tx.lock() {
+            // In a transaction: use the transaction's start epoch
             let epoch = self
                 .tx_manager
                 .start_epoch(tx_id)
                 .unwrap_or_else(|| self.tx_manager.current_epoch());
             (epoch, Some(tx_id))
         } else {
-            // No transaction - use current epoch
+            // No transaction: use current epoch
             (self.tx_manager.current_epoch(), None)
         }
+    }
+
+    /// Creates a planner with transaction context and constraint validator.
+    fn create_planner(&self, viewing_epoch: EpochId, tx_id: Option<TxId>) -> crate::query::Planner {
+        use crate::query::Planner;
+
+        let mut planner = Planner::with_context(
+            Arc::clone(&self.graph_store),
+            Arc::clone(&self.tx_manager),
+            tx_id,
+            viewing_epoch,
+        )
+        .with_factorized_execution(self.factorized_execution)
+        .with_catalog(Arc::clone(&self.catalog));
+
+        // Attach the constraint validator for schema enforcement
+        let validator = CatalogConstraintValidator::new(Arc::clone(&self.catalog));
+        planner = planner.with_validator(Arc::new(validator));
+
+        planner
     }
 
     /// Creates a node directly (bypassing query execution).
@@ -1432,7 +2473,7 @@ mod tests {
         // Start a transaction
         let mut session = db.session();
         session.begin_tx().unwrap();
-        let tx_id = session.current_tx.unwrap();
+        let tx_id = session.current_tx.lock().unwrap();
 
         // Create a node versioned with the transaction's ID
         let epoch = db.store().current_epoch();
@@ -2178,5 +3219,310 @@ mod tests {
         // Verify we can query through it
         let result = session.execute("MATCH (n:Test) RETURN n.name").unwrap();
         assert_eq!(result.row_count(), 1);
+    }
+
+    // ==================== Session Command Tests ====================
+
+    #[cfg(feature = "gql")]
+    mod session_command_tests {
+        use super::*;
+
+        #[test]
+        fn test_use_graph_sets_current_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // Create the graph first, then USE it
+            session.execute("CREATE GRAPH mydb").unwrap();
+            session.execute("USE GRAPH mydb").unwrap();
+
+            assert_eq!(session.current_graph(), Some("mydb".to_string()));
+        }
+
+        #[test]
+        fn test_use_graph_nonexistent_errors() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("USE GRAPH doesnotexist");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("does not exist"),
+                "Expected 'does not exist' error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_use_graph_default_always_valid() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // "default" is always valid, even without CREATE GRAPH
+            session.execute("USE GRAPH default").unwrap();
+            assert_eq!(session.current_graph(), Some("default".to_string()));
+        }
+
+        #[test]
+        fn test_session_set_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // SESSION SET GRAPH does not verify existence
+            session.execute("SESSION SET GRAPH analytics").unwrap();
+            assert_eq!(session.current_graph(), Some("analytics".to_string()));
+        }
+
+        #[test]
+        fn test_session_set_time_zone() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            assert_eq!(session.time_zone(), None);
+
+            session.execute("SESSION SET TIME ZONE 'UTC'").unwrap();
+            assert_eq!(session.time_zone(), Some("UTC".to_string()));
+
+            session
+                .execute("SESSION SET TIME ZONE 'America/New_York'")
+                .unwrap();
+            assert_eq!(session.time_zone(), Some("America/New_York".to_string()));
+        }
+
+        #[test]
+        fn test_session_set_parameter() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session
+                .execute("SESSION SET PARAMETER $timeout = 30")
+                .unwrap();
+
+            // Parameter is stored (value is Null for now, since expression
+            // evaluation is not yet wired up)
+            assert!(session.get_parameter("timeout").is_some());
+        }
+
+        #[test]
+        fn test_session_reset_clears_all_state() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // Set various session state
+            session.execute("SESSION SET GRAPH analytics").unwrap();
+            session.execute("SESSION SET TIME ZONE 'UTC'").unwrap();
+            session
+                .execute("SESSION SET PARAMETER $limit = 100")
+                .unwrap();
+
+            // Verify state was set
+            assert!(session.current_graph().is_some());
+            assert!(session.time_zone().is_some());
+            assert!(session.get_parameter("limit").is_some());
+
+            // Reset everything
+            session.execute("SESSION RESET").unwrap();
+
+            assert_eq!(session.current_graph(), None);
+            assert_eq!(session.time_zone(), None);
+            assert!(session.get_parameter("limit").is_none());
+        }
+
+        #[test]
+        fn test_session_close_clears_state() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("SESSION SET GRAPH analytics").unwrap();
+            session.execute("SESSION SET TIME ZONE 'UTC'").unwrap();
+
+            session.execute("SESSION CLOSE").unwrap();
+
+            assert_eq!(session.current_graph(), None);
+            assert_eq!(session.time_zone(), None);
+        }
+
+        #[test]
+        fn test_create_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+
+            // Should be able to USE it now
+            session.execute("USE GRAPH mydb").unwrap();
+            assert_eq!(session.current_graph(), Some("mydb".to_string()));
+        }
+
+        #[test]
+        fn test_create_graph_duplicate_errors() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+            let result = session.execute("CREATE GRAPH mydb");
+
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("already exists"),
+                "Expected 'already exists' error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_create_graph_if_not_exists() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+            // Should succeed silently with IF NOT EXISTS
+            session.execute("CREATE GRAPH IF NOT EXISTS mydb").unwrap();
+        }
+
+        #[test]
+        fn test_drop_graph() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("CREATE GRAPH mydb").unwrap();
+            session.execute("DROP GRAPH mydb").unwrap();
+
+            // Should no longer be usable
+            let result = session.execute("USE GRAPH mydb");
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_drop_graph_nonexistent_errors() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("DROP GRAPH nosuchgraph");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("does not exist"),
+                "Expected 'does not exist' error, got: {err}"
+            );
+        }
+
+        #[test]
+        fn test_drop_graph_if_exists() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // Should succeed silently with IF EXISTS
+            session.execute("DROP GRAPH IF EXISTS nosuchgraph").unwrap();
+        }
+
+        #[test]
+        fn test_start_transaction_via_gql() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("START TRANSACTION").unwrap();
+            assert!(session.in_transaction());
+            session.execute("INSERT (:Person {name: 'Alice'})").unwrap();
+            session.execute("COMMIT").unwrap();
+            assert!(!session.in_transaction());
+
+            let result = session.execute("MATCH (n:Person) RETURN n.name").unwrap();
+            assert_eq!(result.rows.len(), 1);
+        }
+
+        #[test]
+        fn test_start_transaction_read_only_blocks_insert() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("START TRANSACTION READ ONLY").unwrap();
+            let result = session.execute("INSERT (:Person {name: 'Alice'})");
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("read-only"),
+                "Expected read-only error, got: {err}"
+            );
+            session.execute("ROLLBACK").unwrap();
+        }
+
+        #[test]
+        fn test_start_transaction_read_only_allows_reads() {
+            let db = GrafeoDB::new_in_memory();
+            let mut session = db.session();
+            session.begin_tx().unwrap();
+            session.execute("INSERT (:Person {name: 'Alice'})").unwrap();
+            session.commit().unwrap();
+
+            session.execute("START TRANSACTION READ ONLY").unwrap();
+            let result = session.execute("MATCH (n:Person) RETURN n.name").unwrap();
+            assert_eq!(result.rows.len(), 1);
+            session.execute("COMMIT").unwrap();
+        }
+
+        #[test]
+        fn test_rollback_via_gql() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session.execute("START TRANSACTION").unwrap();
+            session.execute("INSERT (:Person {name: 'Alice'})").unwrap();
+            session.execute("ROLLBACK").unwrap();
+
+            let result = session.execute("MATCH (n:Person) RETURN n.name").unwrap();
+            assert!(result.rows.is_empty());
+        }
+
+        #[test]
+        fn test_start_transaction_with_isolation_level() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session
+                .execute("START TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                .unwrap();
+            assert!(session.in_transaction());
+            session.execute("ROLLBACK").unwrap();
+        }
+
+        #[test]
+        fn test_session_commands_return_empty_result() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("SESSION SET GRAPH test").unwrap();
+            assert_eq!(result.row_count(), 0);
+            assert_eq!(result.column_count(), 0);
+        }
+
+        #[test]
+        fn test_current_graph_default_is_none() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            assert_eq!(session.current_graph(), None);
+        }
+
+        #[test]
+        fn test_time_zone_default_is_none() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            assert_eq!(session.time_zone(), None);
+        }
+
+        #[test]
+        fn test_session_state_independent_across_sessions() {
+            let db = GrafeoDB::new_in_memory();
+            let session1 = db.session();
+            let session2 = db.session();
+
+            session1.execute("SESSION SET GRAPH first").unwrap();
+            session2.execute("SESSION SET GRAPH second").unwrap();
+
+            assert_eq!(session1.current_graph(), Some("first".to_string()));
+            assert_eq!(session2.current_graph(), Some("second".to_string()));
+        }
     }
 }

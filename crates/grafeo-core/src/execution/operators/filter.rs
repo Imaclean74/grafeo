@@ -4,7 +4,7 @@ use super::{Operator, OperatorResult};
 use crate::execution::{ChunkZoneHints, DataChunk, SelectionVector};
 use crate::graph::Direction;
 use crate::graph::GraphStore;
-use grafeo_common::types::{PropertyKey, Value};
+use grafeo_common::types::{HashableValue, PropertyKey, Value};
 use regex::Regex;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -233,20 +233,42 @@ pub enum FilterExpression {
         /// The predicate to test for each element.
         predicate: Box<FilterExpression>,
     },
-    /// EXISTS subquery - evaluates inner plan and returns true if results exist.
+    /// EXISTS subquery: evaluates inner plan and returns true if results exist.
     ExistsSubquery {
         /// The start node variable from outer query.
         start_var: String,
         /// Direction of edge traversal.
         direction: Direction,
-        /// Optional edge type filter.
-        edge_type: Option<String>,
+        /// Edge type filter (empty = match all types, multiple = match any).
+        edge_types: Vec<String>,
         /// Optional end node labels filter.
         end_labels: Option<Vec<String>>,
         /// Minimum number of hops (for variable-length patterns).
         min_hops: Option<u32>,
         /// Maximum number of hops (for variable-length patterns).
         max_hops: Option<u32>,
+    },
+    /// COUNT subquery: counts matching edges from a node (fast path).
+    CountSubquery {
+        /// The start node variable from outer query.
+        start_var: String,
+        /// Direction of edge traversal.
+        direction: Direction,
+        /// Edge type filter (empty = match all types, multiple = match any).
+        edge_types: Vec<String>,
+    },
+    /// reduce() accumulator: `reduce(acc = init, x IN list | expr)`.
+    Reduce {
+        /// Accumulator variable name.
+        accumulator: String,
+        /// Initial value for the accumulator.
+        initial: Box<FilterExpression>,
+        /// Iteration variable name.
+        variable: String,
+        /// List to iterate over.
+        list: Box<FilterExpression>,
+        /// Body expression (references both accumulator and variable).
+        expression: Box<FilterExpression>,
     },
 }
 
@@ -306,6 +328,10 @@ pub enum BinaryFilterOp {
     Regex,
     /// Power/exponentiation (^).
     Pow,
+    /// SQL LIKE pattern matching (% = any chars, _ = single char).
+    Like,
+    /// String concatenation (||).
+    Concat,
 }
 
 /// Unary operators for filter expressions.
@@ -628,7 +654,7 @@ impl ExpressionPredicate {
             FilterExpression::ExistsSubquery {
                 start_var,
                 direction,
-                edge_type,
+                edge_types,
                 ..
             } => {
                 // Get the start node ID from the current row
@@ -643,9 +669,11 @@ impl ExpressionPredicate {
                     .into_iter()
                     .any(|(_, edge_id)| {
                         // Check edge type if specified
-                        if let Some(required_type) = edge_type {
+                        if !edge_types.is_empty() {
                             if let Some(actual_type) = self.store.edge_type(edge_id) {
-                                actual_type.as_str() == required_type.as_str()
+                                edge_types
+                                    .iter()
+                                    .any(|t| actual_type.as_str().eq_ignore_ascii_case(t.as_str()))
                             } else {
                                 false
                             }
@@ -656,6 +684,118 @@ impl ExpressionPredicate {
 
                 Some(Value::Bool(exists))
             }
+            FilterExpression::CountSubquery {
+                start_var,
+                direction,
+                edge_types,
+            } => {
+                let col_idx = *self.variable_columns.get(start_var)?;
+                let col = chunk.column(col_idx)?;
+                let start_node_id = col.get_node_id(row)?;
+
+                let count = self
+                    .store
+                    .edges_from(start_node_id, *direction)
+                    .into_iter()
+                    .filter(|(_, edge_id)| {
+                        if !edge_types.is_empty() {
+                            if let Some(actual_type) = self.store.edge_type(*edge_id) {
+                                edge_types
+                                    .iter()
+                                    .any(|t| actual_type.as_str().eq_ignore_ascii_case(t.as_str()))
+                            } else {
+                                false
+                            }
+                        } else {
+                            true
+                        }
+                    })
+                    .count();
+
+                Some(Value::Int64(count as i64))
+            }
+            FilterExpression::Reduce {
+                accumulator,
+                initial,
+                variable,
+                list,
+                expression,
+            } => {
+                let init_val = self.eval_expr(initial, chunk, row)?;
+                let list_val = self.eval_expr(list, chunk, row)?;
+                let owned_items: Vec<Value>;
+                let items: &[Value] = match &list_val {
+                    Value::List(list) => list,
+                    Value::Vector(vec) => {
+                        owned_items = vec.iter().map(|&f| Value::Float64(f64::from(f))).collect();
+                        &owned_items
+                    }
+                    _ => return None,
+                };
+                let mut acc = init_val;
+                for item in items {
+                    acc = self.eval_reduce_expr(expression, &acc, accumulator, item, variable)?;
+                }
+                Some(acc)
+            }
+        }
+    }
+
+    /// Evaluates an expression in the context of a reduce() call.
+    ///
+    /// Both the accumulator variable and the iteration variable are bound.
+    fn eval_reduce_expr(
+        &self,
+        expr: &FilterExpression,
+        acc_val: &Value,
+        acc_name: &str,
+        item_val: &Value,
+        item_name: &str,
+    ) -> Option<Value> {
+        match expr {
+            FilterExpression::Variable(name) if name == acc_name => Some(acc_val.clone()),
+            FilterExpression::Variable(name) if name == item_name => Some(item_val.clone()),
+            FilterExpression::Literal(v) => Some(v.clone()),
+            FilterExpression::Binary { left, op, right } => {
+                let l = self.eval_reduce_expr(left, acc_val, acc_name, item_val, item_name)?;
+                let r = self.eval_reduce_expr(right, acc_val, acc_name, item_val, item_name)?;
+                self.eval_binary_op(&l, *op, &r)
+            }
+            FilterExpression::Unary { op, operand } => {
+                let val = self.eval_reduce_expr(operand, acc_val, acc_name, item_val, item_name);
+                self.eval_unary_op(*op, val)
+            }
+            FilterExpression::Property {
+                variable: var,
+                property,
+            } if var == item_name => {
+                if let Value::Map(map) = item_val {
+                    Some(
+                        map.iter()
+                            .find(|(k, _)| k.as_str() == property)
+                            .map_or(Value::Null, |(_, v)| v.clone()),
+                    )
+                } else {
+                    None
+                }
+            }
+            FilterExpression::Property {
+                variable: var,
+                property,
+            } if var == acc_name => {
+                if let Value::Map(map) = acc_val {
+                    Some(
+                        map.iter()
+                            .find(|(k, _)| k.as_str() == property)
+                            .map_or(Value::Null, |(_, v)| v.clone()),
+                    )
+                } else {
+                    None
+                }
+            }
+            // For expressions not referencing the local variables, delegate to
+            // the comprehension evaluator with the item binding
+            _ => self.eval_comprehension_expr(expr, item_val, item_name),
         }
     }
 
@@ -746,12 +886,65 @@ impl ExpressionPredicate {
                         s.push_str(&b);
                         Some(Value::String(s.into()))
                     }
+                    // Temporal addition
+                    (Value::Date(d), Value::Duration(dur))
+                    | (Value::Duration(dur), Value::Date(d)) => {
+                        Some(Value::Date(d.add_duration(dur)))
+                    }
+                    (Value::Time(t), Value::Duration(dur))
+                    | (Value::Duration(dur), Value::Time(t)) => {
+                        Some(Value::Time(t.add_duration(dur)))
+                    }
+                    (Value::Timestamp(ts), Value::Duration(dur))
+                    | (Value::Duration(dur), Value::Timestamp(ts)) => {
+                        Some(Value::Timestamp(ts.add_duration(dur)))
+                    }
+                    (Value::Duration(a), Value::Duration(b)) => Some(Value::Duration(a.add(*b))),
                     _ => self.eval_arithmetic(left, right, |a, b| a + b, |a, b| a + b),
                 }
             }
-            BinaryFilterOp::Sub => self.eval_arithmetic(left, right, |a, b| a - b, |a, b| a - b),
-            BinaryFilterOp::Mul => self.eval_arithmetic(left, right, |a, b| a * b, |a, b| a * b),
-            BinaryFilterOp::Div => self.eval_arithmetic(left, right, |a, b| a / b, |a, b| a / b),
+            BinaryFilterOp::Sub => match (left, right) {
+                // Temporal subtraction
+                (Value::Date(a), Value::Duration(dur)) => Some(Value::Date(a.sub_duration(dur))),
+                (Value::Time(a), Value::Duration(dur)) => {
+                    Some(Value::Time(a.add_duration(&dur.neg())))
+                }
+                (Value::Timestamp(a), Value::Duration(dur)) => {
+                    Some(Value::Timestamp(a.add_duration(&dur.neg())))
+                }
+                (Value::Date(a), Value::Date(b)) => {
+                    let days = a.as_days() as i64 - b.as_days() as i64;
+                    Some(Value::Duration(grafeo_common::types::Duration::from_days(
+                        days,
+                    )))
+                }
+                (Value::Time(a), Value::Time(b)) => {
+                    let nanos = a.as_nanos() as i64 - b.as_nanos() as i64;
+                    Some(Value::Duration(grafeo_common::types::Duration::from_nanos(
+                        nanos,
+                    )))
+                }
+                (Value::Timestamp(a), Value::Timestamp(b)) => {
+                    let micros = a.duration_since(*b);
+                    Some(Value::Duration(grafeo_common::types::Duration::from_nanos(
+                        micros * 1000,
+                    )))
+                }
+                (Value::Duration(a), Value::Duration(b)) => Some(Value::Duration(a.sub(*b))),
+                _ => self.eval_arithmetic(left, right, |a, b| a - b, |a, b| a - b),
+            },
+            BinaryFilterOp::Mul => match (left, right) {
+                (Value::Duration(d), Value::Int64(n)) | (Value::Int64(n), Value::Duration(d)) => {
+                    Some(Value::Duration(d.mul(*n)))
+                }
+                _ => self.eval_arithmetic(left, right, |a, b| a * b, |a, b| a * b),
+            },
+            BinaryFilterOp::Div => match (left, right) {
+                (Value::Duration(d), Value::Int64(n)) if *n != 0 => {
+                    Some(Value::Duration(d.div(*n)))
+                }
+                _ => self.eval_arithmetic(left, right, |a, b| a / b, |a, b| a / b),
+            },
             BinaryFilterOp::Mod => self.eval_modulo(left, right),
             // String operators
             BinaryFilterOp::StartsWith => {
@@ -802,6 +995,65 @@ impl ExpressionPredicate {
                     _ => None, // Type mismatch
                 }
             }
+            // SQL LIKE pattern matching
+            BinaryFilterOp::Like => {
+                match (left, right) {
+                    (Value::String(s), Value::String(pattern)) => {
+                        // Convert SQL LIKE pattern to regex:
+                        // % -> .* (any sequence of characters)
+                        // _ -> .  (any single character)
+                        // Escape other regex metacharacters
+                        let mut regex_pattern = String::with_capacity(pattern.len() + 4);
+                        regex_pattern.push('^');
+                        let mut chars = pattern.chars().peekable();
+                        while let Some(ch) = chars.next() {
+                            match ch {
+                                '%' => regex_pattern.push_str(".*"),
+                                '_' => regex_pattern.push('.'),
+                                '\\' => {
+                                    // Escape sequence: next char is literal
+                                    if let Some(next) = chars.next() {
+                                        regex_escape_char(next, &mut regex_pattern);
+                                    }
+                                }
+                                _ => regex_escape_char(ch, &mut regex_pattern),
+                            }
+                        }
+                        regex_pattern.push('$');
+                        match Regex::new(&regex_pattern) {
+                            Ok(re) => Some(Value::Bool(re.is_match(s))),
+                            Err(_) => None,
+                        }
+                    }
+                    (Value::Null, _) | (_, Value::Null) => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            // String concatenation (||)
+            BinaryFilterOp::Concat => match (left, right) {
+                (Value::String(a), Value::String(b)) => {
+                    let mut s = String::with_capacity(a.len() + b.len());
+                    s.push_str(a);
+                    s.push_str(b);
+                    Some(Value::String(s.into()))
+                }
+                (Value::String(a), other) => {
+                    let b = value_to_string(other)?;
+                    let mut s = String::with_capacity(a.len() + b.len());
+                    s.push_str(a);
+                    s.push_str(&b);
+                    Some(Value::String(s.into()))
+                }
+                (other, Value::String(b)) => {
+                    let a = value_to_string(other)?;
+                    let mut s = String::with_capacity(a.len() + b.len());
+                    s.push_str(&a);
+                    s.push_str(b);
+                    Some(Value::String(s.into()))
+                }
+                (Value::Null, _) | (_, Value::Null) => Some(Value::Null),
+                _ => None,
+            },
         }
     }
 
@@ -878,6 +1130,21 @@ impl ExpressionPredicate {
                 }
                 None
             }
+            "element_id" | "elementid" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    if let Some(node_id) = col.get_node_id(row) {
+                        return Some(Value::String(format!("n:{}", node_id.0).into()));
+                    } else if let Some(edge_id) = col.get_edge_id(row) {
+                        return Some(Value::String(format!("e:{}", edge_id.0).into()));
+                    }
+                }
+                None
+            }
             "labels" => {
                 if args.len() != 1 {
                     return None;
@@ -917,6 +1184,7 @@ impl ExpressionPredicate {
                 match val {
                     Value::List(items) => Some(Value::Int64(items.len() as i64)),
                     Value::String(s) => Some(Value::Int64(s.len() as i64)),
+                    Value::Path { edges, .. } => Some(Value::Int64(edges.len() as i64)),
                     _ => None,
                 }
             }
@@ -1014,6 +1282,160 @@ impl ExpressionPredicate {
                 let node = self.store.get_node(node_id)?;
                 let has_label = node.labels.iter().any(|l| l.as_str() == label.as_str());
                 Some(Value::Bool(has_label))
+            }
+            "istyped" => {
+                // isTyped(value, type_name) - checks if a value has a specific GQL type
+                if args.len() != 2 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                let Value::String(type_name) = self.eval_expr(&args[1], chunk, row)? else {
+                    return None;
+                };
+                let matches = match type_name.to_uppercase().as_str() {
+                    "BOOLEAN" | "BOOL" => matches!(val, Value::Bool(_)),
+                    "INTEGER" | "INT" | "INT64" => matches!(val, Value::Int64(_)),
+                    "FLOAT" | "FLOAT64" | "DOUBLE" => matches!(val, Value::Float64(_)),
+                    "STRING" => matches!(val, Value::String(_)),
+                    "LIST" => matches!(val, Value::List(_)),
+                    "MAP" => matches!(val, Value::Map(_)),
+                    "NULL" => matches!(val, Value::Null),
+                    "DATE" => matches!(val, Value::Date(_)),
+                    "TIME" => matches!(val, Value::Time(_)),
+                    "DATETIME" | "TIMESTAMP" => matches!(val, Value::Timestamp(_)),
+                    "DURATION" => matches!(val, Value::Duration(_)),
+                    _ => false,
+                };
+                Some(Value::Bool(matches))
+            }
+            "isdirected" => {
+                // isDirected(edge) - checks if an edge is directed (always true in LPG)
+                if args.len() != 1 {
+                    return None;
+                }
+                // In LPG, all edges are directed
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    // If the column contains an edge ID, it's directed
+                    if col.get_edge_id(row).is_some() {
+                        return Some(Value::Bool(true));
+                    }
+                }
+                Some(Value::Bool(false))
+            }
+            "issource" => {
+                // isSource(node, edge) - checks if node is the source of edge
+                if args.len() != 2 {
+                    return None;
+                }
+                let node_id = if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_node_id(row)?
+                } else {
+                    return None;
+                };
+                let edge_id = if let FilterExpression::Variable(var) = &args[1] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_edge_id(row)?
+                } else {
+                    return None;
+                };
+                let edge = self.store.get_edge(edge_id)?;
+                Some(Value::Bool(edge.src == node_id))
+            }
+            "isdestination" => {
+                // isDestination(node, edge) - checks if node is the destination of edge
+                if args.len() != 2 {
+                    return None;
+                }
+                let node_id = if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_node_id(row)?
+                } else {
+                    return None;
+                };
+                let edge_id = if let FilterExpression::Variable(var) = &args[1] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_edge_id(row)?
+                } else {
+                    return None;
+                };
+                let edge = self.store.get_edge(edge_id)?;
+                Some(Value::Bool(edge.dst == node_id))
+            }
+            "all_different" => {
+                // all_different(list) - checks if all elements in a list are distinct
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => {
+                        let mut seen = std::collections::HashSet::new();
+                        let all_diff = items.iter().all(|item| {
+                            let key = format!("{item:?}");
+                            seen.insert(key)
+                        });
+                        Some(Value::Bool(all_diff))
+                    }
+                    _ => Some(Value::Bool(true)),
+                }
+            }
+            "same" => {
+                // same(list) - checks if all elements in a list are equal
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => {
+                        let all_same = if items.is_empty() {
+                            true
+                        } else {
+                            items.iter().all(|item| item == &items[0])
+                        };
+                        Some(Value::Bool(all_same))
+                    }
+                    _ => Some(Value::Bool(true)),
+                }
+            }
+            "property_exists" => {
+                // property_exists(entity, key) - checks if a property key exists on an entity
+                if args.len() != 2 {
+                    return None;
+                }
+                let Value::String(key) = self.eval_expr(&args[1], chunk, row)? else {
+                    return None;
+                };
+                // Try node first, then edge
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    if let Some(nid) = col.get_node_id(row)
+                        && let Some(node) = self.store.get_node(nid)
+                    {
+                        let exists = node
+                            .properties
+                            .iter()
+                            .any(|(k, _)| k.as_str() == key.as_str());
+                        return Some(Value::Bool(exists));
+                    }
+                    if let Some(eid) = col.get_edge_id(row)
+                        && let Some(edge) = self.store.get_edge(eid)
+                    {
+                        let exists = edge
+                            .properties
+                            .iter()
+                            .any(|(k, _)| k.as_str() == key.as_str());
+                        return Some(Value::Bool(exists));
+                    }
+                }
+                Some(Value::Bool(false))
             }
             "head" => {
                 // head(list) - returns the first element of a list
@@ -1444,6 +1866,556 @@ impl ExpressionPredicate {
                 }
                 Some(Value::List(result.into()))
             }
+            // --- String functions (left, right) ---
+            "left" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                let len = self.eval_expr(&args[1], chunk, row)?;
+                match (&val, &len) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        let result: String = s.chars().take(n).collect();
+                        Some(Value::String(result.into()))
+                    }
+                    _ => None,
+                }
+            }
+            "right" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                let len = self.eval_expr(&args[1], chunk, row)?;
+                match (&val, &len) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        let char_count = s.chars().count();
+                        let skip = char_count.saturating_sub(n);
+                        let result: String = s.chars().skip(skip).collect();
+                        Some(Value::String(result.into()))
+                    }
+                    _ => None,
+                }
+            }
+            // --- Numeric functions (sign, log, log10, exp, e, pi) ---
+            "sign" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Int64(i.signum())),
+                    Value::Float64(f) => {
+                        if f > 0.0 {
+                            Some(Value::Int64(1))
+                        } else if f < 0.0 {
+                            Some(Value::Int64(-1))
+                        } else {
+                            Some(Value::Int64(0))
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            "log" | "ln" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).ln())),
+                    Value::Float64(f) => Some(Value::Float64(f.ln())),
+                    _ => None,
+                }
+            }
+            "log10" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).log10())),
+                    Value::Float64(f) => Some(Value::Float64(f.log10())),
+                    _ => None,
+                }
+            }
+            "exp" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).exp())),
+                    Value::Float64(f) => Some(Value::Float64(f.exp())),
+                    _ => None,
+                }
+            }
+            "e" => Some(Value::Float64(std::f64::consts::E)),
+            "pi" => Some(Value::Float64(std::f64::consts::PI)),
+            // --- Trigonometric functions ---
+            "sin" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).sin())),
+                    Value::Float64(f) => Some(Value::Float64(f.sin())),
+                    _ => None,
+                }
+            }
+            "cos" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).cos())),
+                    Value::Float64(f) => Some(Value::Float64(f.cos())),
+                    _ => None,
+                }
+            }
+            "tan" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).tan())),
+                    Value::Float64(f) => Some(Value::Float64(f.tan())),
+                    _ => None,
+                }
+            }
+            "asin" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).asin())),
+                    Value::Float64(f) => Some(Value::Float64(f.asin())),
+                    _ => None,
+                }
+            }
+            "acos" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).acos())),
+                    Value::Float64(f) => Some(Value::Float64(f.acos())),
+                    _ => None,
+                }
+            }
+            "atan" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).atan())),
+                    Value::Float64(f) => Some(Value::Float64(f.atan())),
+                    _ => None,
+                }
+            }
+            "atan2" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let y_val = self.eval_expr(&args[0], chunk, row)?;
+                let x_val = self.eval_expr(&args[1], chunk, row)?;
+                let y = match y_val {
+                    Value::Int64(i) => i as f64,
+                    Value::Float64(f) => f,
+                    _ => return None,
+                };
+                let x = match x_val {
+                    Value::Int64(i) => i as f64,
+                    Value::Float64(f) => f,
+                    _ => return None,
+                };
+                Some(Value::Float64(y.atan2(x)))
+            }
+            "degrees" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).to_degrees())),
+                    Value::Float64(f) => Some(Value::Float64(f.to_degrees())),
+                    _ => None,
+                }
+            }
+            "radians" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Int64(i) => Some(Value::Float64((i as f64).to_radians())),
+                    Value::Float64(f) => Some(Value::Float64(f.to_radians())),
+                    _ => None,
+                }
+            }
+            // Temporal constructors and accessors
+            "date" | "todate" => {
+                if args.is_empty() {
+                    return Some(Value::Date(grafeo_common::types::Date::today()));
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => grafeo_common::types::Date::parse(&s).map(Value::Date),
+                    Value::Timestamp(ts) => Some(Value::Date(ts.to_date())),
+                    Value::Date(_) => Some(val),
+                    _ => None,
+                }
+            }
+            "time" | "totime" => {
+                if args.is_empty() {
+                    return Some(Value::Time(grafeo_common::types::Time::now()));
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => grafeo_common::types::Time::parse(&s).map(Value::Time),
+                    Value::Timestamp(ts) => Some(Value::Time(ts.to_time())),
+                    Value::Time(_) => Some(val),
+                    _ => None,
+                }
+            }
+            "datetime" | "localdatetime" | "todatetime" => {
+                if args.is_empty() {
+                    return Some(Value::Timestamp(grafeo_common::types::Timestamp::now()));
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => {
+                        // Parse ISO datetime: try Date first, then full timestamp
+                        if let Some(d) = grafeo_common::types::Date::parse(&s) {
+                            return Some(Value::Timestamp(d.to_timestamp()));
+                        }
+                        // Try full ISO format: YYYY-MM-DDTHH:MM:SS[.fff][Z|+HH:MM]
+                        if let Some(pos) = s.find('T') {
+                            let date_part = &s[..pos];
+                            let time_part = &s[pos + 1..];
+                            if let (Some(d), Some(t)) = (
+                                grafeo_common::types::Date::parse(date_part),
+                                grafeo_common::types::Time::parse(time_part),
+                            ) {
+                                return Some(Value::Timestamp(
+                                    grafeo_common::types::Timestamp::from_date_time(d, t),
+                                ));
+                            }
+                        }
+                        None
+                    }
+                    Value::Timestamp(_) => Some(val),
+                    _ => None,
+                }
+            }
+            "duration" | "toduration" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => {
+                        grafeo_common::types::Duration::parse(&s).map(Value::Duration)
+                    }
+                    Value::Duration(_) => Some(val),
+                    _ => None,
+                }
+            }
+            "tozoneddatetime" | "zoneddatetime" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::String(s) => {
+                        grafeo_common::types::ZonedDatetime::parse(&s).map(Value::ZonedDatetime)
+                    }
+                    Value::Timestamp(ts) => Some(Value::ZonedDatetime(
+                        grafeo_common::types::ZonedDatetime::from_timestamp_offset(ts, 0),
+                    )),
+                    Value::ZonedDatetime(_) => Some(val),
+                    _ => None,
+                }
+            }
+            "tozonedtime" | "zonedtime" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::String(s) => {
+                        let t = grafeo_common::types::Time::parse(&s)?;
+                        if t.offset_seconds().is_some() {
+                            Some(Value::Time(t))
+                        } else {
+                            None
+                        }
+                    }
+                    Value::Time(t) if t.offset_seconds().is_some() => Some(val),
+                    _ => None,
+                }
+            }
+            "current_date" | "currentdate" => {
+                Some(Value::Date(grafeo_common::types::Date::today()))
+            }
+            "current_time" | "currenttime" => Some(Value::Time(grafeo_common::types::Time::now())),
+            "now" | "current_timestamp" | "currenttimestamp" => {
+                Some(Value::Timestamp(grafeo_common::types::Timestamp::now()))
+            }
+            // Component extraction
+            "year" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::Date(d) => Some(Value::Int64(i64::from(d.year()))),
+                    Value::Timestamp(ts) => Some(Value::Int64(i64::from(ts.to_date().year()))),
+                    Value::ZonedDatetime(zdt) => {
+                        Some(Value::Int64(i64::from(zdt.to_local_date().year())))
+                    }
+                    _ => None,
+                }
+            }
+            "month" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::Date(d) => Some(Value::Int64(i64::from(d.month()))),
+                    Value::Timestamp(ts) => Some(Value::Int64(i64::from(ts.to_date().month()))),
+                    Value::ZonedDatetime(zdt) => {
+                        Some(Value::Int64(i64::from(zdt.to_local_date().month())))
+                    }
+                    _ => None,
+                }
+            }
+            "day" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::Date(d) => Some(Value::Int64(i64::from(d.day()))),
+                    Value::Timestamp(ts) => Some(Value::Int64(i64::from(ts.to_date().day()))),
+                    Value::ZonedDatetime(zdt) => {
+                        Some(Value::Int64(i64::from(zdt.to_local_date().day())))
+                    }
+                    _ => None,
+                }
+            }
+            "hour" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::Time(t) => Some(Value::Int64(i64::from(t.hour()))),
+                    Value::Timestamp(ts) => Some(Value::Int64(i64::from(ts.to_time().hour()))),
+                    Value::ZonedDatetime(zdt) => {
+                        Some(Value::Int64(i64::from(zdt.to_local_time().hour())))
+                    }
+                    _ => None,
+                }
+            }
+            "minute" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::Time(t) => Some(Value::Int64(i64::from(t.minute()))),
+                    Value::Timestamp(ts) => Some(Value::Int64(i64::from(ts.to_time().minute()))),
+                    Value::ZonedDatetime(zdt) => {
+                        Some(Value::Int64(i64::from(zdt.to_local_time().minute())))
+                    }
+                    _ => None,
+                }
+            }
+            "second" => {
+                let val = self.eval_expr(args.first()?, chunk, row)?;
+                match val {
+                    Value::Time(t) => Some(Value::Int64(i64::from(t.second()))),
+                    Value::Timestamp(ts) => Some(Value::Int64(i64::from(ts.to_time().second()))),
+                    Value::ZonedDatetime(zdt) => {
+                        Some(Value::Int64(i64::from(zdt.to_local_time().second())))
+                    }
+                    _ => None,
+                }
+            }
+            // --- Path decomposition functions ---
+            "nodes" => {
+                // nodes(path) - extracts nodes from a path value
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Path { nodes, .. } => Some(Value::List(nodes)),
+                    Value::Map(map) => map.get(&PropertyKey::from("nodes")).cloned(),
+                    Value::List(items) => {
+                        // Legacy: alternating node, edge, node, edge, ...
+                        let nodes: Vec<Value> = items.iter().step_by(2).cloned().collect();
+                        Some(Value::List(nodes.into()))
+                    }
+                    _ => None,
+                }
+            }
+            "edges" | "relationships" => {
+                // edges(path) / relationships(path) - extracts edges from a path value
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Path { edges, .. } => Some(Value::List(edges)),
+                    Value::Map(map) => map.get(&PropertyKey::from("edges")).cloned(),
+                    Value::List(items) => {
+                        // Legacy: alternating node, edge, node, edge, ...
+                        let edges: Vec<Value> = items.iter().skip(1).step_by(2).cloned().collect();
+                        Some(Value::List(edges.into()))
+                    }
+                    _ => None,
+                }
+            }
+            // --- Path predicate functions (ISO GQL) ---
+            "isacyclic" => {
+                // isAcyclic(path) - true if no node appears more than once
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Path { nodes, .. } => {
+                        let mut seen = std::collections::HashSet::new();
+                        let acyclic = nodes
+                            .iter()
+                            .all(|n| seen.insert(HashableValue::new(n.clone())));
+                        Some(Value::Bool(acyclic))
+                    }
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "issimple" => {
+                // isSimple(path) - true if no node repeats except possibly first == last
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Path { nodes, .. } => {
+                        if nodes.is_empty() {
+                            return Some(Value::Bool(true));
+                        }
+                        let mut seen = std::collections::HashSet::new();
+                        let simple = nodes.iter().enumerate().all(|(i, n)| {
+                            let hv = HashableValue::new(n.clone());
+                            if !seen.insert(hv) {
+                                // Duplicate allowed only if last node == first node
+                                i == nodes.len() - 1 && n == &nodes[0]
+                            } else {
+                                true
+                            }
+                        });
+                        Some(Value::Bool(simple))
+                    }
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "istrail" => {
+                // isTrail(path) - true if no edge repeats
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Path { edges, .. } => {
+                        let mut seen = std::collections::HashSet::new();
+                        let trail = edges
+                            .iter()
+                            .all(|e| seen.insert(HashableValue::new(e.clone())));
+                        Some(Value::Bool(trail))
+                    }
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            // --- GQL ISO standard functions ---
+            "normalize" => {
+                // normalize(string) - returns the string as-is (NFC normalization).
+                // Rust strings are valid UTF-8; full NFC normalization requires the
+                // unicode-normalization crate, which is deferred to Phase 2.
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => Some(Value::String(s)),
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "isnormalized" => {
+                // IS NORMALIZED - check if string is in NFC form.
+                // Currently returns true for all valid strings (Rust strings are UTF-8).
+                // Full NFC check requires unicode-normalization crate.
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(_) => Some(Value::Bool(true)),
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "string_join" => {
+                // string_join(list, separator) - join list elements with separator
+                if args.len() != 2 {
+                    return None;
+                }
+                let list_val = self.eval_expr(&args[0], chunk, row)?;
+                let sep_val = self.eval_expr(&args[1], chunk, row)?;
+                match (list_val, sep_val) {
+                    (Value::List(items), Value::String(sep)) => {
+                        let sep_str: &str = &sep;
+                        let joined: String = items
+                            .iter()
+                            .filter_map(|v| match v {
+                                Value::String(s) => Some(s.to_string()),
+                                Value::Int64(i) => Some(i.to_string()),
+                                Value::Float64(f) => Some(f.to_string()),
+                                Value::Bool(b) => Some(b.to_string()),
+                                Value::Null => None,
+                                other => Some(format!("{other}")),
+                            })
+                            .collect::<Vec<String>>()
+                            .join(sep_str);
+                        Some(Value::String(joined.into()))
+                    }
+                    (Value::Null, _) | (_, Value::Null) => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "session_user" => {
+                // session_user() - returns the current session user
+                // For embedded databases, returns a default user string
+                Some(Value::String("default".into()))
+            }
+            "octet_length" | "byte_length" => {
+                // octet_length(string) - byte length
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => Some(Value::Int64(s.len() as i64)),
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "tolist" => {
+                // toList(value) - wraps a scalar in a single-element list, or returns list as-is
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(_) => Some(val),
+                    Value::Null => Some(Value::Null),
+                    other => Some(Value::List(vec![other].into())),
+                }
+            }
             _ => None, // Unknown function
         }
     }
@@ -1567,6 +2539,10 @@ impl ExpressionPredicate {
                 .parse::<f64>()
                 .ok()
                 .and_then(|n| f.partial_cmp(&n).map(|o| o as i32)),
+            // Temporal comparisons
+            (Value::Timestamp(a), Value::Timestamp(b)) => Some(a.cmp(b) as i32),
+            (Value::Date(a), Value::Date(b)) => Some(a.cmp(b) as i32),
+            (Value::Time(a), Value::Time(b)) => Some(a.cmp(b) as i32),
             _ => None,
         }
     }
@@ -1644,6 +2620,26 @@ impl Operator for FilterOperator {
 
     fn name(&self) -> &'static str {
         "Filter"
+    }
+}
+
+/// Escapes a character for use in a regex pattern.
+fn regex_escape_char(ch: char, out: &mut String) {
+    if ".+*?^${}()|[]\\".contains(ch) {
+        out.push('\\');
+    }
+    out.push(ch);
+}
+
+/// Converts a `Value` to its string representation for concatenation.
+fn value_to_string(val: &Value) -> Option<String> {
+    match val {
+        Value::Int64(i) => Some(i.to_string()),
+        Value::Float64(f) => Some(f.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::String(s) => Some(s.to_string()),
+        Value::Null => None,
+        _ => Some(format!("{val}")),
     }
 }
 
@@ -3033,5 +4029,803 @@ mod tests {
 
         // Verify it's exhausted
         assert!(filter2.next().unwrap().is_none());
+    }
+
+    // === eval_binary_op: Arithmetic Tests ===
+
+    /// Helper: creates an `ExpressionPredicate` wrapping a literal expression,
+    /// evaluates it against an empty chunk, and returns the result `Value`.
+    fn eval_literal_expr(expr: FilterExpression) -> Option<Value> {
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), store);
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+        pred.eval_at(&chunk, 0)
+    }
+
+    fn binary(left: Value, op: BinaryFilterOp, right: Value) -> FilterExpression {
+        FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(left)),
+            op,
+            right: Box::new(FilterExpression::Literal(right)),
+        }
+    }
+
+    fn unary(op: UnaryFilterOp, operand: FilterExpression) -> FilterExpression {
+        FilterExpression::Unary {
+            op,
+            operand: Box::new(operand),
+        }
+    }
+
+    #[test]
+    fn test_eval_binary_addition_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(10),
+            BinaryFilterOp::Add,
+            Value::Int64(20),
+        ));
+        assert_eq!(result, Some(Value::Int64(30)));
+    }
+
+    #[test]
+    fn test_eval_binary_subtraction_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(50),
+            BinaryFilterOp::Sub,
+            Value::Int64(18),
+        ));
+        assert_eq!(result, Some(Value::Int64(32)));
+    }
+
+    #[test]
+    fn test_eval_binary_multiplication_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(7),
+            BinaryFilterOp::Mul,
+            Value::Int64(6),
+        ));
+        assert_eq!(result, Some(Value::Int64(42)));
+    }
+
+    #[test]
+    fn test_eval_binary_division_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(100),
+            BinaryFilterOp::Div,
+            Value::Int64(4),
+        ));
+        assert_eq!(result, Some(Value::Int64(25)));
+    }
+
+    #[test]
+    fn test_eval_binary_modulo_int() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(17),
+            BinaryFilterOp::Mod,
+            Value::Int64(5),
+        ));
+        assert_eq!(result, Some(Value::Int64(2)));
+    }
+
+    // === eval_binary_op: Comparisons ===
+
+    #[test]
+    fn test_eval_comparison_lt() {
+        let result =
+            eval_literal_expr(binary(Value::Int64(3), BinaryFilterOp::Lt, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result =
+            eval_literal_expr(binary(Value::Int64(5), BinaryFilterOp::Lt, Value::Int64(3)));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_comparison_gt() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(10),
+            BinaryFilterOp::Gt,
+            Value::Int64(5),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_comparison_eq() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(42),
+            BinaryFilterOp::Eq,
+            Value::Int64(42),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Int64(42),
+            BinaryFilterOp::Eq,
+            Value::Int64(43),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_comparison_ne() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello".into()),
+            BinaryFilterOp::Ne,
+            Value::String("world".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("same".into()),
+            BinaryFilterOp::Ne,
+            Value::String("same".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_comparison_le_ge() {
+        // <=
+        let result =
+            eval_literal_expr(binary(Value::Int64(5), BinaryFilterOp::Le, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result =
+            eval_literal_expr(binary(Value::Int64(6), BinaryFilterOp::Le, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(false)));
+
+        // >=
+        let result =
+            eval_literal_expr(binary(Value::Int64(5), BinaryFilterOp::Ge, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result =
+            eval_literal_expr(binary(Value::Int64(4), BinaryFilterOp::Ge, Value::Int64(5)));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    // === eval_binary_op: Logical Operators ===
+
+    #[test]
+    fn test_eval_logical_and() {
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::And,
+            Value::Bool(true),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::And,
+            Value::Bool(false),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_logical_or() {
+        let result = eval_literal_expr(binary(
+            Value::Bool(false),
+            BinaryFilterOp::Or,
+            Value::Bool(true),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Bool(false),
+            BinaryFilterOp::Or,
+            Value::Bool(false),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_logical_xor() {
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::Xor,
+            Value::Bool(false),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::Bool(true),
+            BinaryFilterOp::Xor,
+            Value::Bool(true),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    // === Type Coercion: Int + Float Arithmetic ===
+
+    #[test]
+    fn test_eval_type_coercion_int_plus_float() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(10),
+            BinaryFilterOp::Add,
+            Value::Float64(2.5),
+        ));
+        assert_eq!(result, Some(Value::Float64(12.5)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_float_minus_int() {
+        let result = eval_literal_expr(binary(
+            Value::Float64(10.0),
+            BinaryFilterOp::Sub,
+            Value::Int64(3),
+        ));
+        assert_eq!(result, Some(Value::Float64(7.0)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_int_mul_float() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(4),
+            BinaryFilterOp::Mul,
+            Value::Float64(2.5),
+        ));
+        assert_eq!(result, Some(Value::Float64(10.0)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_int_eq_float() {
+        // Int 42 should equal Float 42.0
+        let result = eval_literal_expr(binary(
+            Value::Int64(42),
+            BinaryFilterOp::Eq,
+            Value::Float64(42.0),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_type_coercion_int_lt_float() {
+        let result = eval_literal_expr(binary(
+            Value::Int64(3),
+            BinaryFilterOp::Lt,
+            Value::Float64(3.5),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === String Comparison ===
+
+    #[test]
+    fn test_eval_string_comparison() {
+        let result = eval_literal_expr(binary(
+            Value::String("apple".into()),
+            BinaryFilterOp::Lt,
+            Value::String("banana".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("zebra".into()),
+            BinaryFilterOp::Gt,
+            Value::String("apple".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_string_concatenation() {
+        let result = eval_literal_expr(binary(
+            Value::String("Hello".into()),
+            BinaryFilterOp::Add,
+            Value::String(" World".into()),
+        ));
+        assert_eq!(result, Some(Value::String("Hello World".into())));
+    }
+
+    // === IS NULL / IS NOT NULL ===
+
+    #[test]
+    fn test_eval_is_null() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNull,
+            FilterExpression::Literal(Value::Null),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNull,
+            FilterExpression::Literal(Value::Int64(42)),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_is_not_null() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNotNull,
+            FilterExpression::Literal(Value::Int64(42)),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::IsNotNull,
+            FilterExpression::Literal(Value::Null),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_is_null_on_missing_variable() {
+        // Accessing a non-existent variable should produce None,
+        // which IS NULL treats as true
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let expr = FilterExpression::Unary {
+            op: UnaryFilterOp::IsNull,
+            operand: Box::new(FilterExpression::Variable("missing_var".to_string())),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), store);
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === STARTS WITH / ENDS WITH / CONTAINS ===
+
+    #[test]
+    fn test_eval_starts_with() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::StartsWith,
+            Value::String("hello".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::StartsWith,
+            Value::String("world".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_ends_with() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::EndsWith,
+            Value::String("world".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::EndsWith,
+            Value::String("hello".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_contains() {
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::Contains,
+            Value::String("lo wo".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        let result = eval_literal_expr(binary(
+            Value::String("hello world".into()),
+            BinaryFilterOp::Contains,
+            Value::String("xyz".into()),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    // === List Operations: IN Operator ===
+
+    #[test]
+    fn test_eval_in_operator() {
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+
+        // 2 IN [1, 2, 3] should be true
+        let expr = FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(Value::Int64(2))),
+            op: BinaryFilterOp::In,
+            right: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), Arc::clone(&store));
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(true)));
+
+        // 5 IN [1, 2, 3] should be false
+        let expr = FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(Value::Int64(5))),
+            op: BinaryFilterOp::In,
+            right: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), Arc::clone(&store));
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(false)));
+    }
+
+    #[test]
+    fn test_eval_in_operator_strings() {
+        use crate::graph::lpg::LpgStore;
+
+        let store: Arc<dyn GraphStore> = Arc::new(LpgStore::new());
+        let builder = DataChunkBuilder::new(&[LogicalType::Int64]);
+        let chunk = builder.finish();
+
+        // "banana" IN ["apple", "banana", "cherry"]
+        let expr = FilterExpression::Binary {
+            left: Box::new(FilterExpression::Literal(Value::String("banana".into()))),
+            op: BinaryFilterOp::In,
+            right: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::String("apple".into())),
+                FilterExpression::Literal(Value::String("banana".into())),
+                FilterExpression::Literal(Value::String("cherry".into())),
+            ])),
+        };
+        let pred = ExpressionPredicate::new(expr, HashMap::new(), store);
+        let result = pred.eval_at(&chunk, 0);
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === List Index Access ===
+
+    #[test]
+    fn test_eval_list_index_access() {
+        // [10, 20, 30][2] = 30
+        let result = eval_literal_expr(FilterExpression::IndexAccess {
+            base: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(10)),
+                FilterExpression::Literal(Value::Int64(20)),
+                FilterExpression::Literal(Value::Int64(30)),
+            ])),
+            index: Box::new(FilterExpression::Literal(Value::Int64(2))),
+        });
+        assert_eq!(result, Some(Value::Int64(30)));
+    }
+
+    #[test]
+    fn test_eval_list_negative_index() {
+        // [10, 20, 30][-2] = 20
+        let result = eval_literal_expr(FilterExpression::IndexAccess {
+            base: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(10)),
+                FilterExpression::Literal(Value::Int64(20)),
+                FilterExpression::Literal(Value::Int64(30)),
+            ])),
+            index: Box::new(FilterExpression::Literal(Value::Int64(-2))),
+        });
+        assert_eq!(result, Some(Value::Int64(20)));
+    }
+
+    // === CASE / NULLIF Pattern ===
+
+    #[test]
+    fn test_eval_case_simple() {
+        // CASE WHEN true THEN 'yes' ELSE 'no' END
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Literal(Value::Bool(true)),
+                FilterExpression::Literal(Value::String("yes".into())),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::String(
+                "no".into(),
+            )))),
+        });
+        assert_eq!(result, Some(Value::String("yes".into())));
+    }
+
+    #[test]
+    fn test_eval_case_falls_to_else() {
+        // CASE WHEN false THEN 'yes' ELSE 'no' END
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Literal(Value::Bool(false)),
+                FilterExpression::Literal(Value::String("yes".into())),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::String(
+                "no".into(),
+            )))),
+        });
+        assert_eq!(result, Some(Value::String("no".into())));
+    }
+
+    #[test]
+    fn test_eval_case_no_else_returns_null() {
+        // CASE WHEN false THEN 'yes' END (no ELSE, so NULL)
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Literal(Value::Bool(false)),
+                FilterExpression::Literal(Value::String("yes".into())),
+            )],
+            else_clause: None,
+        });
+        assert_eq!(result, Some(Value::Null));
+    }
+
+    #[test]
+    fn test_eval_nullif_via_case() {
+        // NULLIF(a, b) is equivalent to: CASE WHEN a = b THEN NULL ELSE a END
+        // Test NULLIF(5, 5) => NULL
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Binary {
+                    left: Box::new(FilterExpression::Literal(Value::Int64(5))),
+                    op: BinaryFilterOp::Eq,
+                    right: Box::new(FilterExpression::Literal(Value::Int64(5))),
+                },
+                FilterExpression::Literal(Value::Null),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::Int64(5)))),
+        });
+        assert_eq!(result, Some(Value::Null));
+
+        // NULLIF(5, 3) => 5
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: None,
+            when_clauses: vec![(
+                FilterExpression::Binary {
+                    left: Box::new(FilterExpression::Literal(Value::Int64(5))),
+                    op: BinaryFilterOp::Eq,
+                    right: Box::new(FilterExpression::Literal(Value::Int64(3))),
+                },
+                FilterExpression::Literal(Value::Null),
+            )],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::Int64(5)))),
+        });
+        assert_eq!(result, Some(Value::Int64(5)));
+    }
+
+    #[test]
+    fn test_eval_simple_case_with_operand() {
+        // CASE 2 WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE 'other' END
+        let result = eval_literal_expr(FilterExpression::Case {
+            operand: Some(Box::new(FilterExpression::Literal(Value::Int64(2)))),
+            when_clauses: vec![
+                (
+                    FilterExpression::Literal(Value::Int64(1)),
+                    FilterExpression::Literal(Value::String("one".into())),
+                ),
+                (
+                    FilterExpression::Literal(Value::Int64(2)),
+                    FilterExpression::Literal(Value::String("two".into())),
+                ),
+            ],
+            else_clause: Some(Box::new(FilterExpression::Literal(Value::String(
+                "other".into(),
+            )))),
+        });
+        assert_eq!(result, Some(Value::String("two".into())));
+    }
+
+    // === Unary Operators ===
+
+    #[test]
+    fn test_eval_unary_not() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Not,
+            FilterExpression::Literal(Value::Bool(true)),
+        ));
+        assert_eq!(result, Some(Value::Bool(false)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Not,
+            FilterExpression::Literal(Value::Bool(false)),
+        ));
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_unary_neg() {
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Neg,
+            FilterExpression::Literal(Value::Int64(42)),
+        ));
+        assert_eq!(result, Some(Value::Int64(-42)));
+
+        let result = eval_literal_expr(unary(
+            UnaryFilterOp::Neg,
+            FilterExpression::Literal(Value::Float64(7.25)),
+        ));
+        assert_eq!(result, Some(Value::Float64(-7.25)));
+    }
+
+    // === Reduce Expression Evaluation ===
+
+    #[test]
+    fn test_eval_reduce_sum() {
+        // reduce(acc = 0, x IN [1, 2, 3] | acc + x) = 6
+        let result = eval_literal_expr(FilterExpression::Reduce {
+            accumulator: "acc".to_string(),
+            initial: Box::new(FilterExpression::Literal(Value::Int64(0))),
+            variable: "x".to_string(),
+            list: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            expression: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("acc".to_string())),
+                op: BinaryFilterOp::Add,
+                right: Box::new(FilterExpression::Variable("x".to_string())),
+            }),
+        });
+        assert_eq!(result, Some(Value::Int64(6)));
+    }
+
+    #[test]
+    fn test_eval_reduce_product() {
+        // reduce(acc = 1, x IN [2, 3, 4] | acc * x) = 24
+        let result = eval_literal_expr(FilterExpression::Reduce {
+            accumulator: "acc".to_string(),
+            initial: Box::new(FilterExpression::Literal(Value::Int64(1))),
+            variable: "x".to_string(),
+            list: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+                FilterExpression::Literal(Value::Int64(4)),
+            ])),
+            expression: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("acc".to_string())),
+                op: BinaryFilterOp::Mul,
+                right: Box::new(FilterExpression::Variable("x".to_string())),
+            }),
+        });
+        assert_eq!(result, Some(Value::Int64(24)));
+    }
+
+    // === List Comprehension ===
+
+    #[test]
+    fn test_eval_list_comprehension_with_filter() {
+        // [x IN [1, 2, 3, 4, 5] WHERE x > 2 | x * 10]
+        // Should produce [30, 40, 50]
+        let result = eval_literal_expr(FilterExpression::ListComprehension {
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+                FilterExpression::Literal(Value::Int64(4)),
+                FilterExpression::Literal(Value::Int64(5)),
+            ])),
+            filter_expr: Some(Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(2))),
+            })),
+            map_expr: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Mul,
+                right: Box::new(FilterExpression::Literal(Value::Int64(10))),
+            }),
+        });
+
+        if let Some(Value::List(items)) = result {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Value::Int64(30));
+            assert_eq!(items[1], Value::Int64(40));
+            assert_eq!(items[2], Value::Int64(50));
+        } else {
+            panic!("Expected List, got {:?}", result);
+        }
+    }
+
+    // === List Predicate (any/all/none/single) ===
+
+    #[test]
+    fn test_eval_list_predicate_any() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::Any,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(5)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(4))),
+            }),
+        });
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_list_predicate_all() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::All,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(10)),
+                FilterExpression::Literal(Value::Int64(20)),
+                FilterExpression::Literal(Value::Int64(30)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(5))),
+            }),
+        });
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_list_predicate_none() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::None,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(2)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(10))),
+            }),
+        });
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_eval_list_predicate_single() {
+        let result = eval_literal_expr(FilterExpression::ListPredicate {
+            kind: ListPredicateKind::Single,
+            variable: "x".to_string(),
+            list_expr: Box::new(FilterExpression::List(vec![
+                FilterExpression::Literal(Value::Int64(1)),
+                FilterExpression::Literal(Value::Int64(5)),
+                FilterExpression::Literal(Value::Int64(3)),
+            ])),
+            predicate: Box::new(FilterExpression::Binary {
+                left: Box::new(FilterExpression::Variable("x".to_string())),
+                op: BinaryFilterOp::Gt,
+                right: Box::new(FilterExpression::Literal(Value::Int64(4))),
+            }),
+        });
+        // Only x=5 satisfies x > 4, so exactly one
+        assert_eq!(result, Some(Value::Bool(true)));
+    }
+
+    // === Map key access via index ===
+
+    #[test]
+    fn test_eval_map_key_access() {
+        // {name: 'Alice'}['name'] = 'Alice'
+        let result = eval_literal_expr(FilterExpression::IndexAccess {
+            base: Box::new(FilterExpression::Map(vec![(
+                "name".to_string(),
+                FilterExpression::Literal(Value::String("Alice".into())),
+            )])),
+            index: Box::new(FilterExpression::Literal(Value::String("name".into()))),
+        });
+        assert_eq!(result, Some(Value::String("Alice".into())));
     }
 }
