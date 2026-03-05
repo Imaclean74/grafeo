@@ -12,6 +12,7 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ### Changed
 
+- **Arena allocator error handling**: `Arena` and `ArenaAllocator` methods now return `Result<T, AllocError>` instead of panicking on allocation failure (OOM, insufficient space, invalid epoch)
 - **Planner consolidation**: extracted shared planning logic (limit, skip, distinct, union, except, intersect, join, apply, etc.) into `planner/common.rs`, eliminating duplication between LPG and RDF planners
 - **Translator consolidation**: extracted 6 plan-builder functions (`wrap_filter`, `wrap_sort`, `wrap_skip`, `wrap_limit`, `wrap_distinct`, `wrap_return`) into `translator_common.rs`, replacing 100+ repeated operator constructions across all 7 translators
 

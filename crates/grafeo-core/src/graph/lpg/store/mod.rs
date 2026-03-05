@@ -346,7 +346,7 @@ impl LpgStore {
             #[cfg(not(feature = "tiered-storage"))]
             edges: RwLock::new(FxHashMap::default()),
             #[cfg(feature = "tiered-storage")]
-            arena_allocator: Arc::new(ArenaAllocator::new()),
+            arena_allocator: Arc::new(ArenaAllocator::new().expect("failed to allocate arena")),
             #[cfg(feature = "tiered-storage")]
             node_versions: RwLock::new(FxHashMap::default()),
             #[cfg(feature = "tiered-storage")]
