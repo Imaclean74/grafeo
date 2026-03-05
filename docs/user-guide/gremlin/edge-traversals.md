@@ -124,13 +124,13 @@ db = grafeo.GrafeoDB()
 # Create a social graph
 db.execute("INSERT (:Person {name: 'Alix', age: 30})")
 db.execute("INSERT (:Person {name: 'Gus', age: 25})")
-db.execute("INSERT (:Person {name: 'Charlie', age: 35})")
+db.execute("INSERT (:Person {name: 'Vincent', age: 35})")
 db.execute("""
     MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'})
     INSERT (a)-[:KNOWS {since: 2020}]->(b)
 """)
 db.execute("""
-    MATCH (b:Person {name: 'Gus'}), (c:Person {name: 'Charlie'})
+    MATCH (b:Person {name: 'Gus'}), (c:Person {name: 'Vincent'})
     INSERT (b)-[:KNOWS {since: 2021}]->(c)
 """)
 
@@ -144,7 +144,7 @@ fof = db.execute_gremlin(
     "g.V().has('name', 'Alix').out('KNOWS').out('KNOWS').values('name')"
 )
 for row in fof:
-    print(row)  # Charlie
+    print(row)  # Vincent
 ```
 
 ## Step Reference

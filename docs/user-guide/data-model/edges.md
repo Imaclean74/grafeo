@@ -47,7 +47,7 @@ Edge types categorize relationships:
 ```sql
 -- Different relationship types
 INSERT (alix)-[:KNOWS]->(gus)
-INSERT (alix)-[:WORKS_WITH]->(carol)
+INSERT (alix)-[:WORKS_WITH]->(harm)
 INSERT (alix)-[:MANAGES]->(dave)
 
 -- Query specific types

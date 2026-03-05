@@ -21,7 +21,7 @@ INSERT (:Person {name: 'Alix'})
 INSERT (:Person {name: 'Gus'})
 
 -- Create with multiple labels
-INSERT (:Person:Employee {name: 'Carol'})
+INSERT (:Person:Employee {name: 'Harm'})
 ```
 
 ## Creating Edges

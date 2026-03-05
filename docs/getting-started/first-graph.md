@@ -52,7 +52,7 @@ A social network with:
             location: 'San Francisco'
         })
         INSERT (:Person {
-            name: 'Carol',
+            name: 'Harm',
             age: 35,
             location: 'New York'
         })
@@ -81,7 +81,7 @@ A social network with:
             location: 'San Francisco'
         })
         INSERT (:Person {
-            name: 'Carol',
+            name: 'Harm',
             age: 35,
             location: 'New York'
         })
@@ -98,14 +98,14 @@ A social network with:
 === "Python"
 
     ```python
-    # Alix knows Gus and Carol
+    # Alix knows Gus and Harm
     db.execute("""
         MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'})
         INSERT (a)-[:FRIENDS_WITH {since: 2020}]->(b)
     """)
 
     db.execute("""
-        MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Carol'})
+        MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Harm'})
         INSERT (a)-[:FRIENDS_WITH {since: 2019}]->(c)
     """)
 
@@ -115,9 +115,9 @@ A social network with:
         INSERT (b)-[:FRIENDS_WITH {since: 2021}]->(d)
     """)
 
-    # Carol knows Dave
+    # Harm knows Dave
     db.execute("""
-        MATCH (c:Person {name: 'Carol'}), (d:Person {name: 'Dave'})
+        MATCH (c:Person {name: 'Harm'}), (d:Person {name: 'Dave'})
         INSERT (c)-[:FRIENDS_WITH {since: 2022}]->(d)
     """)
     ```
@@ -133,7 +133,7 @@ A social network with:
     "#)?;
 
     session.execute(r#"
-        MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Carol'})
+        MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Harm'})
         INSERT (a)-[:FRIENDS_WITH {since: 2019}]->(c)
     "#)?;
 
@@ -143,7 +143,7 @@ A social network with:
     "#)?;
 
     session.execute(r#"
-        MATCH (c:Person {name: 'Carol'}), (d:Person {name: 'Dave'})
+        MATCH (c:Person {name: 'Harm'}), (d:Person {name: 'Dave'})
         INSERT (c)-[:FRIENDS_WITH {since: 2022}]->(d)
     "#)?;
     ```
@@ -183,7 +183,7 @@ A social network with:
     """)
 
     db.execute("""
-        MATCH (c:Person {name: 'Carol'}), (p:Post {id: 3})
+        MATCH (c:Person {name: 'Harm'}), (p:Post {id: 3})
         INSERT (c)-[:POSTED]->(p)
     """)
     ```
@@ -199,9 +199,9 @@ A social network with:
         INSERT (b)-[:LIKES]->(p)
     """)
 
-    # Carol likes Alix's and Gus's posts
+    # Harm likes Alix's and Gus's posts
     db.execute("""
-        MATCH (c:Person {name: 'Carol'}), (p:Post)
+        MATCH (c:Person {name: 'Harm'}), (p:Post)
         WHERE p.id IN [1, 2]
         INSERT (c)-[:LIKES]->(p)
     """)
@@ -302,17 +302,17 @@ Here is a visualization of the completed graph:
 ```mermaid
 graph LR
     Alix((Alix)) -->|FRIENDS_WITH| Gus((Gus))
-    Alix -->|FRIENDS_WITH| Carol((Carol))
+    Alix -->|FRIENDS_WITH| Harm((Harm))
     Gus -->|FRIENDS_WITH| Dave((Dave))
-    Carol -->|FRIENDS_WITH| Dave
+    Harm -->|FRIENDS_WITH| Dave
 
     Alix -->|POSTED| P1[Post 1]
     Gus -->|POSTED| P2[Post 2]
-    Carol -->|POSTED| P3[Post 3]
+    Harm -->|POSTED| P3[Post 3]
 
     Gus -->|LIKES| P1
-    Carol -->|LIKES| P1
-    Carol -->|LIKES| P2
+    Harm -->|LIKES| P1
+    Harm -->|LIKES| P2
     Dave -->|LIKES| P1
     Dave -->|LIKES| P2
     Dave -->|LIKES| P3

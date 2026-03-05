@@ -87,7 +87,7 @@ Ordered collections of values. Lists can contain mixed types.
 ```sql
 -- List literal
 RETURN [1, 2, 3]
-RETURN ['Alix', 'Gus', 'Carol']
+RETURN ['Alix', 'Gus', 'Harm']
 RETURN [1, 'mixed', true, null]
 
 -- Index access (0-based)

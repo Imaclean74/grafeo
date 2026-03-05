@@ -29,7 +29,7 @@ db = GrafeoDB()
 people = {}
 for name, age, city in [
     ("Alix", 30, "Utrecht"), ("Gus", 35, "Portland"),
-    ("Carol", 28, "Utrecht"), ("Dave", 40, "San Francisco"),
+    ("Harm", 28, "Utrecht"), ("Dave", 40, "San Francisco"),
     ("Eve", 32, "Portland"), ("Frank", 45, "Utrecht"),
     ("Grace", 29, "Portland"), ("Henry", 38, "San Francisco"),
 ]:
@@ -37,8 +37,8 @@ for name, age, city in [
     people[name] = node
 
 connections = [
-    ("Alix", "Gus"), ("Alix", "Carol"), ("Gus", "Carol"), ("Gus", "Dave"),
-    ("Carol", "Eve"), ("Dave", "Eve"), ("Dave", "Frank"), ("Eve", "Grace"),
+    ("Alix", "Gus"), ("Alix", "Harm"), ("Gus", "Harm"), ("Gus", "Dave"),
+    ("Harm", "Eve"), ("Dave", "Eve"), ("Dave", "Frank"), ("Eve", "Grace"),
     ("Frank", "Grace"), ("Frank", "Henry"), ("Grace", "Henry"),
 ]
 

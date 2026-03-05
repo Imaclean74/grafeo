@@ -48,8 +48,8 @@ db.execute("""
     })
     INSERT (:User {
         id: 3,
-        name: 'Carol',
-        email: 'carol@example.com',
+        name: 'Harm',
+        email: 'harm@example.com',
         joined: '2023-03-10'
     })
     INSERT (:User {
@@ -71,9 +71,9 @@ db.execute("""
     INSERT (b)-[:FRIENDS_WITH {since: '2023-03-01'}]->(a)
 """)
 
-# Alix and Carol are friends
+# Alix and Harm are friends
 db.execute("""
-    MATCH (a:User {name: 'Alix'}), (c:User {name: 'Carol'})
+    MATCH (a:User {name: 'Alix'}), (c:User {name: 'Harm'})
     INSERT (a)-[:FRIENDS_WITH {since: '2023-04-15'}]->(c)
     INSERT (c)-[:FRIENDS_WITH {since: '2023-04-15'}]->(a)
 """)
@@ -117,7 +117,7 @@ db.execute("""
     INSERT (u)-[:POSTED]->(p)
 """)
 db.execute("""
-    MATCH (u:User {name: 'Carol'}), (p:Post {id: 3})
+    MATCH (u:User {name: 'Harm'}), (p:Post {id: 3})
     INSERT (u)-[:POSTED]->(p)
 """)
 ```
@@ -131,13 +131,13 @@ db.execute("""
     INSERT (u)-[:LIKES {at: '2023-03-16'}]->(p)
 """)
 
-# Carol likes Alix's and Gus's posts
+# Harm likes Alix's and Gus's posts
 db.execute("""
-    MATCH (u:User {name: 'Carol'}), (p:Post {id: 1})
+    MATCH (u:User {name: 'Harm'}), (p:Post {id: 1})
     INSERT (u)-[:LIKES {at: '2023-03-17'}]->(p)
 """)
 db.execute("""
-    MATCH (u:User {name: 'Carol'}), (p:Post {id: 2})
+    MATCH (u:User {name: 'Harm'}), (p:Post {id: 2})
     INSERT (u)-[:LIKES {at: '2023-04-02'}]->(p)
 """)
 

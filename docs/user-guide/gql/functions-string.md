@@ -111,8 +111,8 @@ RETURN normalize('café')   -- 'café'
 Join a list of strings with a separator:
 
 ```sql
-RETURN string_join(['Alix', 'Gus', 'Carol'], ', ')
--- 'Alix, Gus, Carol'
+RETURN string_join(['Alix', 'Gus', 'Harm'], ', ')
+-- 'Alix, Gus, Harm'
 
 -- Practical: collect names and join
 MATCH (p:Person)-[:WORKS_AT]->(c:Company)

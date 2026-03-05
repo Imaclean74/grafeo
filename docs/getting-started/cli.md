@@ -111,7 +111,7 @@ grafeo> MATCH (n:Person) RETURN n.name, n.age
 
 grafeo> :begin
 Transaction started.
-grafeo[tx]> INSERT (:Person {name: 'Carol', age: 45})
+grafeo[tx]> INSERT (:Person {name: 'Harm', age: 45})
 grafeo[tx]> :commit
 Transaction committed.
 ```

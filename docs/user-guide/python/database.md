@@ -68,7 +68,7 @@ with db.begin_transaction() as tx:
 
 # Rollback on error
 with db.begin_transaction() as tx:
-    tx.execute("INSERT (:Person {name: 'Charlie'})")
+    tx.execute("INSERT (:Person {name: 'Vincent'})")
     tx.rollback()  # Changes discarded
 ```
 

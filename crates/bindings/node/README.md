@@ -81,7 +81,7 @@ db.deleteEdge(id);  // returns boolean
 ```typescript
 const tx = db.beginTransaction();
 try {
-  await tx.execute("INSERT (:Person {name: 'Carol'})");
+  await tx.execute("INSERT (:Person {name: 'Harm'})");
   tx.commit();
 } catch (e) {
   tx.rollback();
@@ -89,7 +89,7 @@ try {
 
 // Node.js 22+ with explicit resource management:
 using tx = db.beginTransaction();
-await tx.execute("INSERT (:Person {name: 'Carol'})");
+await tx.execute("INSERT (:Person {name: 'Harm'})");
 tx.commit(); // auto-rollback if not committed
 ```
 

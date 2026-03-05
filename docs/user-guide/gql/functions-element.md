@@ -75,7 +75,7 @@ WHERE a.name = 'Alix' AND b.name = 'Dave'
 RETURN length(path)       -- e.g., 3
 
 -- List of nodes in the path
-RETURN nodes(path)        -- [Alix, Gus, Carol, Dave]
+RETURN nodes(path)        -- [Alix, Gus, Harm, Dave]
 
 -- List of edges in the path
 RETURN edges(path)

@@ -76,7 +76,7 @@ db.delete_edge(edge_id)
 ```python
 # Context manager (auto-rollback on exception)
 with db.begin_transaction() as tx:
-    tx.execute("INSERT (:Person {name: 'Carol'})")
+    tx.execute("INSERT (:Person {name: 'Harm'})")
     tx.commit()
 
 # With isolation levels

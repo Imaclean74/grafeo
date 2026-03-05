@@ -91,7 +91,7 @@ db.DeleteEdge(eid)
 
 ```go
 tx, err := db.BeginTransaction()
-result, err := tx.Execute("INSERT (:Person {name: 'Carol'})")
+result, err := tx.Execute("INSERT (:Person {name: 'Harm'})")
 err = tx.Commit()   // or tx.Rollback()
 ```
 

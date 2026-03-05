@@ -185,7 +185,7 @@ RETURN reduce(acc = 0, x IN [1, 2, 3, 4, 5] | acc + x) AS total
 -- 15
 
 -- Build a string
-RETURN reduce(s = '', name IN ['Alix', 'Gus', 'Carol'] | s + name + ', ') AS names
+RETURN reduce(s = '', name IN ['Alix', 'Gus', 'Harm'] | s + name + ', ') AS names
 
 -- Compute from graph data
 MATCH (p:Person)

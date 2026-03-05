@@ -75,7 +75,7 @@ db.deleteEdge(id);  // returns boolean
 ```typescript
 const tx = db.beginTransaction();
 try {
-  await tx.execute("INSERT (:Person {name: 'Carol'})");
+  await tx.execute("INSERT (:Person {name: 'Harm'})");
   tx.commit();
 } catch (e) {
   tx.rollback();

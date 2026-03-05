@@ -179,7 +179,7 @@ db = grafeo.GrafeoDB()
 # Create data
 db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'Utrecht'})")
 db.execute("INSERT (:Person {name: 'Gus', age: 25, city: 'Portland'})")
-db.execute("INSERT (:Person {name: 'Charlie', age: 35, city: 'Utrecht'})")
+db.execute("INSERT (:Person {name: 'Vincent', age: 35, city: 'Utrecht'})")
 
 # Count
 result = db.execute_gremlin("g.V().hasLabel('Person').count()")
@@ -199,7 +199,7 @@ for row in result:
 # Collect names
 result = db.execute_gremlin("g.V().hasLabel('Person').values('name').fold()")
 for row in result:
-    print(row)  # ['Alix', 'Gus', 'Charlie']
+    print(row)  # ['Alix', 'Gus', 'Vincent']
 ```
 
 ## Aggregation Reference

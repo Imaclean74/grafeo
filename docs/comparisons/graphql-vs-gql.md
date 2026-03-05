@@ -211,7 +211,7 @@ db.execute("""
 # Or create with GraphQL mutations
 db.execute_graphql('''
 mutation {
-  createPerson(name: "Charlie", age: 35) {
+  createPerson(name: "Vincent", age: 35) {
     id
     name
   }

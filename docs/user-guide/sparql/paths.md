@@ -203,7 +203,7 @@ PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 
 # Find if path exists (any length)
 ASK {
-    <http://example.org/alix> foaf:knows+ <http://example.org/charlie>
+    <http://example.org/alix> foaf:knows+ <http://example.org/vincent>
 }
 ```
 

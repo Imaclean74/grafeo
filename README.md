@@ -224,7 +224,7 @@ for row in result:
     print(row)
 
 # Or use the direct API
-node = db.create_node(["Person"], {"name": "Carol"})
+node = db.create_node(["Person"], {"name": "Harm"})
 print(f"Created node with ID: {node.id}")
 
 # Manage labels

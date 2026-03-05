@@ -107,7 +107,7 @@ grafeo_set_edge_property(db, id, key, value_json);
 ```c
 GrafeoTransaction *tx = NULL;
 grafeo_begin_tx(db, &tx);
-grafeo_tx_execute(tx, "INSERT (:Person {name: 'Carol'})", &result);
+grafeo_tx_execute(tx, "INSERT (:Person {name: 'Harm'})", &result);
 grafeo_commit(tx);   // or grafeo_rollback(tx)
 ```
 

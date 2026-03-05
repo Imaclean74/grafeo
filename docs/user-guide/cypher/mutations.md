@@ -22,7 +22,7 @@ CREATE (a:Person {name: 'Alix'})
 CREATE (b:Person {name: 'Gus'})
 
 -- Create with multiple labels
-CREATE (e:Person:Employee {name: 'Carol'})
+CREATE (e:Person:Employee {name: 'Harm'})
 ```
 
 ## Creating Relationships

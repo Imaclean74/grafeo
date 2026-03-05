@@ -83,7 +83,7 @@ with db.begin_transaction() as tx:
 
 # Rollback on error
 with db.begin_transaction() as tx:
-    tx.execute("INSERT (:Person {name: 'Carol'})")
+    tx.execute("INSERT (:Person {name: 'Harm'})")
     tx.rollback()  # Changes discarded
 
 # SPARQL transactions

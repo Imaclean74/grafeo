@@ -29,7 +29,7 @@ db = GrafeoDB()
 # Create people
 alix = db.create_node(["Person"], {"name": "Alix", "age": 30, "city": "Utrecht"})
 gus = db.create_node(["Person"], {"name": "Gus", "age": 35, "city": "Portland"})
-carol = db.create_node(["Person"], {"name": "Carol", "age": 28, "city": "Utrecht"})
+harm = db.create_node(["Person"], {"name": "Harm", "age": 28, "city": "Utrecht"})
 dave = db.create_node(["Person"], {"name": "Dave", "age": 40, "city": "San Francisco"})
 eve = db.create_node(["Person"], {"name": "Eve", "age": 32, "city": "Portland"})
 
@@ -39,16 +39,16 @@ globex = db.create_node(["Company"], {"name": "Globex Inc", "industry": "Finance
 
 # Friendships
 db.create_edge(alix.id, gus.id, "KNOWS", {"since": 2020})
-db.create_edge(alix.id, carol.id, "KNOWS", {"since": 2019})
-db.create_edge(gus.id, carol.id, "KNOWS", {"since": 2021})
+db.create_edge(alix.id, harm.id, "KNOWS", {"since": 2019})
+db.create_edge(gus.id, harm.id, "KNOWS", {"since": 2021})
 db.create_edge(gus.id, dave.id, "KNOWS", {"since": 2018})
-db.create_edge(carol.id, eve.id, "KNOWS", {"since": 2022})
+db.create_edge(harm.id, eve.id, "KNOWS", {"since": 2022})
 db.create_edge(dave.id, eve.id, "KNOWS", {"since": 2020})
 
 # Employment
 db.create_edge(alix.id, acme.id, "WORKS_AT", {"role": "Engineer"})
 db.create_edge(gus.id, acme.id, "WORKS_AT", {"role": "Manager"})
-db.create_edge(carol.id, globex.id, "WORKS_AT", {"role": "Analyst"})
+db.create_edge(harm.id, globex.id, "WORKS_AT", {"role": "Analyst"})
 db.create_edge(dave.id, globex.id, "WORKS_AT", {"role": "Director"})
 db.create_edge(eve.id, acme.id, "WORKS_AT", {"role": "Designer"})
 
@@ -129,7 +129,7 @@ for node_id, score in sorted_scores[:5]:
     print(f"{name}: {score:.4f}")
 ```
 
-Higher scores indicate more central nodes. In this network, people with many connections (like Gus and Carol) rank highest.
+Higher scores indicate more central nodes. In this network, people with many connections (like Gus and Harm) rank highest.
 
 ## Community Detection
 

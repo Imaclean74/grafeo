@@ -141,7 +141,7 @@ db = grafeo.GrafeoDB()
 # Create data
 db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'Utrecht'})")
 db.execute("INSERT (:Person {name: 'Gus', age: 25, city: 'Portland'})")
-db.execute("INSERT (:Person {name: 'Charlie', age: 35, city: 'Utrecht'})")
+db.execute("INSERT (:Person {name: 'Vincent', age: 35, city: 'Utrecht'})")
 
 # Where clause with operators
 result = db.execute_graphql("""
@@ -153,7 +153,7 @@ result = db.execute_graphql("""
 }
 """)
 for row in result:
-    print(row)  # Alix (30), Charlie (35)
+    print(row)  # Alix (30), Vincent (35)
 
 # String filtering
 result = db.execute_graphql("""

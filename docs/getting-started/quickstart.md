@@ -44,7 +44,7 @@ Use GQL to insert nodes and edges:
     db.execute("""
         INSERT (:Person {name: 'Alix', age: 30})
         INSERT (:Person {name: 'Gus', age: 25})
-        INSERT (:Person {name: 'Carol', age: 35})
+        INSERT (:Person {name: 'Harm', age: 35})
     """)
 
     # Create edges
@@ -54,7 +54,7 @@ Use GQL to insert nodes and edges:
     """)
 
     db.execute("""
-        MATCH (b:Person {name: 'Gus'}), (c:Person {name: 'Carol'})
+        MATCH (b:Person {name: 'Gus'}), (c:Person {name: 'Harm'})
         INSERT (b)-[:KNOWS {since: 2022}]->(c)
     """)
     ```
@@ -68,7 +68,7 @@ Use GQL to insert nodes and edges:
     session.execute(r#"
         INSERT (:Person {name: 'Alix', age: 30})
         INSERT (:Person {name: 'Gus', age: 25})
-        INSERT (:Person {name: 'Carol', age: 35})
+        INSERT (:Person {name: 'Harm', age: 35})
     "#)?;
 
     // Create edges
@@ -78,7 +78,7 @@ Use GQL to insert nodes and edges:
     "#)?;
 
     session.execute(r#"
-        MATCH (b:Person {name: 'Gus'}), (c:Person {name: 'Carol'})
+        MATCH (b:Person {name: 'Gus'}), (c:Person {name: 'Harm'})
         INSERT (b)-[:KNOWS {since: 2022}]->(c)
     "#)?;
     ```
@@ -193,7 +193,7 @@ Remove nodes and edges:
 
     # Delete a node (must delete connected edges first)
     db.execute("""
-        MATCH (p:Person {name: 'Carol'})
+        MATCH (p:Person {name: 'Harm'})
         DETACH DELETE p
     """)
     ```
@@ -205,7 +205,7 @@ Remove nodes and edges:
 
     // Delete a node and its edges
     session.execute(r#"
-        MATCH (p:Person {name: 'Carol'})
+        MATCH (p:Person {name: 'Harm'})
         DETACH DELETE p
     "#)?;
     ```

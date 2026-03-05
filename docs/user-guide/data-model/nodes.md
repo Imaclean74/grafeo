@@ -20,7 +20,7 @@ INSERT (:Person {name: 'Alix', age: 30})
 INSERT (:Person:Employee {name: 'Gus', department: 'Engineering'})
 
 -- Create multiple nodes
-INSERT (:Person {name: 'Carol'})
+INSERT (:Person {name: 'Harm'})
 INSERT (:Person {name: 'Dave'})
 ```
 

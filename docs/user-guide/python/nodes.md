@@ -21,7 +21,7 @@ db.execute("""
 # Create multiple nodes
 db.execute("""
     INSERT (:Person {name: 'Gus', age: 25})
-    INSERT (:Person {name: 'Carol', age: 35})
+    INSERT (:Person {name: 'Harm', age: 35})
 """)
 
 # Create with multiple labels

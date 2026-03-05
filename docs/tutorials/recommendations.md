@@ -45,7 +45,7 @@ db.execute("""
 db.execute("""
     INSERT (:User {id: 'U1', name: 'Alix'})
     INSERT (:User {id: 'U2', name: 'Gus'})
-    INSERT (:User {id: 'U3', name: 'Carol'})
+    INSERT (:User {id: 'U3', name: 'Harm'})
     INSERT (:User {id: 'U4', name: 'Dave'})
     INSERT (:User {id: 'U5', name: 'Eve'})
 """)
@@ -82,7 +82,7 @@ db.execute("""
     INSERT (u)-[:PURCHASED]->(p)
 """)
 
-# Carol bought Laptop, Monitor, USB Hub
+# Harm bought Laptop, Monitor, USB Hub
 db.execute("""
     MATCH (u:User {id: 'U3'}), (p:Product {id: 'P1'})
     INSERT (u)-[:PURCHASED]->(p)
