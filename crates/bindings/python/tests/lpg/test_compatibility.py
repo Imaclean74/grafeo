@@ -5,7 +5,6 @@ Verifies that GQL, Cypher, Gremlin, and GraphQL return consistent results.
 
 import pytest
 
-
 # Try to import grafeo
 try:
     from grafeo import GrafeoDB
@@ -15,9 +14,7 @@ except ImportError:
     GRAFEO_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 class TestCrossLanguageConsistency:
@@ -67,9 +64,7 @@ class TestCrossLanguageConsistency:
         # Gremlin (if available)
         if self._has_gremlin():
             try:
-                gremlin_result = self.db.execute_gremlin(
-                    "g.V().hasLabel('Person').count()"
-                )
+                gremlin_result = self.db.execute_gremlin("g.V().hasLabel('Person').count()")
                 gremlin_rows = list(gremlin_result)
                 if len(gremlin_rows) > 0:
                     # Gremlin count format may vary
@@ -91,9 +86,7 @@ class TestCrossLanguageConsistency:
     def test_relationship_match_consistency(self):
         """All languages should return same relationship results."""
         # GQL/Cypher
-        result = self.db.execute(
-            "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name"
-        )
+        result = self.db.execute("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
         rows = list(result)
         assert len(rows) == 2  # Alix->Gus, Gus->Charlie
 
@@ -158,9 +151,7 @@ class TestQuerySyntaxEquivalence:
     def test_directed_vs_undirected(self):
         """Directed queries should be subset of undirected."""
         # Directed: only outgoing edges
-        result_directed = self.db.execute(
-            "MATCH (a:Node)-[:LINK]->(b:Node) RETURN count(a) AS cnt"
-        )
+        result_directed = self.db.execute("MATCH (a:Node)-[:LINK]->(b:Node) RETURN count(a) AS cnt")
         directed_count = list(result_directed)[0]["cnt"]
 
         # Undirected: both directions

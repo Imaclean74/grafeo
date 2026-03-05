@@ -6,6 +6,7 @@ Supports equality, range (age_gt/age_lt suffixes), string, and compound filters.
 """
 
 import pytest
+
 from tests.bases.test_filters import BaseFilterAndLookupTest
 
 
@@ -25,7 +26,7 @@ class TestGraphQLFilters(BaseFilterAndLookupTest):
 
     def create_person_nodes(self, db, count: int = 1000) -> list:
         """Create Person nodes using direct API (faster than queries)."""
-        cities = ["NYC", "LA", "Chicago", "Boston", "Seattle"]
+        cities = ["NYC", "LA", "Chicago", "Boston", "Utrecht"]
         node_ids = []
 
         for i in range(count):

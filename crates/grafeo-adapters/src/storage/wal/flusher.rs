@@ -216,7 +216,7 @@ mod tests {
         let wal = Arc::new(WalManager::open(dir.path()).unwrap());
 
         // Start flusher with 50ms target
-        let mut flusher = AdaptiveFlusher::new(Arc::clone(&wal), 50);
+        let mut flusher = AdaptiveFlusher::new(Arc::clone(&wal), 50).unwrap();
 
         // Let it run for a bit (500ms gives plenty of margin for CI)
         thread::sleep(Duration::from_millis(500));
@@ -237,7 +237,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let wal = Arc::new(WalManager::open(dir.path()).unwrap());
 
-        let mut flusher = AdaptiveFlusher::new(Arc::clone(&wal), 100);
+        let mut flusher = AdaptiveFlusher::new(Arc::clone(&wal), 100).unwrap();
 
         // Immediate shutdown should work
         let stats = flusher.shutdown().unwrap();
@@ -249,7 +249,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let wal = Arc::new(WalManager::open(dir.path()).unwrap());
 
-        let flusher = AdaptiveFlusher::new(Arc::clone(&wal), 75);
+        let flusher = AdaptiveFlusher::new(Arc::clone(&wal), 75).unwrap();
         assert_eq!(flusher.target_interval(), Duration::from_millis(75));
     }
 
@@ -272,7 +272,7 @@ mod tests {
 
         // Create flusher and let it drop naturally
         {
-            let _flusher = AdaptiveFlusher::new(Arc::clone(&wal), 50);
+            let _flusher = AdaptiveFlusher::new(Arc::clone(&wal), 50).unwrap();
             thread::sleep(Duration::from_millis(100));
             // Drop should trigger shutdown
         }

@@ -12,6 +12,7 @@ Tests cover:
 """
 
 from abc import ABC, abstractmethod
+
 import pytest
 
 # Try to import networkx
@@ -85,22 +86,20 @@ class BaseNetworkXComparisonTest(ABC):
         """Run degree centrality and return {node: centrality} dict."""
         raise NotImplementedError
 
-    def _build_networkx_graph(
-        self, edges: list, directed: bool = True, weighted: bool = True
-    ):
+    def _build_networkx_graph(self, edges: list, directed: bool = True, weighted: bool = True):
         """Build a NetworkX graph from edge list."""
         if directed:
-            G = nx.DiGraph()
+            graph = nx.DiGraph()
         else:
-            G = nx.Graph()
+            graph = nx.Graph()
 
         for src, dst, weight in edges:
             if weighted:
-                G.add_edge(src, dst, weight=weight)
+                graph.add_edge(src, dst, weight=weight)
             else:
-                G.add_edge(src, dst)
+                graph.add_edge(src, dst)
 
-        return G
+        return graph
 
     # ===== Comparison Tests =====
 
@@ -116,8 +115,8 @@ class BaseNetworkXComparisonTest(ABC):
         grafeo_visited = self.run_bfs(db, start_node)
 
         # NetworkX BFS
-        G = self._build_networkx_graph(edges, directed=True, weighted=False)
-        nx_visited = set(nx.bfs_tree(G, start_node).nodes())
+        graph = self._build_networkx_graph(edges, directed=True, weighted=False)
+        nx_visited = set(nx.bfs_tree(graph, start_node).nodes())
 
         assert grafeo_visited == nx_visited, (
             f"BFS reachability mismatch: Grafeo found {len(grafeo_visited)} nodes, "
@@ -136,8 +135,8 @@ class BaseNetworkXComparisonTest(ABC):
         grafeo_visited = self.run_dfs(db, start_node)
 
         # NetworkX DFS
-        G = self._build_networkx_graph(edges, directed=True, weighted=False)
-        nx_visited = set(nx.dfs_tree(G, start_node).nodes())
+        graph = self._build_networkx_graph(edges, directed=True, weighted=False)
+        nx_visited = set(nx.dfs_tree(graph, start_node).nodes())
 
         assert grafeo_visited == nx_visited, (
             f"DFS reachability mismatch: Grafeo found {len(grafeo_visited)} nodes, "
@@ -156,8 +155,8 @@ class BaseNetworkXComparisonTest(ABC):
         grafeo_distances = self.run_dijkstra(db, source)
 
         # NetworkX Dijkstra
-        G = self._build_networkx_graph(edges, directed=True, weighted=True)
-        nx_distances = nx.single_source_dijkstra_path_length(G, source, weight="weight")
+        graph = self._build_networkx_graph(edges, directed=True, weighted=True)
+        nx_distances = nx.single_source_dijkstra_path_length(graph, source, weight="weight")
 
         # Compare distances for nodes reachable by both
         common_nodes = set(grafeo_distances.keys()) & set(nx_distances.keys())
@@ -167,8 +166,7 @@ class BaseNetworkXComparisonTest(ABC):
             grafeo_dist = grafeo_distances[node]
             nx_dist = nx_distances[node]
             assert abs(grafeo_dist - nx_dist) < 1e-6, (
-                f"Distance mismatch for node {node}: "
-                f"Grafeo={grafeo_dist}, NetworkX={nx_dist}"
+                f"Distance mismatch for node {node}: Grafeo={grafeo_dist}, NetworkX={nx_dist}"
             )
 
     @pytest.mark.skipif(not NETWORKX_AVAILABLE, reason="NetworkX not installed")
@@ -181,16 +179,15 @@ class BaseNetworkXComparisonTest(ABC):
         grafeo_count = self.run_connected_components(db)
 
         # NetworkX connected components (undirected)
-        G = self._build_networkx_graph(edges, directed=False, weighted=False)
+        graph = self._build_networkx_graph(edges, directed=False, weighted=False)
         # Add isolated nodes
         for node_id in graph_info["node_ids"]:
-            if node_id not in G:
-                G.add_node(node_id)
-        nx_count = nx.number_connected_components(G)
+            if node_id not in graph:
+                graph.add_node(node_id)
+        nx_count = nx.number_connected_components(graph)
 
         assert grafeo_count == nx_count, (
-            f"Connected component count mismatch: "
-            f"Grafeo={grafeo_count}, NetworkX={nx_count}"
+            f"Connected component count mismatch: Grafeo={grafeo_count}, NetworkX={nx_count}"
         )
 
     @pytest.mark.skipif(not NETWORKX_AVAILABLE, reason="NetworkX not installed")
@@ -203,8 +200,8 @@ class BaseNetworkXComparisonTest(ABC):
         grafeo_pr = self.run_pagerank(db)
 
         # NetworkX PageRank
-        G = self._build_networkx_graph(edges, directed=True, weighted=False)
-        nx_pr = nx.pagerank(G, alpha=0.85)
+        graph = self._build_networkx_graph(edges, directed=True, weighted=False)
+        nx_pr = nx.pagerank(graph, alpha=0.85)
 
         # Compare top-5 ranking
         grafeo_top5 = sorted(grafeo_pr.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -241,8 +238,8 @@ class BaseNetworkXComparisonTest(ABC):
         grafeo_dc = self.run_degree_centrality(db)
 
         # NetworkX degree centrality
-        G = self._build_networkx_graph(edges, directed=True, weighted=False)
-        nx_dc = nx.degree_centrality(G)
+        graph = self._build_networkx_graph(edges, directed=True, weighted=False)
+        nx_dc = nx.degree_centrality(graph)
 
         # Compare values for common nodes
         common_nodes = set(grafeo_dc.keys()) & set(nx_dc.keys())
@@ -302,12 +299,12 @@ class BaseNetworkXBenchmarkTest(ABC):
         grafeo_time = self.run_grafeo_pagerank(db)
 
         # NetworkX timing
-        G = nx.DiGraph()
+        graph = nx.DiGraph()
         for src, dst, _ in edges:
-            G.add_edge(src, dst)
+            graph.add_edge(src, dst)
 
         start = time.perf_counter()
-        nx.pagerank(G, alpha=0.85)
+        nx.pagerank(graph, alpha=0.85)
         nx_time = (time.perf_counter() - start) * 1000
 
         print("\nPageRank (1000 nodes, 5000 edges):")
@@ -333,12 +330,12 @@ class BaseNetworkXBenchmarkTest(ABC):
         grafeo_time = self.run_grafeo_dijkstra(db, source)
 
         # NetworkX timing
-        G = nx.DiGraph()
+        graph = nx.DiGraph()
         for src, dst, weight in edges:
-            G.add_edge(src, dst, weight=weight)
+            graph.add_edge(src, dst, weight=weight)
 
         start = time.perf_counter()
-        nx.single_source_dijkstra_path_length(G, source, weight="weight")
+        nx.single_source_dijkstra_path_length(graph, source, weight="weight")
         nx_time = (time.perf_counter() - start) * 1000
 
         print("\nDijkstra (1000 nodes, 5000 edges):")
@@ -364,12 +361,12 @@ class BaseNetworkXBenchmarkTest(ABC):
         grafeo_time = self.run_grafeo_bfs(db, start_node)
 
         # NetworkX timing
-        G = nx.DiGraph()
+        graph = nx.DiGraph()
         for src, dst, _ in edges:
-            G.add_edge(src, dst)
+            graph.add_edge(src, dst)
 
         start = time.perf_counter()
-        list(nx.bfs_tree(G, start_node).nodes())
+        list(nx.bfs_tree(graph, start_node).nodes())
         nx_time = (time.perf_counter() - start) * 1000
 
         print("\nBFS (1000 nodes, 5000 edges):")

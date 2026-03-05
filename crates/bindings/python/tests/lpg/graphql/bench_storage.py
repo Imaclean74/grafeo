@@ -4,7 +4,9 @@ Benchmarks storage operations using GraphQL syntax.
 """
 
 import random
+
 import pytest
+
 from tests.bases.bench_storage import BaseBenchStorage
 
 
@@ -56,9 +58,7 @@ class BenchGraphQLStorage(BaseBenchStorage):
         """GraphQL filter query."""
         val = f'"{value}"' if isinstance(value, str) else value
         # GraphQL uses comparison operators via arguments
-        op_name = {"=": "eq", ">": "gt", "<": "lt", ">=": "gte", "<=": "lte"}.get(
-            op, "eq"
-        )
+        op_name = {"=": "eq", ">": "gt", "<": "lt", ">=": "gte", "<=": "lte"}.get(op, "eq")
         return f"""
             query {{
                 {label.lower()}(filter: {{ {prop}: {{ {op_name}: {val} }} }}) {{
@@ -120,9 +120,7 @@ class BenchGraphQLStorage(BaseBenchStorage):
             }}
         """
 
-    def sort_query(
-        self, label: str, sort_prop: str, desc: bool = False, limit: int = 100
-    ) -> str:
+    def sort_query(self, label: str, sort_prop: str, desc: bool = False, limit: int = 100) -> str:
         """GraphQL sort query."""
         order = "DESC" if desc else "ASC"
         return f"""

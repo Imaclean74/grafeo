@@ -11,7 +11,7 @@ class TestCypherFilters(BaseFilterAndLookupTest):
 
     def create_person_nodes(self, db, count: int = 1000) -> list:
         """Create Person nodes using direct API (faster than queries)."""
-        cities = ["NYC", "LA", "Chicago", "Boston", "Seattle"]
+        cities = ["NYC", "LA", "Chicago", "Boston", "Utrecht"]
         node_ids = []
 
         for i in range(count):
@@ -90,9 +90,7 @@ class TestCypherFilterVerification:
         db.create_node(["Person"], {"name": "Albert"})
         db.create_node(["Person"], {"name": "Gus"})
 
-        result = db.execute_cypher(
-            "MATCH (p:Person) WHERE p.name STARTS WITH 'Al' RETURN p.name"
-        )
+        result = db.execute_cypher("MATCH (p:Person) WHERE p.name STARTS WITH 'Al' RETURN p.name")
         matches = list(result)
         assert len(matches) == 2, "Should find Alix and Albert"
 
@@ -102,8 +100,6 @@ class TestCypherFilterVerification:
         db.create_node(["Person"], {"name": "Malice"})
         db.create_node(["Person"], {"name": "Gus"})
 
-        result = db.execute_cypher(
-            "MATCH (p:Person) WHERE p.name CONTAINS 'lic' RETURN p.name"
-        )
+        result = db.execute_cypher("MATCH (p:Person) WHERE p.name CONTAINS 'lic' RETURN p.name")
         matches = list(result)
         assert len(matches) == 2, "Should find Alix and Malice"

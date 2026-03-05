@@ -14,9 +14,7 @@ try:
 except ImportError:
     GRAFEO_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 class TestSPARQLMutations:
@@ -212,9 +210,7 @@ class TestSPARQLGraphManagement:
             }
         """)
         )
-        assert len(src_result) == 2, (
-            f"Source should retain 2 triples, got {len(src_result)}"
-        )
+        assert len(src_result) == 2, f"Source should retain 2 triples, got {len(src_result)}"
 
         # Destination has the same data
         dst_result = list(
@@ -224,9 +220,7 @@ class TestSPARQLGraphManagement:
             }
         """)
         )
-        assert len(dst_result) == 2, (
-            f"Dest should have 2 triples, got {len(dst_result)}"
-        )
+        assert len(dst_result) == 2, f"Dest should have 2 triples, got {len(dst_result)}"
 
     def test_move_graph(self, db):
         """Test MOVE: triples move to destination, source is removed."""
@@ -238,9 +232,7 @@ class TestSPARQLGraphManagement:
             }
         """)
 
-        db.execute_sparql(
-            "MOVE <http://example.org/origin> TO <http://example.org/target>"
-        )
+        db.execute_sparql("MOVE <http://example.org/origin> TO <http://example.org/target>")
 
         # Source should be empty/gone
         src_result = list(
@@ -260,9 +252,7 @@ class TestSPARQLGraphManagement:
             }
         """)
         )
-        assert len(dst_result) == 1, (
-            f"Target should have 1 triple, got {len(dst_result)}"
-        )
+        assert len(dst_result) == 1, f"Target should have 1 triple, got {len(dst_result)}"
 
     def test_add_graph(self, db):
         """Test ADD: merges source into destination without removing source."""
@@ -299,9 +289,7 @@ class TestSPARQLGraphManagement:
             }
         """)
         )
-        assert len(g2_result) == 2, (
-            f"g2 should have 2 triples after ADD, got {len(g2_result)}"
-        )
+        assert len(g2_result) == 2, f"g2 should have 2 triples after ADD, got {len(g2_result)}"
 
     def test_named_graph_isolation(self, db):
         """Test that triples in named graphs are invisible from default graph queries."""

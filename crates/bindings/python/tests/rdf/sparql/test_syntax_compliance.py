@@ -13,7 +13,6 @@ Run with:
 
 import pytest
 
-
 # Try to import grafeo
 try:
     from grafeo import GrafeoDB
@@ -23,9 +22,7 @@ except ImportError:
     GRAFEO_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 class TestSPARQLSelectBasics:

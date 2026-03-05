@@ -13,9 +13,7 @@ try:
 except ImportError:
     GRAFEO_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 @pytest.fixture
@@ -31,9 +29,7 @@ class TestVectorConversion:
     def test_list_float_stored_as_vector(self, db):
         """A Python list of floats should be stored as Value::Vector."""
         node = db.create_node(["Doc"], {"embedding": [1.0, 0.0, 0.0]})
-        result = db.execute(
-            f"MATCH (n:Doc) WHERE id(n) = {node.id} RETURN n.embedding AS emb"
-        )
+        result = db.execute(f"MATCH (n:Doc) WHERE id(n) = {node.id} RETURN n.embedding AS emb")
         rows = list(result)
         assert len(rows) == 1
         emb = rows[0]["emb"]
@@ -52,7 +48,7 @@ class TestVectorConversion:
         rows = list(result)
         retrieved = rows[0]["d"]
         assert len(retrieved) == len(original)
-        for orig, ret in zip(original, retrieved):
+        for orig, ret in zip(original, retrieved, strict=False):
             assert abs(orig - ret) < 0.001
 
     def test_empty_list_stays_list(self, db):
@@ -274,9 +270,7 @@ class TestCreateVectorIndex:
         """Vector index with all tuning parameters should succeed."""
         db.create_node(["Doc"], {"embedding": [1.0, 0.0, 0.0]})
         db.create_node(["Doc"], {"embedding": [0.0, 1.0, 0.0]})
-        db.create_vector_index(
-            "Doc", "embedding", metric="cosine", m=32, ef_construction=256
-        )
+        db.create_vector_index("Doc", "embedding", metric="cosine", m=32, ef_construction=256)
 
 
 class TestVectorSearch:

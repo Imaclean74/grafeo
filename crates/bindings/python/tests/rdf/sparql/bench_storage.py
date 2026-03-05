@@ -5,7 +5,9 @@ Note: Uses Python API for node/edge creation (faster for benchmarks).
 """
 
 import random
+
 import pytest
+
 from tests.bases.bench_storage import BaseBenchStorage
 
 
@@ -108,9 +110,7 @@ class BenchSPARQLStorage(BaseBenchStorage):
             GROUP BY ?{group_prop}
         """
 
-    def sort_query(
-        self, label: str, sort_prop: str, desc: bool = False, limit: int = 100
-    ) -> str:
+    def sort_query(self, label: str, sort_prop: str, desc: bool = False, limit: int = 100) -> str:
         """SPARQL sort query."""
         order = "DESC" if desc else "ASC"
         return f"""

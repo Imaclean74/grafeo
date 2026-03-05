@@ -44,14 +44,14 @@ def __():
     # Build a small social network
     people = {}
     for name, age, city in [
-        ("Alix", 30, "Seattle"),
-        ("Gus", 35, "Portland"),
-        ("Carol", 28, "Seattle"),
-        ("Dave", 40, "San Francisco"),
-        ("Eve", 32, "Portland"),
-        ("Frank", 45, "Seattle"),
-        ("Grace", 29, "Portland"),
-        ("Henry", 38, "San Francisco"),
+        ("Alix", 30, "Utrecht"),
+        ("Gus", 35, "Leiden"),
+        ("Carol", 28, "Utrecht"),
+        ("Dave", 40, "Paris"),
+        ("Eve", 32, "Leiden"),
+        ("Jules", 45, "Utrecht"),
+        ("Greetje", 29, "Leiden"),
+        ("Harm", 38, "Paris"),
     ]:
         node = db.create_node(["Person"], {"name": name, "age": age, "city": city})
         people[name] = node
@@ -64,11 +64,11 @@ def __():
         ("Gus", "Dave"),
         ("Carol", "Eve"),
         ("Dave", "Eve"),
-        ("Dave", "Frank"),
-        ("Eve", "Grace"),
-        ("Frank", "Grace"),
-        ("Frank", "Henry"),
-        ("Grace", "Henry"),
+        ("Dave", "Jules"),
+        ("Eve", "Greetje"),
+        ("Jules", "Greetje"),
+        ("Jules", "Harm"),
+        ("Greetje", "Harm"),
     ]
 
     for p1, p2 in connections:

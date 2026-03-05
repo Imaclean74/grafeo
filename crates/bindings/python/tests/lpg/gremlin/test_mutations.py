@@ -4,6 +4,7 @@ Tests CRUD operations using Gremlin syntax.
 """
 
 import pytest
+
 from tests.bases.test_mutations import BaseMutationsTest
 
 
@@ -176,9 +177,7 @@ class TestGremlinMutationsDirect:
 
     def test_gremlin_property_update(self, db):
         """Test property() update."""
-        self._execute_gremlin(
-            db, "g.addV('Person').property('name', 'Alix').property('age', 30)"
-        )
+        self._execute_gremlin(db, "g.addV('Person').property('name', 'Alix').property('age', 30)")
 
         # Update age
         self._execute_gremlin(db, "g.V().has('name', 'Alix').property('age', 31)")

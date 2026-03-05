@@ -156,9 +156,7 @@ class BaseMutationsTest(ABC):
 
     def test_create_node_multiple_labels(self, db):
         """Test creating a node with multiple labels."""
-        query = self.create_node_query(
-            ["Person", "Developer"], {"name": "Gus", "language": "Rust"}
-        )
+        query = self.create_node_query(["Person", "Developer"], {"name": "Gus", "language": "Rust"})
         self.execute_query(db, query)
 
         # Verify node has both labels
@@ -226,9 +224,7 @@ class BaseMutationsTest(ABC):
     def test_update_node_property(self, db):
         """Test updating a node property."""
         # Create node
-        self.execute_query(
-            db, self.create_node_query(["Person"], {"name": "Alix", "age": 30})
-        )
+        self.execute_query(db, self.create_node_query(["Person"], {"name": "Alix", "age": 30}))
 
         # Update age
         query = self.update_node_query("Person", "name", "Alix", "age", 31)
@@ -270,15 +266,9 @@ class BaseMutationsTest(ABC):
     def test_match_with_filter(self, db):
         """Test matching nodes with WHERE clause."""
         # Create test data
-        self.execute_query(
-            db, self.create_node_query(["Person"], {"name": "Alix", "age": 30})
-        )
-        self.execute_query(
-            db, self.create_node_query(["Person"], {"name": "Gus", "age": 25})
-        )
-        self.execute_query(
-            db, self.create_node_query(["Person"], {"name": "Charlie", "age": 35})
-        )
+        self.execute_query(db, self.create_node_query(["Person"], {"name": "Alix", "age": 30}))
+        self.execute_query(db, self.create_node_query(["Person"], {"name": "Gus", "age": 25}))
+        self.execute_query(db, self.create_node_query(["Person"], {"name": "Charlie", "age": 35}))
 
         # Query with filter
         query = self.match_where_query("Person", "age", ">", 28)

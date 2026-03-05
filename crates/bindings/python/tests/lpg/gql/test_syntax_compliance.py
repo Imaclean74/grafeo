@@ -36,9 +36,7 @@ class TestGqlClauses:
         """Two sequential MATCH clauses (cross product)."""
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Company"], {"name": "Acme"})
-        result = list(
-            db.execute("MATCH (p:Person) MATCH (c:Company) RETURN p.name, c.name")
-        )
+        result = list(db.execute("MATCH (p:Person) MATCH (c:Company) RETURN p.name, c.name"))
         assert len(result) == 1
         assert result[0]["p.name"] == "Alix"
         assert result[0]["c.name"] == "Acme"
@@ -94,9 +92,7 @@ class TestGqlClauses:
         """FOR combined with MATCH."""
         db.create_node(["Person"], {"name": "Alix"})
         result = list(
-            db.execute(
-                "MATCH (n:Person {name: 'Alix'}) FOR x IN [10, 20] RETURN n.name, x"
-            )
+            db.execute("MATCH (n:Person {name: 'Alix'}) FOR x IN [10, 20] RETURN n.name, x")
         )
         assert len(result) == 2
 
@@ -133,9 +129,7 @@ class TestGqlClauses:
         """WITH followed by WHERE for filtering."""
         db.create_node(["Person"], {"name": "Alix", "age": 30})
         db.create_node(["Person"], {"name": "Gus", "age": 25})
-        result = list(
-            db.execute("MATCH (p:Person) WITH p WHERE p.age > 28 RETURN p.name")
-        )
+        result = list(db.execute("MATCH (p:Person) WITH p WHERE p.age > 28 RETURN p.name"))
         assert len(result) == 1
         assert result[0]["p.name"] == "Alix"
 
@@ -170,9 +164,7 @@ class TestGqlClauses:
         db.create_node(["Person"], {"name": "Gus", "age": 25})
         db.create_node(["Person"], {"name": "Charlie", "age": 35})
         result = list(
-            db.execute(
-                "MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY age ASC"
-            )
+            db.execute("MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY age ASC")
         )
         names = [r["name"] for r in result]
         assert names == ["Gus", "Alix", "Charlie"]
@@ -183,9 +175,7 @@ class TestGqlClauses:
         db.create_node(["Person"], {"name": "Gus", "age": 25})
         db.create_node(["Person"], {"name": "Charlie", "age": 35})
         result = list(
-            db.execute(
-                "MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY age DESC"
-            )
+            db.execute("MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY age DESC")
         )
         names = [r["name"] for r in result]
         assert names == ["Charlie", "Alix", "Gus"]
@@ -196,10 +186,7 @@ class TestGqlClauses:
         db.create_node(["Person"], {"name": "B", "age": 2})
         db.create_node(["Person"], {"name": "C", "age": 3})
         result = list(
-            db.execute(
-                "MATCH (p:Person) "
-                "RETURN p.name AS name, p.age AS age ORDER BY age SKIP 1"
-            )
+            db.execute("MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY age SKIP 1")
         )
         assert len(result) == 2
 
@@ -218,8 +205,7 @@ class TestGqlClauses:
         db.create_node(["Person"], {"name": "C", "age": 3})
         result = list(
             db.execute(
-                "MATCH (p:Person) "
-                "RETURN p.name AS name, p.age AS age ORDER BY age SKIP 1 LIMIT 1"
+                "MATCH (p:Person) RETURN p.name AS name, p.age AS age ORDER BY age SKIP 1 LIMIT 1"
             )
         )
         assert len(result) == 1
@@ -233,9 +219,7 @@ class TestGqlClauses:
         db.create_node(["Person"], {"name": "B", "city": "NYC"})
         db.create_node(["Person"], {"name": "C", "city": "LA"})
         db.create_node(["Person"], {"name": "D", "city": "NYC"})
-        result = list(
-            db.execute("MATCH (p:Person) RETURN p.city, count(p) AS cnt HAVING cnt > 1")
-        )
+        result = list(db.execute("MATCH (p:Person) RETURN p.city, count(p) AS cnt HAVING cnt > 1"))
         assert len(result) == 1
         assert result[0]["p.city"] == "NYC"
 
@@ -264,8 +248,7 @@ class TestGqlClauses:
         )
         result = list(
             db.execute(
-                "MATCH (a:Person {name: 'Alix'})-[r:KNOWS]->(b:Person {name: 'Gus'}) "
-                "RETURN r.since"
+                "MATCH (a:Person {name: 'Alix'})-[r:KNOWS]->(b:Person {name: 'Gus'}) RETURN r.since"
             )
         )
         assert len(result) == 1
@@ -284,9 +267,7 @@ class TestGqlClauses:
         """SET with comma-separated assignments."""
         db.create_node(["Person"], {"name": "Alix", "age": 30, "city": "NYC"})
         db.execute("MATCH (n:Person {name: 'Alix'}) SET n.age = 31, n.city = 'LA'")
-        result = list(
-            db.execute("MATCH (n:Person {name: 'Alix'}) RETURN n.age, n.city")
-        )
+        result = list(db.execute("MATCH (n:Person {name: 'Alix'}) RETURN n.age, n.city"))
         assert result[0]["n.age"] == 31
         assert result[0]["n.city"] == "LA"
 
@@ -357,18 +338,14 @@ class TestGqlClauses:
 
     def test_merge_on_create_set(self, db):
         """MERGE ON CREATE SET sets properties only when creating."""
-        db.execute(
-            "MERGE (n:City {name: 'Berlin'}) ON CREATE SET n.new = true RETURN n"
-        )
+        db.execute("MERGE (n:City {name: 'Berlin'}) ON CREATE SET n.new = true RETURN n")
         result = list(db.execute("MATCH (n:City {name: 'Berlin'}) RETURN n.new"))
         assert result[0]["n.new"] is True
 
     def test_merge_on_match_set(self, db):
         """MERGE ON MATCH SET sets properties only when matching."""
         db.execute("INSERT (:City {name: 'London'})")
-        db.execute(
-            "MERGE (n:City {name: 'London'}) ON MATCH SET n.visited = true RETURN n"
-        )
+        db.execute("MERGE (n:City {name: 'London'}) ON MATCH SET n.visited = true RETURN n")
         result = list(db.execute("MATCH (n:City {name: 'London'}) RETURN n.visited"))
         assert result[0]["n.visited"] is True
 
@@ -377,14 +354,10 @@ class TestGqlClauses:
         db.create_node(["Person"], {"name": "X"})
         db.create_node(["Person"], {"name": "Y"})
         db.execute(
-            "MATCH (a:Person {name: 'X'}), (b:Person {name: 'Y'}) "
-            "MERGE (a)-[r:KNOWS]->(b) RETURN r"
+            "MATCH (a:Person {name: 'X'}), (b:Person {name: 'Y'}) MERGE (a)-[r:KNOWS]->(b) RETURN r"
         )
         result = list(
-            db.execute(
-                "MATCH (a:Person {name: 'X'})-[r:KNOWS]->(b:Person {name: 'Y'}) "
-                "RETURN r"
-            )
+            db.execute("MATCH (a:Person {name: 'X'})-[r:KNOWS]->(b:Person {name: 'Y'}) RETURN r")
         )
         assert len(result) == 1
 
@@ -398,10 +371,7 @@ class TestGqlClauses:
                 "MERGE (a)-[r:FRIEND]->(b) RETURN r"
             )
         result = list(
-            db.execute(
-                "MATCH (:Person {name: 'M1'})-[r:FRIEND]->(:Person {name: 'M2'}) "
-                "RETURN r"
-            )
+            db.execute("MATCH (:Person {name: 'M1'})-[r:FRIEND]->(:Person {name: 'M2'}) RETURN r")
         )
         assert len(result) == 1
 
@@ -446,18 +416,14 @@ class TestGqlExpressions:
         """Equality comparison in WHERE."""
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Person"], {"name": "Gus"})
-        result = list(
-            db.execute("MATCH (n:Person) WHERE n.name = 'Alix' RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n:Person) WHERE n.name = 'Alix' RETURN n.name"))
         assert len(result) == 1
 
     def test_not_equals(self, db):
         """Inequality comparison (<>)."""
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Person"], {"name": "Gus"})
-        result = list(
-            db.execute("MATCH (n:Person) WHERE n.name <> 'Alix' RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n:Person) WHERE n.name <> 'Alix' RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "Gus"
 
@@ -485,9 +451,7 @@ class TestGqlExpressions:
         db.create_node(["Person"], {"name": "Gus", "age": 25, "city": "LA"})
         db.create_node(["Person"], {"name": "Charlie", "age": 35, "city": "NYC"})
         result = list(
-            db.execute(
-                "MATCH (n:Person) WHERE n.age > 25 AND n.city = 'NYC' RETURN n.name"
-            )
+            db.execute("MATCH (n:Person) WHERE n.age > 25 AND n.city = 'NYC' RETURN n.name")
         )
         names = {r["n.name"] for r in result}
         assert names == {"Alix", "Charlie"}
@@ -498,10 +462,7 @@ class TestGqlExpressions:
         db.create_node(["Person"], {"name": "Gus", "age": 25})
         db.create_node(["Person"], {"name": "Charlie", "age": 35})
         result = list(
-            db.execute(
-                "MATCH (n:Person) WHERE n.name = 'Alix' OR n.name = 'Gus' "
-                "RETURN n.name"
-            )
+            db.execute("MATCH (n:Person) WHERE n.name = 'Alix' OR n.name = 'Gus' RETURN n.name")
         )
         assert len(result) == 2
 
@@ -509,9 +470,7 @@ class TestGqlExpressions:
         """Logical NOT in WHERE."""
         db.create_node(["Person"], {"name": "Alix", "city": "NYC"})
         db.create_node(["Person"], {"name": "Gus", "city": "LA"})
-        result = list(
-            db.execute("MATCH (n:Person) WHERE NOT n.city = 'NYC' RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n:Person) WHERE NOT n.city = 'NYC' RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "Gus"
 
@@ -566,21 +525,13 @@ class TestGqlExpressions:
     def test_arithmetic_in_return(self, db):
         """Arithmetic in RETURN: n.age + 10."""
         db.create_node(["Person"], {"name": "Alix", "age": 30})
-        result = list(
-            db.execute(
-                "MATCH (n:Person {name: 'Alix'}) RETURN n.age + 10 AS future_age"
-            )
-        )
+        result = list(db.execute("MATCH (n:Person {name: 'Alix'}) RETURN n.age + 10 AS future_age"))
         assert result[0]["future_age"] == 40
 
     def test_comparison_in_return(self, db):
         """Comparison in RETURN: n.age > 25."""
         db.create_node(["Person"], {"name": "Alix", "age": 30})
-        result = list(
-            db.execute(
-                "MATCH (n:Person {name: 'Alix'}) RETURN n.age > 25 AS is_over_25"
-            )
-        )
+        result = list(db.execute("MATCH (n:Person {name: 'Alix'}) RETURN n.age > 25 AS is_over_25"))
         assert result[0]["is_over_25"] is True
 
     # --- Parameters ---
@@ -603,9 +554,7 @@ class TestGqlExpressions:
         """STARTS WITH string predicate."""
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Person"], {"name": "Gus"})
-        result = list(
-            db.execute("MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "Alix"
 
@@ -614,9 +563,7 @@ class TestGqlExpressions:
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Person"], {"name": "Charlie"})
         db.create_node(["Person"], {"name": "Gus"})
-        result = list(
-            db.execute("MATCH (n:Person) WHERE n.name ENDS WITH 'e' RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n:Person) WHERE n.name ENDS WITH 'e' RETURN n.name"))
         names = {r["n.name"] for r in result}
         assert "Alix" in names
         assert "Charlie" in names
@@ -625,9 +572,7 @@ class TestGqlExpressions:
         """CONTAINS string predicate."""
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Person"], {"name": "Gus"})
-        result = list(
-            db.execute("MATCH (n:Person) WHERE n.name CONTAINS 'lic' RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n:Person) WHERE n.name CONTAINS 'lic' RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "Alix"
 
@@ -638,11 +583,7 @@ class TestGqlExpressions:
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Person"], {"name": "Gus"})
         db.create_node(["Person"], {"name": "Charlie"})
-        result = list(
-            db.execute(
-                "MATCH (n:Person) WHERE n.name IN ['Alix', 'Gus'] RETURN n.name"
-            )
-        )
+        result = list(db.execute("MATCH (n:Person) WHERE n.name IN ['Alix', 'Gus'] RETURN n.name"))
         assert len(result) == 2
 
 
@@ -666,9 +607,7 @@ class TestGqlPredicates:
         """IS NOT NULL predicate for existing property."""
         db.create_node(["Item"], {"name": "WithProp", "val": 1})
         db.create_node(["Item"], {"name": "NoProp"})
-        result = list(
-            db.execute("MATCH (n:Item) WHERE n.val IS NOT NULL RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n:Item) WHERE n.val IS NOT NULL RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "WithProp"
 
@@ -680,9 +619,7 @@ class TestGqlPredicates:
         db.create_edge(alix.id, gus.id, "KNOWS")
         db.create_edge(alix.id, charlie.id, "KNOWS")
         result = list(
-            db.execute(
-                "MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:KNOWS]->() } RETURN p.name"
-            )
+            db.execute("MATCH (p:Person) WHERE EXISTS { MATCH (p)-[:KNOWS]->() } RETURN p.name")
         )
         names = {r["p.name"] for r in result}
         assert "Alix" in names
@@ -690,9 +627,7 @@ class TestGqlPredicates:
     def test_null_property_access(self, db):
         """Accessing a nonexistent property returns null."""
         db.create_node(["Person"], {"name": "Alix"})
-        result = list(
-            db.execute("MATCH (n:Person {name: 'Alix'}) RETURN n.nonexistent")
-        )
+        result = list(db.execute("MATCH (n:Person {name: 'Alix'}) RETURN n.nonexistent"))
         assert len(result) == 1
 
 
@@ -716,9 +651,7 @@ class TestGqlPatterns:
         a = db.create_node(["Person"], {"name": "Alix"})
         b = db.create_node(["Person"], {"name": "Gus"})
         db.create_edge(a.id, b.id, "KNOWS")
-        result = list(
-            db.execute("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
-        )
+        result = list(db.execute("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name"))
         assert len(result) == 1
         assert result[0]["a.name"] == "Alix"
         assert result[0]["b.name"] == "Gus"
@@ -729,9 +662,7 @@ class TestGqlPatterns:
         b = db.create_node(["Person"], {"name": "Gus"})
         db.create_edge(a.id, b.id, "KNOWS")
         result = list(
-            db.execute(
-                "MATCH (a:Person {name: 'Alix'})-[:KNOWS]-(b:Person) RETURN b.name"
-            )
+            db.execute("MATCH (a:Person {name: 'Alix'})-[:KNOWS]-(b:Person) RETURN b.name")
         )
         names = {r["b.name"] for r in result}
         assert "Gus" in names
@@ -743,9 +674,7 @@ class TestGqlPatterns:
         db.create_edge(a.id, b.id, "KNOWS", {"since": 2020})
         result = list(
             db.execute(
-                "MATCH (a:Person)-[r:KNOWS]->(b:Person) "
-                "WHERE r.since = 2020 "
-                "RETURN a.name, b.name"
+                "MATCH (a:Person)-[r:KNOWS]->(b:Person) WHERE r.since = 2020 RETURN a.name, b.name"
             )
         )
         assert len(result) == 1
@@ -759,8 +688,7 @@ class TestGqlPatterns:
         db.create_edge(b.id, c.id, "KNOWS")
         result = list(
             db.execute(
-                "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person) "
-                "RETURN a.name, c.name"
+                "MATCH (a:Person)-[:KNOWS]->(b:Person)-[:KNOWS]->(c:Person) RETURN a.name, c.name"
             )
         )
         assert len(result) == 1
@@ -773,8 +701,7 @@ class TestGqlPatterns:
         db.create_node(["Company"], {"name": "Acme"})
         result = list(
             db.execute(
-                "MATCH (a:Person {name: 'Alix'}), (b:Company {name: 'Acme'}) "
-                "RETURN a.name, b.name"
+                "MATCH (a:Person {name: 'Alix'}), (b:Company {name: 'Acme'}) RETURN a.name, b.name"
             )
         )
         assert len(result) == 1
@@ -792,8 +719,7 @@ class TestGqlPatterns:
         db.create_edge(c.id, d.id, "NEXT")
         result = list(
             db.execute(
-                "MATCH (start:Node {name: 'a'})-[:NEXT*1..3]->(end_node:Node) "
-                "RETURN end_node.name"
+                "MATCH (start:Node {name: 'a'})-[:NEXT*1..3]->(end_node:Node) RETURN end_node.name"
             )
         )
         names = {r["end_node.name"] for r in result}
@@ -858,9 +784,7 @@ class TestGqlPatterns:
         db.create_node(["Node"], {"name": "a"})
         db.create_node(["Node"], {"name": "b"})
         result = list(
-            db.execute(
-                "MATCH (a:Node {name: 'a'})-[:EDGE]->(b:Node {name: 'b'}) RETURN a, b"
-            )
+            db.execute("MATCH (a:Node {name: 'a'})-[:EDGE]->(b:Node {name: 'b'}) RETURN a, b")
         )
         assert len(result) == 0
 
@@ -888,9 +812,7 @@ class TestGqlFunctions:
         db.create_node(["Person"], {"name": "A", "city": "NYC"})
         db.create_node(["Person"], {"name": "B", "city": "NYC"})
         db.create_node(["Person"], {"name": "C", "city": "LA"})
-        result = list(
-            db.execute("MATCH (n:Person) RETURN count(DISTINCT n.city) AS cnt")
-        )
+        result = list(db.execute("MATCH (n:Person) RETURN count(DISTINCT n.city) AS cnt"))
         assert result[0]["cnt"] == 2
 
     def test_sum(self, db):
@@ -968,10 +890,7 @@ class TestGqlFunctions:
         """coalesce(a, b, ...) returns first non-null."""
         db.create_node(["Item"], {"name": "Test"})
         result = list(
-            db.execute(
-                "MATCH (n:Item {name: 'Test'}) "
-                "RETURN coalesce(n.missing, 'default') AS val"
-            )
+            db.execute("MATCH (n:Item {name: 'Test'}) RETURN coalesce(n.missing, 'default') AS val")
         )
         assert result[0]["val"] == "default"
 
@@ -981,19 +900,14 @@ class TestGqlFunctions:
         b = db.create_node(["Person"], {"name": "Gus"})
         db.create_edge(a.id, b.id, "KNOWS")
         result = list(
-            db.execute(
-                "MATCH (a:Person {name: 'Alix'})-[r]->(b:Person) "
-                "RETURN type(r) AS rel_type"
-            )
+            db.execute("MATCH (a:Person {name: 'Alix'})-[r]->(b:Person) RETURN type(r) AS rel_type")
         )
         assert result[0]["rel_type"] == "KNOWS"
 
     def test_id_function(self, db):
         """id(n) returns the internal node identifier."""
         db.create_node(["Person"], {"name": "Alix"})
-        result = list(
-            db.execute("MATCH (n:Person {name: 'Alix'}) RETURN id(n) AS nid")
-        )
+        result = list(db.execute("MATCH (n:Person {name: 'Alix'}) RETURN id(n) AS nid"))
         assert result[0]["nid"] is not None
 
     def test_head(self, db):
@@ -1146,9 +1060,7 @@ class TestGqlIsoFeatures:
         db.create_edge(b.id, c.id, "NEXT")
         db.create_edge(c.id, d.id, "NEXT")
         result = list(
-            db.execute(
-                "MATCH (start:N {name: 'a'})-[:NEXT{1,2}]->(end:N) RETURN end.name"
-            )
+            db.execute("MATCH (start:N {name: 'a'})-[:NEXT{1,2}]->(end:N) RETURN end.name")
         )
         names = {r["end.name"] for r in result}
         assert "b" in names
@@ -1162,11 +1074,7 @@ class TestGqlIsoFeatures:
         c = db.create_node(["N"], {"name": "c"})
         db.create_edge(a.id, b.id, "NEXT")
         db.create_edge(b.id, c.id, "NEXT")
-        result = list(
-            db.execute(
-                "MATCH (start:N {name: 'a'})-[:NEXT{2}]->(end:N) RETURN end.name"
-            )
-        )
+        result = list(db.execute("MATCH (start:N {name: 'a'})-[:NEXT{2}]->(end:N) RETURN end.name"))
         assert len(result) == 1
         assert result[0]["end.name"] == "c"
 
@@ -1184,9 +1092,7 @@ class TestGqlIsoFeatures:
         """OFFSET N works like SKIP N."""
         for i in range(5):
             db.create_node(["Item"], {"idx": i})
-        result = list(
-            db.execute("MATCH (n:Item) RETURN n.idx ORDER BY n.idx OFFSET 2 LIMIT 2")
-        )
+        result = list(db.execute("MATCH (n:Item) RETURN n.idx ORDER BY n.idx OFFSET 2 LIMIT 2"))
         assert len(result) == 2
         assert result[0]["n.idx"] == 2
         assert result[1]["n.idx"] == 3
@@ -1240,9 +1146,7 @@ class TestGqlIsoFeatures:
         db.create_node(["Person", "Inactive"], {"name": "Gus"})
         db.create_node(["Company"], {"name": "Acme"})
         db.create_node(["Company", "Inactive"], {"name": "Defunct"})
-        result = list(
-            db.execute("MATCH (n IS (Person | Company) & !Inactive) RETURN n.name")
-        )
+        result = list(db.execute("MATCH (n IS (Person | Company) & !Inactive) RETURN n.name"))
         names = {r["n.name"] for r in result}
         assert names == {"Alix", "Acme"}
 
@@ -1253,9 +1157,7 @@ class TestGqlIsoFeatures:
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Company"], {"name": "Acme"})
         result = list(
-            db.execute(
-                "MATCH (n:Person) RETURN n.name UNION MATCH (n:Company) RETURN n.name"
-            )
+            db.execute("MATCH (n:Person) RETURN n.name UNION MATCH (n:Company) RETURN n.name")
         )
         names = {r["n.name"] for r in result}
         assert names == {"Alix", "Acme"}
@@ -1265,11 +1167,7 @@ class TestGqlIsoFeatures:
         db.create_node(["Person"], {"name": "Alix"})
         db.create_node(["Company"], {"name": "Alix"})  # same name
         result = list(
-            db.execute(
-                "MATCH (n:Person) RETURN n.name "
-                "UNION ALL "
-                "MATCH (n:Company) RETURN n.name"
-            )
+            db.execute("MATCH (n:Person) RETURN n.name UNION ALL MATCH (n:Company) RETURN n.name")
         )
         assert len(result) == 2  # both kept
 
@@ -1290,11 +1188,7 @@ class TestGqlIsoFeatures:
         db.create_node(["Person"], {"name": "Alix", "city": "NYC"})
         db.create_node(["Person"], {"name": "Gus", "city": "LA"})
         db.create_node(["Person"], {"name": "Charlie", "city": "NYC"})
-        result = list(
-            db.execute(
-                "MATCH (n:Person) RETURN n.city, count(n) AS cnt GROUP BY n.city"
-            )
-        )
+        result = list(db.execute("MATCH (n:Person) RETURN n.city, count(n) AS cnt GROUP BY n.city"))
         assert len(result) == 2
         la_row = next(r for r in result if r["n.city"] == "LA")
         nyc_row = next(r for r in result if r["n.city"] == "NYC")
@@ -1404,9 +1298,7 @@ class TestGqlIsoFeatures:
         db.create_edge(b.id, c.id, "NEXT")
         db.create_edge(c.id, a.id, "NEXT")
         result = list(
-            db.execute(
-                "MATCH TRAIL (start:N {name: 'a'})-[:NEXT*1..6]->(end:N) RETURN end.name"
-            )
+            db.execute("MATCH TRAIL (start:N {name: 'a'})-[:NEXT*1..6]->(end:N) RETURN end.name")
         )
         # With TRAIL, no edge can be repeated, so max 3 edges in a cycle of 3
         assert len(result) <= 3
@@ -1421,10 +1313,7 @@ class TestGqlIsoFeatures:
         db.create_edge(b.id, c.id, "NEXT")
         db.create_edge(c.id, a.id, "NEXT")
         result = list(
-            db.execute(
-                "MATCH ACYCLIC (start:N {name: 'a'})-[:NEXT*1..6]->(end:N) "
-                "RETURN end.name"
-            )
+            db.execute("MATCH ACYCLIC (start:N {name: 'a'})-[:NEXT*1..6]->(end:N) RETURN end.name")
         )
         # ACYCLIC prevents visiting 'a' again, so only b and c reachable
         names = {r["end.name"] for r in result}

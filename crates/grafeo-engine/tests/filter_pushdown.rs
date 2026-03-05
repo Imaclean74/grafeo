@@ -149,7 +149,7 @@ fn non_pushable_expression_filter() {
     let db = setup();
     let session = db.session();
 
-    // String function in predicate — not pushable, uses generic FilterOperator
+    // String function in predicate: not pushable, uses generic FilterOperator
     let result = session
         .execute("MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n.name")
         .unwrap();
@@ -165,7 +165,7 @@ fn equality_without_label_or_index_falls_through() {
     let db = setup();
     let session = db.session();
 
-    // No label, no index — falls through to generic FilterOperator
+    // No label, no index: falls through to generic FilterOperator
     // Should still return correct results
     let result = session
         .execute("MATCH (n) WHERE n.name = 'Alix' RETURN n.name")

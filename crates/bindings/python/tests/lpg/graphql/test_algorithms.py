@@ -4,6 +4,7 @@ Tests graph algorithms with GraphQL for setup/verification.
 """
 
 import random
+
 from tests.bases.test_algorithms import BaseAlgorithmsTest
 
 

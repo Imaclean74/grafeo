@@ -10,13 +10,14 @@ Tests cover:
 """
 
 from abc import ABC, abstractmethod
+
 import pytest
 
 # Try to import standalone solvOR library
 try:
     from solvor import dijkstra as solvor_dijkstra
-    from solvor import max_flow as solvor_max_flow
     from solvor import kruskal as solvor_kruskal
+    from solvor import max_flow as solvor_max_flow
 
     SOLVOR_AVAILABLE = True
 except ImportError:
@@ -37,9 +38,7 @@ class BaseSolvORComparisonTest(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def setup_flow_network(
-        self, db, n_nodes: int, n_edges: int, seed: int = 42
-    ) -> dict:
+    def setup_flow_network(self, db, n_nodes: int, n_edges: int, seed: int = 42) -> dict:
         """Set up a flow network graph using the query language.
 
         Args:
@@ -76,7 +75,7 @@ class BaseSolvORComparisonTest(ABC):
         # Build adjacency list: {node_idx: [(neighbor_idx, cost), ...]}
         node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
         adj: dict[int, list[tuple[int, float]]] = {i: [] for i in range(len(node_ids))}
-        for src, dst, capacity, cost in edges:
+        for src, dst, _capacity, cost in edges:
             i, j = node_to_idx[src], node_to_idx[dst]
             adj[i].append((j, cost))
 
@@ -84,9 +83,7 @@ class BaseSolvORComparisonTest(ABC):
         def neighbors(node: int):
             return adj.get(node, [])
 
-        solvor_result = solvor_dijkstra(
-            node_to_idx[source], node_to_idx[sink], neighbors
-        )
+        solvor_result = solvor_dijkstra(node_to_idx[source], node_to_idx[sink], neighbors)
 
         if grafeo_result is not None and solvor_result.status.name == "OPTIMAL":
             grafeo_dist, grafeo_path = grafeo_result
@@ -179,9 +176,7 @@ class BaseSolvORBenchmarkTest(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def setup_flow_network(
-        self, db, n_nodes: int, n_edges: int, seed: int = 42
-    ) -> dict:
+    def setup_flow_network(self, db, n_nodes: int, n_edges: int, seed: int = 42) -> dict:
         """Set up a flow network graph using the query language."""
         raise NotImplementedError
 
@@ -242,7 +237,7 @@ class BaseSolvORBenchmarkTest(ABC):
         # Standalone solvOR timing
         node_to_idx = {nid: i for i, nid in enumerate(node_ids)}
         adj: dict[int, list[tuple[int, float]]] = {i: [] for i in range(len(node_ids))}
-        for src, dst, capacity, cost in edges:
+        for src, dst, _capacity, cost in edges:
             i, j = node_to_idx[src], node_to_idx[dst]
             adj[i].append((j, cost))
 

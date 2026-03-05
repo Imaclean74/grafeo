@@ -60,7 +60,7 @@ fn create_social_network() -> GrafeoDB {
 }
 
 // ============================================================================
-// UNWIND — covers plan_unwind() with Empty input, prior input, property refs
+// UNWIND: covers plan_unwind() with Empty input, prior input, property refs
 // ============================================================================
 
 #[test]
@@ -272,7 +272,7 @@ fn test_for_without_ordinality_or_offset() {
 }
 
 // ============================================================================
-// MERGE — covers plan_merge() Empty/non-Empty input, on_create, on_match
+// MERGE: covers plan_merge() Empty/non-Empty input, on_create, on_match
 // ============================================================================
 
 #[test]
@@ -339,7 +339,7 @@ fn test_merge_on_match_set() {
 }
 
 // ============================================================================
-// CREATE — covers plan_create_node, plan_create_edge, try_fold_expression
+// CREATE: covers plan_create_node, plan_create_edge, try_fold_expression
 // ============================================================================
 
 #[test]
@@ -423,7 +423,7 @@ fn test_create_path_with_new_nodes() {
 }
 
 // ============================================================================
-// DELETE — covers plan_delete_node, plan_delete_edge, detach path
+// DELETE: covers plan_delete_node, plan_delete_edge, detach path
 // ============================================================================
 
 #[test]
@@ -468,7 +468,7 @@ fn test_detach_delete_all_nodes() {
 }
 
 // ============================================================================
-// SET property — covers plan_set_property, expression_to_property_source
+// SET property: covers plan_set_property, expression_to_property_source
 // ============================================================================
 
 #[test]
@@ -507,7 +507,7 @@ fn test_set_property_string() {
 }
 
 // ============================================================================
-// Label operations — covers plan_add_label, plan_remove_label
+// Label operations: covers plan_add_label, plan_remove_label
 // ============================================================================
 
 #[test]
@@ -549,7 +549,7 @@ fn test_remove_label() {
 }
 
 // ============================================================================
-// OPTIONAL MATCH — covers plan_left_join
+// OPTIONAL MATCH: covers plan_left_join
 // ============================================================================
 
 #[test]
@@ -557,7 +557,7 @@ fn test_optional_match_with_results() {
     let db = create_social_network();
     let session = db.session();
 
-    // Alix works at TechCorp — use pattern property match (WHERE comes after OPTIONAL MATCH)
+    // Alix works at TechCorp, use pattern property match (WHERE comes after OPTIONAL MATCH)
     let result = session
         .execute(
             "MATCH (a:Person {name: 'Alix'}) \
@@ -576,7 +576,7 @@ fn test_optional_match_null_when_missing() {
     let db = create_social_network();
     let session = db.session();
 
-    // Carol doesn't manage anyone — OPTIONAL MATCH should still produce a row
+    // Carol doesn't manage anyone, OPTIONAL MATCH should still produce a row
     // (LEFT JOIN preserves the left side even when right side has no matches)
     let result = session
         .execute(
@@ -586,7 +586,7 @@ fn test_optional_match_null_when_missing() {
         )
         .unwrap();
 
-    // Should produce exactly 1 row — LEFT JOIN keeps Carol even without a MANAGES match
+    // Should produce exactly 1 row: LEFT JOIN keeps Carol even without a MANAGES match
     assert_eq!(
         result.rows.len(),
         1,
@@ -595,7 +595,7 @@ fn test_optional_match_null_when_missing() {
 }
 
 // ============================================================================
-// CALL PROCEDURE — covers plan_call_procedure, plan_static_result
+// CALL PROCEDURE: covers plan_call_procedure, plan_static_result
 // ============================================================================
 
 #[test]

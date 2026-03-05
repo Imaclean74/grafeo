@@ -9,13 +9,14 @@ This module defines the benchmark infrastructure for graph algorithms:
 - MST: Kruskal, Prim
 """
 
-import time
 import gc
 import statistics
+import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -58,7 +59,7 @@ class BaseBenchAlgorithms(ABC):
         name: str,
         setup: Callable[[], Any],
         operation: Callable[[Any], None],
-        teardown: Optional[Callable[[Any], None]] = None,
+        teardown: Callable[[Any], None] | None = None,
         ops_count: int = 1,
     ) -> BenchmarkResult:
         """Run a benchmark with setup, operation, and optional teardown."""
@@ -118,7 +119,8 @@ class BaseBenchAlgorithms(ABC):
         max_name_len = max(len(r.name) for r in self.results)
 
         print(
-            f"{'Benchmark':<{max_name_len}} | {'Mean (ms)':<12} | {'Std (ms)':<10} | {'Ops/sec':<12}"
+            f"{'Benchmark':<{max_name_len}} | {'Mean (ms)':<12} | "
+            f"{'Std (ms)':<10} | {'Ops/sec':<12}"
         )
         print("-" * 80)
 
@@ -133,9 +135,7 @@ class BaseBenchAlgorithms(ABC):
     # ===== Abstract Methods =====
 
     @abstractmethod
-    def setup_random_graph(
-        self, db, n_nodes: int, n_edges: int, weighted: bool = True
-    ) -> dict:
+    def setup_random_graph(self, db, n_nodes: int, n_edges: int, weighted: bool = True) -> dict:
         """Set up a random graph for benchmarking.
 
         Args:
@@ -297,9 +297,7 @@ class BaseBenchAlgorithms(ABC):
             ops_count=1,
         )
 
-    def bench_connected_components(
-        self, db_factory, n_nodes: int = 1000, n_edges: int = 3000
-    ):
+    def bench_connected_components(self, db_factory, n_nodes: int = 1000, n_edges: int = 3000):
         """Benchmark connected components."""
 
         def setup():
@@ -355,9 +353,7 @@ class BaseBenchAlgorithms(ABC):
             ops_count=1,
         )
 
-    def bench_degree_centrality(
-        self, db_factory, n_nodes: int = 1000, n_edges: int = 5000
-    ):
+    def bench_degree_centrality(self, db_factory, n_nodes: int = 1000, n_edges: int = 5000):
         """Benchmark degree centrality."""
 
         def setup():
@@ -375,9 +371,7 @@ class BaseBenchAlgorithms(ABC):
             ops_count=1,
         )
 
-    def bench_betweenness_centrality(
-        self, db_factory, n_nodes: int = 200, n_edges: int = 1000
-    ):
+    def bench_betweenness_centrality(self, db_factory, n_nodes: int = 200, n_edges: int = 1000):
         """Benchmark betweenness centrality (O(V*E) complexity)."""
 
         def setup():
@@ -395,9 +389,7 @@ class BaseBenchAlgorithms(ABC):
             ops_count=1,
         )
 
-    def bench_closeness_centrality(
-        self, db_factory, n_nodes: int = 500, n_edges: int = 2000
-    ):
+    def bench_closeness_centrality(self, db_factory, n_nodes: int = 500, n_edges: int = 2000):
         """Benchmark closeness centrality."""
 
         def setup():
@@ -415,9 +407,7 @@ class BaseBenchAlgorithms(ABC):
             ops_count=1,
         )
 
-    def bench_label_propagation(
-        self, db_factory, n_nodes: int = 1000, n_edges: int = 5000
-    ):
+    def bench_label_propagation(self, db_factory, n_nodes: int = 1000, n_edges: int = 5000):
         """Benchmark label propagation community detection."""
 
         def setup():
@@ -489,47 +479,33 @@ class BaseBenchAlgorithms(ABC):
             ops_count=1,
         )
 
-    def run_traversal_benchmarks(
-        self, db_factory, n_nodes: int = 1000, n_edges: int = 5000
-    ):
+    def run_traversal_benchmarks(self, db_factory, n_nodes: int = 1000, n_edges: int = 5000):
         """Run traversal algorithm benchmarks."""
         print("\n--- Traversal Benchmarks ---")
         self.bench_bfs(db_factory, n_nodes, n_edges)
         self.bench_dfs(db_factory, n_nodes, n_edges)
 
-    def run_shortest_path_benchmarks(
-        self, db_factory, n_nodes: int = 1000, n_edges: int = 5000
-    ):
+    def run_shortest_path_benchmarks(self, db_factory, n_nodes: int = 1000, n_edges: int = 5000):
         """Run shortest path algorithm benchmarks."""
         print("\n--- Shortest Path Benchmarks ---")
         self.bench_dijkstra(db_factory, n_nodes, n_edges)
-        self.bench_bellman_ford(
-            db_factory, n_nodes // 2, n_edges // 2
-        )  # Smaller for BF
+        self.bench_bellman_ford(db_factory, n_nodes // 2, n_edges // 2)  # Smaller for BF
 
-    def run_component_benchmarks(
-        self, db_factory, n_nodes: int = 1000, n_edges: int = 3000
-    ):
+    def run_component_benchmarks(self, db_factory, n_nodes: int = 1000, n_edges: int = 3000):
         """Run component algorithm benchmarks."""
         print("\n--- Component Benchmarks ---")
         self.bench_connected_components(db_factory, n_nodes, n_edges)
         self.bench_strongly_connected_components(db_factory, n_nodes, n_edges * 2)
 
-    def run_centrality_benchmarks(
-        self, db_factory, n_nodes: int = 500, n_edges: int = 2000
-    ):
+    def run_centrality_benchmarks(self, db_factory, n_nodes: int = 500, n_edges: int = 2000):
         """Run centrality algorithm benchmarks."""
         print("\n--- Centrality Benchmarks ---")
         self.bench_pagerank(db_factory, n_nodes, n_edges)
         self.bench_degree_centrality(db_factory, n_nodes, n_edges)
-        self.bench_betweenness_centrality(
-            db_factory, n_nodes // 2, n_edges // 2
-        )  # Smaller for BC
+        self.bench_betweenness_centrality(db_factory, n_nodes // 2, n_edges // 2)  # Smaller for BC
         self.bench_closeness_centrality(db_factory, n_nodes, n_edges)
 
-    def run_community_benchmarks(
-        self, db_factory, n_nodes: int = 1000, n_edges: int = 5000
-    ):
+    def run_community_benchmarks(self, db_factory, n_nodes: int = 1000, n_edges: int = 5000):
         """Run community detection algorithm benchmarks."""
         print("\n--- Community Detection Benchmarks ---")
         self.bench_label_propagation(db_factory, n_nodes, n_edges)

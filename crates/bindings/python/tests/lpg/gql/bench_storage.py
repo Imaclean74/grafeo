@@ -4,7 +4,9 @@ Benchmarks read and write operations using GQL syntax.
 """
 
 import random
+
 import pytest
+
 from tests.bases.bench_storage import BaseBenchStorage
 
 # Try to import grafeo
@@ -77,7 +79,10 @@ class BenchGQLStorage(BaseBenchStorage):
 
     def two_hop_query(self, label: str, rel_type: str, limit: int = None) -> str:
         """GQL: MATCH (a)-[:REL]->(b)-[:REL]->(c) RETURN count(c)"""
-        return f"MATCH (a:{label})-[:{rel_type}]->(b:{label})-[:{rel_type}]->(c:{label}) RETURN count(c)"
+        return (
+            f"MATCH (a:{label})-[:{rel_type}]->(b:{label})"
+            f"-[:{rel_type}]->(c:{label}) RETURN count(c)"
+        )
 
     def aggregation_query(self, label: str, group_prop: str, agg_prop: str) -> str:
         """GQL: MATCH (n:Label) RETURN n.group_prop, count(n), avg(n.agg_prop)"""
@@ -87,19 +92,16 @@ class BenchGQLStorage(BaseBenchStorage):
             f"ORDER BY cnt DESC"
         )
 
-    def sort_query(
-        self, label: str, sort_prop: str, desc: bool = False, limit: int = 100
-    ) -> str:
+    def sort_query(self, label: str, sort_prop: str, desc: bool = False, limit: int = 100) -> str:
         """GQL: MATCH (n:Label) RETURN n ORDER BY n.prop [DESC] LIMIT x"""
         order = "DESC" if desc else "ASC"
-        return (
-            f"MATCH (n:{label}) RETURN n ORDER BY n.{sort_prop} {order} LIMIT {limit}"
-        )
+        return f"MATCH (n:{label}) RETURN n ORDER BY n.{sort_prop} {order} LIMIT {limit}"
 
     def triangle_query(self, label: str, rel_type: str) -> str:
         """GQL: MATCH (a)-[:REL]->(b)-[:REL]->(c)-[:REL]->(a) RETURN count(a)"""
         return (
-            f"MATCH (a:{label})-[:{rel_type}]->(b:{label})-[:{rel_type}]->(c:{label})-[:{rel_type}]->(a) "
+            f"MATCH (a:{label})-[:{rel_type}]->(b:{label})"
+            f"-[:{rel_type}]->(c:{label})-[:{rel_type}]->(a) "
             f"RETURN count(a)"
         )
 
@@ -138,9 +140,7 @@ class BenchGQLStorage(BaseBenchStorage):
             src = random.choice(nodes)
             dst = random.choice(nodes)
             if src.id != dst.id:
-                db.create_edge(
-                    src.id, dst.id, "KNOWS", {"since": random.randint(2000, 2024)}
-                )
+                db.create_edge(src.id, dst.id, "KNOWS", {"since": random.randint(2000, 2024)})
 
     def setup_clique_graph(self, db, num_cliques: int, clique_size: int):
         """Set up a clique graph for triangle benchmarking."""

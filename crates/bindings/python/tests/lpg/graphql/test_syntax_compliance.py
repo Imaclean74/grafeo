@@ -12,7 +12,6 @@ Run with:
 
 import pytest
 
-
 # Try to import grafeo
 try:
     from grafeo import GrafeoDB
@@ -22,9 +21,7 @@ except ImportError:
     GRAFEO_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 class TestGraphQLQueryOperations:
@@ -37,12 +34,8 @@ class TestGraphQLQueryOperations:
 
     def _setup_test_data(self):
         """Create a social network for query tests."""
-        self.alix = self.db.create_node(
-            ["Person"], {"name": "Alix", "age": 30, "city": "NYC"}
-        )
-        self.gus = self.db.create_node(
-            ["Person"], {"name": "Gus", "age": 25, "city": "LA"}
-        )
+        self.alix = self.db.create_node(["Person"], {"name": "Alix", "age": 30, "city": "NYC"})
+        self.gus = self.db.create_node(["Person"], {"name": "Gus", "age": 25, "city": "LA"})
         self.charlie = self.db.create_node(
             ["Person"], {"name": "Charlie", "age": 35, "city": "NYC"}
         )

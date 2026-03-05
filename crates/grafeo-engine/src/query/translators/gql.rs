@@ -296,7 +296,7 @@ impl GqlTranslator {
                 match clause {
                     ast::QueryClause::Match(match_clause) => {
                         if matches!(plan, LogicalOperator::Empty) {
-                            // No prior input — standard MATCH
+                            // No prior input: standard MATCH
                             plan = self.translate_match(match_clause)?;
                         } else if match_clause.optional {
                             // OPTIONAL MATCH: left join (prior vars on left, match on right)

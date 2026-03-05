@@ -3,10 +3,11 @@
 This module provides common utilities for testing.
 """
 
-import pytest
+from collections.abc import Callable
 from functools import wraps
-from typing import Callable, Any
+from typing import Any
 
+import pytest
 
 # Check if grafeo is available
 try:
@@ -55,9 +56,7 @@ def assert_row_count(result, expected: int, message: str = None):
     return rows
 
 
-def assert_contains_values(
-    rows: list, key: str, expected_values: set, message: str = None
-):
+def assert_contains_values(rows: list, key: str, expected_values: set, message: str = None):
     """Assert that rows contain expected values for a key.
 
     Args:

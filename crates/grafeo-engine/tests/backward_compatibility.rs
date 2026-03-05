@@ -2,7 +2,7 @@
 //!
 //! These tests read a pinned v1 snapshot fixture generated from the current
 //! format and verify that future code changes don't break deserialization.
-//! If the snapshot format changes, these tests will fail — signaling that
+//! If the snapshot format changes, these tests will fail, signaling that
 //! a migration path or version bump is needed.
 
 use grafeo_common::types::Value;

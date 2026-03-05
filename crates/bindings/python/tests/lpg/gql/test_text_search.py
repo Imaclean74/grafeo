@@ -58,5 +58,5 @@ class TestTextSearch:
 
     def test_text_search_no_index_error(self, db):
         db.create_node(["Article"], {"title": "test"})
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match=r".+"):
             db.text_search("Article", "title", "test", k=10)

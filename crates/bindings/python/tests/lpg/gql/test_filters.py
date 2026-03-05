@@ -11,7 +11,7 @@ class TestGQLFilters(BaseFilterAndLookupTest):
 
     def create_person_nodes(self, db, count: int = 1000) -> list:
         """Create Person nodes using direct API (faster than queries)."""
-        cities = ["NYC", "LA", "Chicago", "Boston", "Seattle"]
+        cities = ["NYC", "LA", "Chicago", "Boston", "Utrecht"]
         node_ids = []
 
         for i in range(count):
@@ -81,9 +81,7 @@ class TestGQLFilterVerification:
         db.create_node(["Person"], {"name": "Charlie", "age": 35, "city": "Chicago"})
 
         # Filter by city = NYC OR age < 30
-        result = db.execute(
-            "MATCH (p:Person) WHERE p.city = 'NYC' OR p.age < 30 RETURN p.name"
-        )
+        result = db.execute("MATCH (p:Person) WHERE p.city = 'NYC' OR p.age < 30 RETURN p.name")
         matches = list(result)
         assert len(matches) == 2, "Should find Alix (NYC) and Gus (age < 30)"
 

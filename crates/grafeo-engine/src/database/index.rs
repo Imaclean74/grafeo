@@ -148,7 +148,7 @@ impl super::GrafeoDB {
         }
 
         let Some(dims) = found_dims else {
-            // No vectors found yet — caller must have supplied explicit dimensions
+            // No vectors found yet: caller must have supplied explicit dimensions
             // so we can create an empty index that auto-populates via set_node_property.
             return if let Some(d) = dimensions {
                 #[cfg(feature = "vector-index")]
@@ -264,7 +264,7 @@ impl super::GrafeoDB {
                 Some(config.ef_construction),
             )
         } else {
-            // Index was already dropped – infer dimensions from data
+            // Index was already dropped: infer dimensions from data
             self.create_vector_index(label, property, None, None, None, None)
         }
     }

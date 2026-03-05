@@ -85,7 +85,7 @@ Pass arguments to filter by property values:
 
 # Filter by multiple properties (AND)
 {
-  Person(age: 30, city: "Seattle") {
+  Person(age: 30, city: "Utrecht") {
     name
     email
   }

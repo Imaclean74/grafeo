@@ -53,17 +53,11 @@ def db_api():
 def graphql_db(db):
     """Create a database with GraphQL test data."""
     # Create User nodes
-    alix = db.create_node(
-        ["User"], {"name": "Alix", "email": "alix@example.com", "age": 30}
-    )
-    gus = db.create_node(
-        ["User"], {"name": "Gus", "email": "gus@example.com", "age": 25}
-    )
+    alix = db.create_node(["User"], {"name": "Alix", "email": "alix@example.com", "age": 30})
+    gus = db.create_node(["User"], {"name": "Gus", "email": "gus@example.com", "age": 25})
 
     # Create Post nodes
-    post1 = db.create_node(
-        ["Post"], {"title": "Hello World", "content": "My first post"}
-    )
+    post1 = db.create_node(["Post"], {"title": "Hello World", "content": "My first post"})
 
     # Create relationships
     db.create_edge(alix.id, gus.id, "friends", {})

@@ -20,7 +20,7 @@ impl super::Planner {
         let output_column = columns.len();
         columns.push(create.variable.clone());
 
-        // Convert properties — resolve variables/property access from input columns
+        // Convert properties: resolve variables/property access from input columns
         let properties: Vec<(String, PropertySource)> = create
             .properties
             .iter()
@@ -85,7 +85,7 @@ impl super::Planner {
             idx
         });
 
-        // Convert properties — resolve variables/property access from input columns
+        // Convert properties: resolve variables/property access from input columns
         let properties: Vec<(String, PropertySource)> = create
             .properties
             .iter()

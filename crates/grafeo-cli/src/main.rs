@@ -368,7 +368,7 @@ fn main() {
             if e.downcast_ref::<commands::validate::ValidationFailed>()
                 .is_some()
             {
-                // Validation already printed results — just set the exit code.
+                // Validation already printed results, just set the exit code.
                 ExitCode::ValidationFailed
             } else {
                 output::error(&e.to_string());

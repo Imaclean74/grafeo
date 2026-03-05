@@ -177,9 +177,9 @@ import grafeo
 db = grafeo.GrafeoDB()
 
 # Create data
-db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'Seattle'})")
+db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'Utrecht'})")
 db.execute("INSERT (:Person {name: 'Gus', age: 25, city: 'Portland'})")
-db.execute("INSERT (:Person {name: 'Charlie', age: 35, city: 'Seattle'})")
+db.execute("INSERT (:Person {name: 'Charlie', age: 35, city: 'Utrecht'})")
 
 # Count
 result = db.execute_gremlin("g.V().hasLabel('Person').count()")

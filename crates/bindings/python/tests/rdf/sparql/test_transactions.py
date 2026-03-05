@@ -5,6 +5,7 @@ Note: Uses Python API for transaction control with SPARQL queries inside.
 """
 
 import pytest
+
 from tests.bases.test_transactions import BaseTransactionsTest
 
 # Try to import grafeo
@@ -15,9 +16,7 @@ try:
 except ImportError:
     GRAFEO_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 @pytest.fixture

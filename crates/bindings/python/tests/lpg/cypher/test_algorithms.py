@@ -4,6 +4,7 @@ Tests graph algorithms with Cypher for setup/verification.
 """
 
 import random
+
 from tests.bases.test_algorithms import BaseAlgorithmsTest
 
 
@@ -50,8 +51,7 @@ class TestCypherAlgorithmVerification:
         bfs_result = db.algorithms.bfs(a.id)
 
         result = db.execute(
-            "MATCH p = (start:Node {name: 'a'})-[:EDGE*0..10]->(end:Node) "
-            "RETURN DISTINCT end.name"
+            "MATCH p = (start:Node {name: 'a'})-[:EDGE*0..10]->(end:Node) RETURN DISTINCT end.name"
         )
         gql_reachable = {r["end.name"] for r in result}  # noqa: F841
 

@@ -4,6 +4,7 @@ Tests graph algorithms with GQL for setup/verification.
 """
 
 import random
+
 from tests.bases.test_algorithms import BaseAlgorithmsTest
 
 
@@ -56,8 +57,7 @@ class TestGQLAlgorithmVerification:
 
         # Verify with GQL - nodes reachable from a
         result = db.execute(
-            "MATCH p = (start:Node {name: 'a'})-[:EDGE*0..10]->(end:Node) "
-            "RETURN DISTINCT end.name"
+            "MATCH p = (start:Node {name: 'a'})-[:EDGE*0..10]->(end:Node) RETURN DISTINCT end.name"
         )
         gql_reachable = {r["end.name"] for r in result}  # noqa: F841
 

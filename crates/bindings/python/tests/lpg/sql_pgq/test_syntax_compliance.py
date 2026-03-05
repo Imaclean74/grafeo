@@ -9,7 +9,6 @@ Run with:
 
 import pytest
 
-
 # Try to import grafeo
 try:
     from grafeo import GrafeoDB
@@ -19,9 +18,7 @@ except ImportError:
     GRAFEO_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 class TestBasicNodeQueries:
@@ -34,35 +31,21 @@ class TestBasicNodeQueries:
 
     def _setup_test_data(self):
         """Create a social network graph."""
-        self.alix = self.db.create_node(
-            ["Person"], {"name": "Alix", "age": 30, "city": "NYC"}
-        )
-        self.gus = self.db.create_node(
-            ["Person"], {"name": "Gus", "age": 25, "city": "LA"}
-        )
+        self.alix = self.db.create_node(["Person"], {"name": "Alix", "age": 30, "city": "NYC"})
+        self.gus = self.db.create_node(["Person"], {"name": "Gus", "age": 25, "city": "LA"})
         self.charlie = self.db.create_node(
             ["Person"], {"name": "Charlie", "age": 35, "city": "NYC"}
         )
-        self.acme = self.db.create_node(
-            ["Company"], {"name": "Acme Corp", "founded": 2010}
-        )
-        self.globex = self.db.create_node(
-            ["Company"], {"name": "Globex Inc", "founded": 2015}
-        )
+        self.acme = self.db.create_node(["Company"], {"name": "Acme Corp", "founded": 2010})
+        self.globex = self.db.create_node(["Company"], {"name": "Globex Inc", "founded": 2015})
 
         self.db.create_edge(self.alix.id, self.gus.id, "KNOWS", {"since": 2020})
         self.db.create_edge(self.gus.id, self.charlie.id, "KNOWS", {"since": 2021})
         self.db.create_edge(self.alix.id, self.charlie.id, "KNOWS", {"since": 2019})
 
-        self.db.create_edge(
-            self.alix.id, self.acme.id, "WORKS_AT", {"role": "Engineer"}
-        )
-        self.db.create_edge(
-            self.gus.id, self.globex.id, "WORKS_AT", {"role": "Manager"}
-        )
-        self.db.create_edge(
-            self.charlie.id, self.acme.id, "WORKS_AT", {"role": "Director"}
-        )
+        self.db.create_edge(self.alix.id, self.acme.id, "WORKS_AT", {"role": "Engineer"})
+        self.db.create_edge(self.gus.id, self.globex.id, "WORKS_AT", {"role": "Manager"})
+        self.db.create_edge(self.charlie.id, self.acme.id, "WORKS_AT", {"role": "Director"})
 
     def _execute_sql(self, query: str):
         """Execute SQL/PGQ query, skip if not supported."""
@@ -112,10 +95,7 @@ class TestBasicNodeQueries:
     def test_node_label_filter(self):
         """SQL/PGQ: MATCH filters by node label."""
         result = self._execute_sql(
-            "SELECT * FROM GRAPH_TABLE ("
-            "  MATCH (c:Company)"
-            "  COLUMNS (c.name AS company_name)"
-            ")"
+            "SELECT * FROM GRAPH_TABLE (  MATCH (c:Company)  COLUMNS (c.name AS company_name))"
         )
         rows = list(result)
         assert len(rows) == 2, "Should find 2 Company nodes"
@@ -425,10 +405,10 @@ class TestErrorHandling:
 
     def test_syntax_error_raises(self):
         """SQL/PGQ: Malformed SQL should raise an error."""
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match=r".+"):
             self.db.execute_sql("SELECT FROM")
 
     def test_missing_columns_clause_raises(self):
         """SQL/PGQ: GRAPH_TABLE without COLUMNS clause should raise an error."""
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match=r".+"):
             self.db.execute_sql("SELECT * FROM GRAPH_TABLE (  MATCH (n:Person))")

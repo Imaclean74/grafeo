@@ -3,7 +3,7 @@
 //! This module provides the [`VectorAccessor`] trait, which decouples vector
 //! storage from vector indexing. The HNSW index is topology-only (neighbor
 //! lists only, no stored vectors) and reads vectors through this trait from
-//! [`PropertyStorage`] — the single source of truth — halving memory usage
+//! [`PropertyStorage`], the single source of truth, halving memory usage
 //! for vector workloads.
 //!
 //! # Example
@@ -28,7 +28,7 @@ use crate::graph::GraphStore;
 
 /// Trait for reading vectors by node ID.
 ///
-/// HNSW is topology-only — vectors live in property storage, not in
+/// HNSW is topology-only: vectors live in property storage, not in
 /// HNSW nodes. This trait provides the bridge for reading them.
 pub trait VectorAccessor: Send + Sync {
     /// Returns the vector associated with the given node ID, if it exists.

@@ -26,7 +26,7 @@ The simplest filter uses direct property equality:
 
 # Multiple conditions (AND)
 {
-  Person(age: 30, city: "Seattle") {
+  Person(age: 30, city: "Utrecht") {
     name
     email
   }
@@ -139,14 +139,14 @@ import grafeo
 db = grafeo.GrafeoDB()
 
 # Create data
-db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'Seattle'})")
+db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'Utrecht'})")
 db.execute("INSERT (:Person {name: 'Gus', age: 25, city: 'Portland'})")
-db.execute("INSERT (:Person {name: 'Charlie', age: 35, city: 'Seattle'})")
+db.execute("INSERT (:Person {name: 'Charlie', age: 35, city: 'Utrecht'})")
 
 # Where clause with operators
 result = db.execute_graphql("""
 {
-  Person(where: { age_gt: 25, city: "Seattle" }) {
+  Person(where: { age_gt: 25, city: "Utrecht" }) {
     name
     age
   }

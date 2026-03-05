@@ -6,6 +6,7 @@ Note: Gremlin filter syntax may not be fully implemented yet.
 """
 
 import pytest
+
 from tests.bases.test_filters import BaseFilterAndLookupTest
 
 
@@ -25,7 +26,7 @@ class TestGremlinFilters(BaseFilterAndLookupTest):
 
     def create_person_nodes(self, db, count: int = 1000) -> list:
         """Create Person nodes using direct API (faster than queries)."""
-        cities = ["NYC", "LA", "Chicago", "Boston", "Seattle"]
+        cities = ["NYC", "LA", "Chicago", "Boston", "Utrecht"]
         node_ids = []
 
         for i in range(count):
@@ -43,9 +44,7 @@ class TestGremlinFilters(BaseFilterAndLookupTest):
 
     def filter_by_age_equals(self, db, age: int) -> list:
         """Filter using Gremlin has() step."""
-        result = self._execute_gremlin(
-            db, f"g.V().hasLabel('Person').has('age', {age})"
-        )
+        result = self._execute_gremlin(db, f"g.V().hasLabel('Person').has('age', {age})")
         return list(result)
 
     def filter_by_age_range(self, db, min_age: int, max_age: int) -> list:
@@ -58,9 +57,7 @@ class TestGremlinFilters(BaseFilterAndLookupTest):
 
     def filter_by_city(self, db, city: str) -> list:
         """Filter using Gremlin string comparison."""
-        result = self._execute_gremlin(
-            db, f"g.V().hasLabel('Person').has('city', '{city}')"
-        )
+        result = self._execute_gremlin(db, f"g.V().hasLabel('Person').has('city', '{city}')")
         return list(result)
 
     def filter_compound_and(self, db, city: str, min_age: int) -> list:
@@ -108,9 +105,7 @@ class TestGremlinFilterVerification:
         db.create_node(["Person"], {"name": "Gus", "age": 25})
         db.create_node(["Person"], {"name": "Charlie", "age": 35})
 
-        result = self._execute_gremlin(
-            db, "g.V().hasLabel('Person').has('age', between(26, 34))"
-        )
+        result = self._execute_gremlin(db, "g.V().hasLabel('Person').has('age', between(26, 34))")
         matches = list(result)
         assert len(matches) == 1, "Should find only Alix (age 30)"
 

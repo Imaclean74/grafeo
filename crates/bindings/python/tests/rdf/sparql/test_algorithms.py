@@ -5,6 +5,7 @@ Note: Algorithms are accessed via db.algorithms.*, not via SPARQL queries.
 """
 
 import random
+
 from tests.bases.test_algorithms import BaseAlgorithmsTest
 
 

@@ -6,13 +6,13 @@
 """
 
 from .generators import (
-    SyntheticDataGenerator,
-    SocialNetworkGenerator,
-    LDBCLikeGenerator,
-    TreeGenerator,
     CliqueGenerator,
-    NodeData,
     EdgeData,
+    LDBCLikeGenerator,
+    NodeData,
+    SocialNetworkGenerator,
+    SyntheticDataGenerator,
+    TreeGenerator,
     load_data_into_db,
 )
 

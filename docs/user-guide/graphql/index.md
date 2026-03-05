@@ -77,7 +77,7 @@ GraphQL support is optional and requires a feature flag:
 
 # Filter by multiple properties
 {
-  Person(age: 30, city: "Seattle") {
+  Person(age: 30, city: "Utrecht") {
     name
     email
   }

@@ -7,8 +7,8 @@ Supports equality, range, string, compound, REGEX, and NOT EXISTS filters.
 """
 
 import time
-import pytest
 
+import pytest
 
 # Try to import grafeo
 try:
@@ -39,7 +39,7 @@ class TestSPARQLFilters:
 
     def _setup_person_data(self, count: int = 100):
         """Create Person triples using SPARQL INSERT DATA."""
-        cities = ["NYC", "LA", "Chicago", "Boston", "Seattle"]
+        cities = ["NYC", "LA", "Chicago", "Boston", "Utrecht"]
 
         # Build INSERT DATA statement with all triples
         triples = []
@@ -281,6 +281,4 @@ class TestSPARQLFilters:
             list(result)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 2.0, (
-            f"10 SPARQL range filters took {elapsed:.3f}s, expected < 2.0s"
-        )
+        assert elapsed < 2.0, f"10 SPARQL range filters took {elapsed:.3f}s, expected < 2.0s"

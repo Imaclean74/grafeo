@@ -4,6 +4,7 @@ Tests CRUD operations using GraphQL syntax.
 """
 
 import pytest
+
 from tests.bases.test_mutations import BaseMutationsTest
 
 
@@ -29,8 +30,7 @@ class TestGraphQLMutations(BaseMutationsTest):
         """Return GraphQL createNode mutation."""
         label = labels[0] if labels else "Node"
         args = ", ".join(
-            f'{k}: "{v}"' if isinstance(v, str) else f"{k}: {v}"
-            for k, v in props.items()
+            f'{k}: "{v}"' if isinstance(v, str) else f"{k}: {v}" for k, v in props.items()
         )
         return f"""
             mutation {{
@@ -66,8 +66,7 @@ class TestGraphQLMutations(BaseMutationsTest):
         from_val = f'"{from_value}"' if isinstance(from_value, str) else from_value
         to_val = f'"{to_value}"' if isinstance(to_value, str) else to_value
         props_args = ", ".join(
-            f'{k}: "{v}"' if isinstance(v, str) else f"{k}: {v}"
-            for k, v in edge_props.items()
+            f'{k}: "{v}"' if isinstance(v, str) else f"{k}: {v}" for k, v in edge_props.items()
         )
         return f"""
             mutation {{

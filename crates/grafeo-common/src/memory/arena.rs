@@ -843,7 +843,7 @@ mod tiered_storage_tests {
         let arena = Arena::with_chunk_size(EpochId::INITIAL, 4096).unwrap();
         let (_offset, _) = arena.alloc_value_with_offset(42u64).unwrap();
 
-        // Read way past the allocated region — should panic in debug
+        // Read way past the allocated region: should panic in debug
         unsafe {
             let _: &u64 = arena.read_at(4000);
         }

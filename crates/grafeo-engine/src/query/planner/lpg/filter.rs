@@ -531,7 +531,7 @@ impl super::Planner {
             }
             nodes
         } else {
-            // No index but we have a label — scan label first, then check properties.
+            // No index but we have a label: scan label first, then check properties.
             // This is more efficient than ScanOperator → DataChunk → FilterOperator
             // because it avoids DataChunk materialization and expression evaluation.
             let label = scan_label.as_ref().expect("label checked above");

@@ -4,6 +4,7 @@ Benchmarks storage operations using Cypher syntax.
 """
 
 import random
+
 from tests.bases.bench_storage import BaseBenchStorage
 
 
@@ -54,10 +55,7 @@ class BenchCypherStorage(BaseBenchStorage):
 
     def two_hop_query(self, label: str, rel_type: str, limit: int = None) -> str:
         """Cypher 2-hop traversal query."""
-        return (
-            f"MATCH (a:{label})-[:{rel_type}]->(b)-[:{rel_type}]->(c) "
-            f"RETURN count(c) AS cnt"
-        )
+        return f"MATCH (a:{label})-[:{rel_type}]->(b)-[:{rel_type}]->(c) RETURN count(c) AS cnt"
 
     def aggregation_query(self, label: str, group_prop: str, agg_prop: str) -> str:
         """Cypher aggregation query."""
@@ -66,14 +64,10 @@ class BenchCypherStorage(BaseBenchStorage):
             f"RETURN n.{group_prop}, count(n) AS cnt, avg(n.{agg_prop}) AS avg_val"
         )
 
-    def sort_query(
-        self, label: str, sort_prop: str, desc: bool = False, limit: int = 100
-    ) -> str:
+    def sort_query(self, label: str, sort_prop: str, desc: bool = False, limit: int = 100) -> str:
         """Cypher sort query."""
         order = "DESC" if desc else "ASC"
-        return (
-            f"MATCH (n:{label}) RETURN n ORDER BY n.{sort_prop} {order} LIMIT {limit}"
-        )
+        return f"MATCH (n:{label}) RETURN n ORDER BY n.{sort_prop} {order} LIMIT {limit}"
 
     def triangle_query(self, label: str, rel_type: str) -> str:
         """Cypher triangle pattern query."""

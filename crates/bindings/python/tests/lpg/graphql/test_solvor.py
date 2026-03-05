@@ -5,11 +5,13 @@ Uses Python API for graph setup (GraphQL execution not required).
 """
 
 import random
+
 import pytest
 from grafeo import GrafeoDB
+
 from tests.bases.test_solvor import (
-    BaseSolvORComparisonTest,
     BaseSolvORBenchmarkTest,
+    BaseSolvORComparisonTest,
 )
 
 
@@ -30,9 +32,7 @@ class TestGraphQLSolvORComparison(BaseSolvORComparisonTest):
         """Create a fresh database instance."""
         return GrafeoDB()
 
-    def setup_flow_network(
-        self, db, n_nodes: int, n_edges: int, seed: int = 42
-    ) -> dict:
+    def setup_flow_network(self, db, n_nodes: int, n_edges: int, seed: int = 42) -> dict:
         """Set up a flow network using Python API."""
         rng = random.Random(seed)
 
@@ -81,9 +81,7 @@ class TestGraphQLSolvORBenchmark(BaseSolvORBenchmarkTest):
         """Create a fresh database instance."""
         return GrafeoDB()
 
-    def setup_flow_network(
-        self, db, n_nodes: int, n_edges: int, seed: int = 42
-    ) -> dict:
+    def setup_flow_network(self, db, n_nodes: int, n_edges: int, seed: int = 42) -> dict:
         """Set up a flow network using Python API."""
         rng = random.Random(seed)
 

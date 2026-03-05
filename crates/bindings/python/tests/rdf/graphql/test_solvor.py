@@ -8,10 +8,12 @@ SolvOR comparison tests use LPG data for graph structure.
 """
 
 import random
+
 import pytest
+
 from tests.bases.test_solvor import (
-    BaseSolvORComparisonTest,
     BaseSolvORBenchmarkTest,
+    BaseSolvORComparisonTest,
 )
 
 # Try to import grafeo
@@ -23,9 +25,7 @@ except ImportError:
     GRAFEO_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 @pytest.fixture
@@ -45,9 +45,7 @@ class TestRDFGraphQLSolvORComparison(BaseSolvORComparisonTest):
         """Create a fresh database instance."""
         return GrafeoDB()
 
-    def setup_flow_network(
-        self, db, n_nodes: int, n_edges: int, seed: int = 42
-    ) -> dict:
+    def setup_flow_network(self, db, n_nodes: int, n_edges: int, seed: int = 42) -> dict:
         """Set up a flow network using Python API with RDF-style nodes."""
         rng = random.Random(seed)
 
@@ -102,9 +100,7 @@ class TestRDFGraphQLSolvORBenchmark(BaseSolvORBenchmarkTest):
         """Create a fresh database instance."""
         return GrafeoDB()
 
-    def setup_flow_network(
-        self, db, n_nodes: int, n_edges: int, seed: int = 42
-    ) -> dict:
+    def setup_flow_network(self, db, n_nodes: int, n_edges: int, seed: int = 42) -> dict:
         """Set up a flow network using Python API with RDF-style nodes."""
         rng = random.Random(seed)
 

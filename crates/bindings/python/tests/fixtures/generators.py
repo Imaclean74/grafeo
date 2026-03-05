@@ -112,9 +112,7 @@ class SocialNetworkGenerator(SyntheticDataGenerator):
                     properties={
                         "name": self.random_name(),
                         "age": self.rng.randint(18, 80),
-                        "city": self.rng.choice(
-                            ["NYC", "LA", "Chicago", "Houston", "Phoenix"]
-                        ),
+                        "city": self.rng.choice(["NYC", "LA", "Chicago", "Houston", "Phoenix"]),
                         "email": f"user{i}@example.com",
                     },
                 )
@@ -123,15 +121,9 @@ class SocialNetworkGenerator(SyntheticDataGenerator):
         # Generate KNOWS edges using preferential attachment
         # Start with a small connected component
         if self.num_nodes >= 3:
-            self.edges.append(
-                EdgeData(0, 1, "KNOWS", {"since": self.rng.randint(2010, 2024)})
-            )
-            self.edges.append(
-                EdgeData(1, 2, "KNOWS", {"since": self.rng.randint(2010, 2024)})
-            )
-            self.edges.append(
-                EdgeData(2, 0, "KNOWS", {"since": self.rng.randint(2010, 2024)})
-            )
+            self.edges.append(EdgeData(0, 1, "KNOWS", {"since": self.rng.randint(2010, 2024)}))
+            self.edges.append(EdgeData(1, 2, "KNOWS", {"since": self.rng.randint(2010, 2024)}))
+            self.edges.append(EdgeData(2, 0, "KNOWS", {"since": self.rng.randint(2010, 2024)}))
 
         # Track degrees for preferential attachment
         degrees = [0] * self.num_nodes
@@ -208,7 +200,7 @@ class LDBCLikeGenerator(SyntheticDataGenerator):
             "Paris",
             "Amsterdam",
             "Singapore",
-            "Seattle",
+            "Utrecht",
             "Boston",
             "Austin",
             "Denver",
@@ -228,9 +220,7 @@ class LDBCLikeGenerator(SyntheticDataGenerator):
                     labels=["City"],
                     properties={
                         "name": city_name,
-                        "country": self.rng.choice(
-                            ["USA", "UK", "Germany", "Japan", "Australia"]
-                        ),
+                        "country": self.rng.choice(["USA", "UK", "Germany", "Japan", "Australia"]),
                     },
                 )
             )
@@ -243,7 +233,7 @@ class LDBCLikeGenerator(SyntheticDataGenerator):
             "Stanford",
             "Harvard",
         ]
-        for i in range(self.num_universities):
+        for _i in range(self.num_universities):
             self.nodes.append(
                 NodeData(
                     labels=["University"],
@@ -257,7 +247,7 @@ class LDBCLikeGenerator(SyntheticDataGenerator):
         # Generate Companies
         company_types = ["Inc", "Corp", "LLC", "Ltd", "GmbH"]
         industries = ["Technology", "Finance", "Healthcare", "Manufacturing", "Retail"]
-        for i in range(self.num_companies):
+        for _i in range(self.num_companies):
             self.nodes.append(
                 NodeData(
                     labels=["Company"],
@@ -319,9 +309,7 @@ class LDBCLikeGenerator(SyntheticDataGenerator):
         for i in range(self.num_persons):
             if self.rng.random() < 0.6:
                 person_idx = person_base + i
-                uni_idx = self.num_cities + self.rng.randint(
-                    0, self.num_universities - 1
-                )
+                uni_idx = self.num_cities + self.rng.randint(0, self.num_universities - 1)
                 self.edges.append(
                     EdgeData(
                         person_idx,
@@ -350,13 +338,13 @@ class LDBCLikeGenerator(SyntheticDataGenerator):
                 existing_knows.add((src, dst))
 
         # Company -[LOCATED_IN]-> City
-        for i in range(self.num_companies):
+        for _i in range(self.num_companies):
             company_idx = self.num_cities + self.num_universities + i
             city_idx = self.rng.randint(0, self.num_cities - 1)
             self.edges.append(EdgeData(company_idx, city_idx, "LOCATED_IN", {}))
 
         # University -[LOCATED_IN]-> City
-        for i in range(self.num_universities):
+        for _i in range(self.num_universities):
             uni_idx = self.num_cities + i
             city_idx = self.rng.randint(0, self.num_cities - 1)
             self.edges.append(EdgeData(uni_idx, city_idx, "LOCATED_IN", {}))
@@ -425,9 +413,7 @@ class TreeGenerator(SyntheticDataGenerator):
         """Generate the tree."""
         # Generate root
         self.nodes.append(
-            NodeData(
-                labels=["TreeNode", "Root"], properties={"level": 0, "name": "root"}
-            )
+            NodeData(labels=["TreeNode", "Root"], properties={"level": 0, "name": "root"})
         )
 
         # BFS to generate tree
@@ -490,9 +476,7 @@ class CliqueGenerator(SyntheticDataGenerator):
             # Generate all edges within clique (complete graph)
             for i in range(self.clique_size):
                 for j in range(i + 1, self.clique_size):
-                    self.edges.append(
-                        EdgeData(start_idx + i, start_idx + j, "CONNECTED", {})
-                    )
+                    self.edges.append(EdgeData(start_idx + i, start_idx + j, "CONNECTED", {}))
 
         # Generate inter-clique edges
         for _ in range(self.inter_clique_edges * self.num_cliques):

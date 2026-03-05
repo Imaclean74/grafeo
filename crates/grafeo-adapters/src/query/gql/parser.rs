@@ -677,7 +677,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a FOR clause (GQL standard, ISO/IEC 39075 section 14.8).
-    /// `FOR variable IN expression` — desugars to an UnwindClause.
+    /// `FOR variable IN expression`: desugars to an UnwindClause.
     fn parse_for_clause(&mut self) -> Result<UnwindClause> {
         let span_start = self.current.span.start;
         self.expect(TokenKind::For)?;

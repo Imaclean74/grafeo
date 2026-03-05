@@ -129,7 +129,7 @@ fn test_lpg_store_config() {
         initial_node_capacity: 100,
         initial_edge_capacity: 200,
     };
-    let store = LpgStore::with_config(config);
+    let store = LpgStore::with_config(config).unwrap();
 
     // Store should work but without backward adjacency
     let a = store.create_node(&["Person"]);
@@ -718,7 +718,7 @@ fn test_no_backward_adj_in_degree() {
         initial_node_capacity: 10,
         initial_edge_capacity: 10,
     };
-    let store = LpgStore::with_config(config);
+    let store = LpgStore::with_config(config).unwrap();
 
     let a = store.create_node(&["A"]);
     let b = store.create_node(&["B"]);
@@ -736,7 +736,7 @@ fn test_no_backward_adj_edges_to() {
         initial_node_capacity: 10,
         initial_edge_capacity: 10,
     };
-    let store = LpgStore::with_config(config);
+    let store = LpgStore::with_config(config).unwrap();
 
     let a = store.create_node(&["A"]);
     let b = store.create_node(&["B"]);

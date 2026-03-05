@@ -6,8 +6,8 @@ Supports equality, range (age_gt/age_lt suffixes), string, and compound filters.
 """
 
 import time
-import pytest
 
+import pytest
 
 # Try to import grafeo
 try:
@@ -38,7 +38,7 @@ class TestRDFGraphQLFilters:
 
     def _setup_person_data(self, count: int = 100):
         """Create RDF-like Person resources."""
-        cities = ["NYC", "LA", "Chicago", "Boston", "Seattle"]
+        cities = ["NYC", "LA", "Chicago", "Boston", "Utrecht"]
 
         for i in range(count):
             self.db.create_node(
@@ -243,9 +243,7 @@ class TestRDFGraphQLFilters:
             list(result)
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 1.0, (
-            f"10 GraphQL range filters took {elapsed:.3f}s, expected < 1.0s"
-        )
+        assert elapsed < 1.0, f"10 GraphQL range filters took {elapsed:.3f}s, expected < 1.0s"
 
     def test_direct_lookup_performance(self):
         """Direct lookup should be very fast."""
@@ -264,6 +262,4 @@ class TestRDFGraphQLFilters:
             assert node is not None
         elapsed = time.perf_counter() - start
 
-        assert elapsed < 0.5, (
-            f"1000 direct lookups took {elapsed:.3f}s, expected < 0.5s"
-        )
+        assert elapsed < 0.5, f"1000 direct lookups took {elapsed:.3f}s, expected < 0.5s"

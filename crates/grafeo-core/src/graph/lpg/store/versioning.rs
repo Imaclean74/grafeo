@@ -38,7 +38,7 @@ impl LpgStore {
             edges.retain(|_, chain| !chain.is_empty());
         }
 
-        // Counters may be out of sync after rollback — force full recompute
+        // Counters may be out of sync after rollback: force full recompute
         self.needs_stats_recompute.store(true, Ordering::Relaxed);
     }
 
@@ -67,7 +67,7 @@ impl LpgStore {
             versions.retain(|_, index| !index.is_empty());
         }
 
-        // Counters may be out of sync after rollback — force full recompute
+        // Counters may be out of sync after rollback: force full recompute
         self.needs_stats_recompute.store(true, Ordering::Relaxed);
     }
 

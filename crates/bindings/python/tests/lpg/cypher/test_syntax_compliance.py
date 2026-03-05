@@ -6,7 +6,6 @@ Tests are organized by category: clauses, expressions, functions, patterns.
 
 import pytest
 
-
 # =============================================================================
 # CLAUSES
 # =============================================================================
@@ -23,9 +22,7 @@ class TestCypherClauses:
         assert names == {"Alix", "Gus", "Charlie"}
 
     def test_match_by_property(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person {name: 'Alix'}) RETURN n.age")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person {name: 'Alix'}) RETURN n.age"))
         assert len(result) == 1
         assert result[0]["n.age"] == 30
 
@@ -77,9 +74,7 @@ class TestCypherClauses:
         pattern_db.create_node(["Person"], {"name": "Loner", "age": 99})
         result = list(
             pattern_db.execute_cypher(
-                "MATCH (p:Person) "
-                "OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company) "
-                "RETURN p.name, c.name"
+                "MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_AT]->(c:Company) RETURN p.name, c.name"
             )
         )
         loner = [r for r in result if r["p.name"] == "Loner"]
@@ -89,9 +84,7 @@ class TestCypherClauses:
     # --- WHERE ---
 
     def test_where_comparison(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.age > 28 RETURN n.name")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) WHERE n.age > 28 RETURN n.name"))
         names = {r["n.name"] for r in result}
         assert "Alix" in names
         assert "Charlie" in names
@@ -113,9 +106,7 @@ class TestCypherClauses:
 
     def test_with_where(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (p:Person) WITH p WHERE p.age > 30 RETURN p.name"
-            )
+            pattern_db.execute_cypher("MATCH (p:Person) WITH p WHERE p.age > 30 RETURN p.name")
         )
         assert len(result) == 1
         assert result[0]["p.name"] == "Charlie"
@@ -123,9 +114,7 @@ class TestCypherClauses:
     # --- RETURN ---
 
     def test_return_distinct(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (p:Person) RETURN DISTINCT p.city")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (p:Person) RETURN DISTINCT p.city"))
         cities = {r["p.city"] for r in result}
         assert cities == {"LA", "NYC"}
 
@@ -150,9 +139,7 @@ class TestCypherClauses:
 
     def test_return_order_by_property(self, pattern_db):
         """ORDER BY on a property access (n.prop) without alias."""
-        result = list(
-            pattern_db.execute_cypher("MATCH (p:Person) RETURN p.name ORDER BY p.age")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (p:Person) RETURN p.name ORDER BY p.age"))
         names = [r["p.name"] for r in result]
         assert names == ["Gus", "Alix", "Charlie"]
 
@@ -197,15 +184,11 @@ class TestCypherClauses:
     # --- CREATE ---
 
     def test_create_node(self, db):
-        result = list(
-            db.execute_cypher("CREATE (n:Person {name: 'Eve', age: 28}) RETURN n")
-        )
+        result = list(db.execute_cypher("CREATE (n:Person {name: 'Eve', age: 28}) RETURN n"))
         assert len(result) == 1
 
     def test_create_node_multiple_labels(self, db):
-        result = list(
-            db.execute_cypher("CREATE (n:Person:Employee {name: 'Frank'}) RETURN n")
-        )
+        result = list(db.execute_cypher("CREATE (n:Person:Employee {name: 'Frank'}) RETURN n"))
         assert len(result) == 1
 
     def test_create_relationship(self, pattern_db):
@@ -240,27 +223,19 @@ class TestCypherClauses:
     def test_set_property(self, db):
         db.create_node(["Person"], {"name": "SetTest", "age": 20})
         db.execute_cypher("MATCH (n:Person {name: 'SetTest'}) SET n.age = 21")
-        result = list(
-            db.execute_cypher("MATCH (n:Person {name: 'SetTest'}) RETURN n.age")
-        )
+        result = list(db.execute_cypher("MATCH (n:Person {name: 'SetTest'}) RETURN n.age"))
         assert result[0]["n.age"] == 21
 
     def test_set_add_new_property(self, db):
         db.create_node(["Person"], {"name": "AddProp"})
-        db.execute_cypher(
-            "MATCH (n:Person {name: 'AddProp'}) SET n.email = 'test@test.com'"
-        )
-        result = list(
-            db.execute_cypher("MATCH (n:Person {name: 'AddProp'}) RETURN n.email")
-        )
+        db.execute_cypher("MATCH (n:Person {name: 'AddProp'}) SET n.email = 'test@test.com'")
+        result = list(db.execute_cypher("MATCH (n:Person {name: 'AddProp'}) RETURN n.email"))
         assert result[0]["n.email"] == "test@test.com"
 
     def test_set_label(self, db):
         db.create_node(["Person"], {"name": "LabelTest"})
         db.execute_cypher("MATCH (n:Person {name: 'LabelTest'}) SET n:Admin")
-        result = list(
-            db.execute_cypher("MATCH (n:Admin {name: 'LabelTest'}) RETURN n.name")
-        )
+        result = list(db.execute_cypher("MATCH (n:Admin {name: 'LabelTest'}) RETURN n.name"))
         assert len(result) == 1
 
     # --- REMOVE ---
@@ -268,9 +243,7 @@ class TestCypherClauses:
     def test_remove_property(self, db):
         db.create_node(["Person"], {"name": "RemTest", "temp": "value"})
         db.execute_cypher("MATCH (n:Person {name: 'RemTest'}) REMOVE n.temp")
-        result = list(
-            db.execute_cypher("MATCH (n:Person {name: 'RemTest'}) RETURN n.temp")
-        )
+        result = list(db.execute_cypher("MATCH (n:Person {name: 'RemTest'}) RETURN n.temp"))
         assert result[0].get("n.temp") is None
 
     def test_remove_label(self, db):
@@ -293,20 +266,14 @@ class TestCypherClauses:
         assert result[0]["cnt"] == 1
 
     def test_merge_on_create_set(self, db):
-        db.execute_cypher(
-            "MERGE (n:City {name: 'Berlin'}) ON CREATE SET n.new = true RETURN n"
-        )
+        db.execute_cypher("MERGE (n:City {name: 'Berlin'}) ON CREATE SET n.new = true RETURN n")
         result = list(db.execute_cypher("MATCH (n:City {name: 'Berlin'}) RETURN n.new"))
         assert result[0]["n.new"] is True
 
     def test_merge_on_match_set(self, db):
         db.execute_cypher("CREATE (n:City {name: 'London'})")
-        db.execute_cypher(
-            "MERGE (n:City {name: 'London'}) ON MATCH SET n.visited = true RETURN n"
-        )
-        result = list(
-            db.execute_cypher("MATCH (n:City {name: 'London'}) RETURN n.visited")
-        )
+        db.execute_cypher("MERGE (n:City {name: 'London'}) ON MATCH SET n.visited = true RETURN n")
+        result = list(db.execute_cypher("MATCH (n:City {name: 'London'}) RETURN n.visited"))
         assert result[0]["n.visited"] is True
 
     def test_merge_relationship(self, db):
@@ -314,8 +281,7 @@ class TestCypherClauses:
         db.create_node(["Person"], {"name": "X"})
         db.create_node(["Person"], {"name": "Y"})
         db.execute_cypher(
-            "MATCH (a:Person {name: 'X'}), (b:Person {name: 'Y'}) "
-            "MERGE (a)-[r:KNOWS]->(b) RETURN r"
+            "MATCH (a:Person {name: 'X'}), (b:Person {name: 'Y'}) MERGE (a)-[r:KNOWS]->(b) RETURN r"
         )
         result = list(
             db.execute_cypher(
@@ -347,9 +313,7 @@ class TestCypherClauses:
         db.create_node(["Dog"], {"name": "Rex"})
         result = list(
             db.execute_cypher(
-                "MATCH (c:Cat) RETURN c.name AS name "
-                "UNION "
-                "MATCH (d:Dog) RETURN d.name AS name"
+                "MATCH (c:Cat) RETURN c.name AS name UNION MATCH (d:Dog) RETURN d.name AS name"
             )
         )
         names = {r["name"] for r in result}
@@ -360,9 +324,7 @@ class TestCypherClauses:
         db.create_node(["B"], {"name": "shared"})
         result = list(
             db.execute_cypher(
-                "MATCH (a:A) RETURN a.name AS name "
-                "UNION ALL "
-                "MATCH (b:B) RETURN b.name AS name"
+                "MATCH (a:A) RETURN a.name AS name UNION ALL MATCH (b:B) RETURN b.name AS name"
             )
         )
         assert len(result) == 2
@@ -373,9 +335,7 @@ class TestCypherClauses:
         """Verify CALL procedure syntax (uses built-in if available)."""
         # Just verify the syntax parses, not the result
         try:
-            db.execute_cypher(
-                "CALL grafeo.schema.nodeLabels() YIELD label RETURN label"
-            )
+            db.execute_cypher("CALL grafeo.schema.nodeLabels() YIELD label RETURN label")
         except Exception:
             pytest.skip("No built-in procedure available for testing")
 
@@ -392,33 +352,23 @@ class TestCypherExpressions:
 
     def test_equals(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.name = 'Alix' RETURN n.name"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.name = 'Alix' RETURN n.name")
         )
         assert len(result) == 1
 
     def test_not_equals(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.name <> 'Alix' RETURN n.name"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.name <> 'Alix' RETURN n.name")
         )
         assert len(result) == 2
 
     def test_less_than(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.age < 30 RETURN n.name")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) WHERE n.age < 30 RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "Gus"
 
     def test_greater_equal(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.age >= 30 RETURN n.name"
-            )
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) WHERE n.age >= 30 RETURN n.name"))
         assert len(result) == 2
 
     # --- Logical ---
@@ -435,17 +385,14 @@ class TestCypherExpressions:
     def test_or(self, pattern_db):
         result = list(
             pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.name = 'Alix' OR n.name = 'Gus' "
-                "RETURN n.name"
+                "MATCH (n:Person) WHERE n.name = 'Alix' OR n.name = 'Gus' RETURN n.name"
             )
         )
         assert len(result) == 2
 
     def test_not(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE NOT n.city = 'NYC' RETURN n.name"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) WHERE NOT n.city = 'NYC' RETURN n.name")
         )
         assert len(result) == 1
         assert result[0]["n.name"] == "Gus"
@@ -454,9 +401,7 @@ class TestCypherExpressions:
         db.create_node(["Item"], {"a": True, "b": False})
         db.create_node(["Item"], {"a": True, "b": True})
         db.create_node(["Item"], {"a": False, "b": False})
-        result = list(
-            db.execute_cypher("MATCH (n:Item) WHERE n.a XOR n.b RETURN n.a, n.b")
-        )
+        result = list(db.execute_cypher("MATCH (n:Item) WHERE n.a XOR n.b RETURN n.a, n.b"))
         assert len(result) == 1
         assert result[0]["n.a"] is True
         assert result[0]["n.b"] is False
@@ -508,9 +453,7 @@ class TestCypherExpressions:
     # --- String operators ---
 
     def test_string_concat(self, db):
-        result = list(
-            db.execute_cypher("WITH 'hello' AS a RETURN a + ' world' AS greeting")
-        )
+        result = list(db.execute_cypher("WITH 'hello' AS a RETURN a + ' world' AS greeting"))
         assert result[0]["greeting"] == "hello world"
 
     def test_string_concat_standalone(self, db):
@@ -523,18 +466,14 @@ class TestCypherExpressions:
     def test_is_null(self, db):
         db.create_node(["Item"], {"name": "WithProp", "val": 1})
         db.create_node(["Item"], {"name": "NoProp"})
-        result = list(
-            db.execute_cypher("MATCH (n:Item) WHERE n.val IS NULL RETURN n.name")
-        )
+        result = list(db.execute_cypher("MATCH (n:Item) WHERE n.val IS NULL RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "NoProp"
 
     def test_is_not_null(self, db):
         db.create_node(["Item"], {"name": "WithProp", "val": 1})
         db.create_node(["Item"], {"name": "NoProp"})
-        result = list(
-            db.execute_cypher("MATCH (n:Item) WHERE n.val IS NOT NULL RETURN n.name")
-        )
+        result = list(db.execute_cypher("MATCH (n:Item) WHERE n.val IS NOT NULL RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "WithProp"
 
@@ -552,18 +491,14 @@ class TestCypherExpressions:
 
     def test_starts_with(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n.name"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.name STARTS WITH 'A' RETURN n.name")
         )
         assert len(result) == 1
         assert result[0]["n.name"] == "Alix"
 
     def test_ends_with(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.name ENDS WITH 'e' RETURN n.name"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.name ENDS WITH 'e' RETURN n.name")
         )
         names = {r["n.name"] for r in result}
         assert "Alix" in names
@@ -571,9 +506,7 @@ class TestCypherExpressions:
 
     def test_contains(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.name CONTAINS 'li' RETURN n.name"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.name CONTAINS 'li' RETURN n.name")
         )
         names = {r["n.name"] for r in result}
         assert "Alix" in names
@@ -581,9 +514,7 @@ class TestCypherExpressions:
 
     def test_regex(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) WHERE n.name =~ 'A.*' RETURN n.name"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) WHERE n.name =~ 'A.*' RETURN n.name")
         )
         assert len(result) == 1
         assert result[0]["n.name"] == "Alix"
@@ -634,9 +565,7 @@ class TestCypherExpressions:
     def test_binary_expr_in_return(self, pattern_db):
         """RETURN count(n) > 0 AS has_data (Phase 0 fix)."""
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) RETURN count(n) > 0 AS has_people"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) RETURN count(n) > 0 AS has_people")
         )
         assert result[0]["has_people"] is True
 
@@ -673,9 +602,7 @@ class TestCypherExpressions:
 
     def test_exists_as_alias(self, pattern_db):
         """`exists` should be usable as an alias name."""
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) RETURN count(n) AS exists")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) RETURN count(n) AS exists"))
         assert result[0]["exists"] == 3
 
 
@@ -698,25 +625,19 @@ class TestCypherScalarFunctions:
 
     def test_id_function(self, db):
         db.create_node(["Person"], {"name": "IdTest"})
-        result = list(
-            db.execute_cypher("MATCH (n:Person {name: 'IdTest'}) RETURN id(n) AS nid")
-        )
+        result = list(db.execute_cypher("MATCH (n:Person {name: 'IdTest'}) RETURN id(n) AS nid"))
         assert result[0]["nid"] is not None
 
     def test_labels_function(self, db):
         db.create_node(["Person", "Employee"], {"name": "LabelTest"})
-        result = list(
-            db.execute_cypher("MATCH (n {name: 'LabelTest'}) RETURN labels(n) AS lbls")
-        )
+        result = list(db.execute_cypher("MATCH (n {name: 'LabelTest'}) RETURN labels(n) AS lbls"))
         lbls = result[0]["lbls"]
         assert "Person" in lbls
         assert "Employee" in lbls
 
     def test_keys_function(self, db):
         db.create_node(["Person"], {"name": "KeyTest", "age": 30})
-        result = list(
-            db.execute_cypher("MATCH (n:Person {name: 'KeyTest'}) RETURN keys(n) AS k")
-        )
+        result = list(db.execute_cypher("MATCH (n:Person {name: 'KeyTest'}) RETURN keys(n) AS k"))
         keys = result[0]["k"]
         assert "name" in keys
         assert "age" in keys
@@ -724,9 +645,7 @@ class TestCypherScalarFunctions:
     def test_properties_function(self, db):
         db.create_node(["Person"], {"name": "PropTest", "age": 25})
         result = list(
-            db.execute_cypher(
-                "MATCH (n:Person {name: 'PropTest'}) RETURN properties(n) AS props"
-            )
+            db.execute_cypher("MATCH (n:Person {name: 'PropTest'}) RETURN properties(n) AS props")
         )
         props = result[0]["props"]
         assert props["name"] == "PropTest"
@@ -764,9 +683,7 @@ class TestCypherScalarFunctions:
     def test_coalesce_first_non_null(self, db):
         db.create_node(["Item"], {"name": "Coal2"})
         result = list(
-            db.execute_cypher(
-                "MATCH (n:Item {name: 'Coal2'}) RETURN coalesce(n.a, n.b, 42) AS val"
-            )
+            db.execute_cypher("MATCH (n:Item {name: 'Coal2'}) RETURN coalesce(n.a, n.b, 42) AS val")
         )
         assert result[0]["val"] == 42
 
@@ -803,21 +720,15 @@ class TestCypherScalarFunctions:
         assert result[0]["val"] == "hello"
 
     def test_replace(self, db):
-        result = list(
-            db.execute_cypher("WITH 'hello' AS s RETURN replace(s, 'l', 'r') AS val")
-        )
+        result = list(db.execute_cypher("WITH 'hello' AS s RETURN replace(s, 'l', 'r') AS val"))
         assert result[0]["val"] == "herro"
 
     def test_substring(self, db):
-        result = list(
-            db.execute_cypher("WITH 'hello' AS s RETURN substring(s, 1, 3) AS val")
-        )
+        result = list(db.execute_cypher("WITH 'hello' AS s RETURN substring(s, 1, 3) AS val"))
         assert result[0]["val"] == "ell"
 
     def test_split(self, db):
-        result = list(
-            db.execute_cypher("WITH 'a,b,c' AS s RETURN split(s, ',') AS val")
-        )
+        result = list(db.execute_cypher("WITH 'a,b,c' AS s RETURN split(s, ',') AS val"))
         assert result[0]["val"] == ["a", "b", "c"]
 
     def test_upper(self, db):
@@ -829,9 +740,7 @@ class TestCypherScalarFunctions:
         assert result[0]["val"] == "hello"
 
     def test_reverse_list(self, db):
-        result = list(
-            db.execute_cypher("WITH [1, 2, 3] AS lst RETURN reverse(lst) AS val")
-        )
+        result = list(db.execute_cypher("WITH [1, 2, 3] AS lst RETURN reverse(lst) AS val"))
         assert result[0]["val"] == [3, 2, 1]
 
     def test_reverse_string(self, db):
@@ -871,9 +780,7 @@ class TestCypherScalarFunctions:
         assert result[0]["val"] == [1, 2, 3, 4, 5]
 
     def test_range_with_step(self, db):
-        result = list(
-            db.execute_cypher("UNWIND [1] AS _ RETURN range(0, 10, 3) AS val")
-        )
+        result = list(db.execute_cypher("UNWIND [1] AS _ RETURN range(0, 10, 3) AS val"))
         assert result[0]["val"] == [0, 3, 6, 9]
 
 
@@ -886,49 +793,33 @@ class TestCypherAggregates:
     """Test Cypher aggregate functions."""
 
     def test_count(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) RETURN count(n) AS cnt")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) RETURN count(n) AS cnt"))
         assert result[0]["cnt"] == 3
 
     def test_count_distinct(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) RETURN count(DISTINCT n.city) AS cnt"
-            )
+            pattern_db.execute_cypher("MATCH (n:Person) RETURN count(DISTINCT n.city) AS cnt")
         )
         assert result[0]["cnt"] == 2
 
     def test_sum(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) RETURN sum(n.age) AS total")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) RETURN sum(n.age) AS total"))
         assert result[0]["total"] == 90
 
     def test_avg(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) RETURN avg(n.age) AS average")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) RETURN avg(n.age) AS average"))
         assert result[0]["average"] == 30.0
 
     def test_min(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) RETURN min(n.age) AS youngest")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) RETURN min(n.age) AS youngest"))
         assert result[0]["youngest"] == 25
 
     def test_max(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher("MATCH (n:Person) RETURN max(n.age) AS oldest")
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) RETURN max(n.age) AS oldest"))
         assert result[0]["oldest"] == 35
 
     def test_collect(self, pattern_db):
-        result = list(
-            pattern_db.execute_cypher(
-                "MATCH (n:Person) RETURN collect(n.name) AS names"
-            )
-        )
+        result = list(pattern_db.execute_cypher("MATCH (n:Person) RETURN collect(n.name) AS names"))
         names = result[0]["names"]
         assert set(names) == {"Alix", "Gus", "Charlie"}
 
@@ -941,17 +832,13 @@ class TestCypherAggregates:
     def test_percentile_disc(self, db):
         for v in [10, 20, 30, 40, 50]:
             db.create_node(["Val"], {"v": v})
-        result = list(
-            db.execute_cypher("MATCH (n:Val) RETURN percentileDisc(n.v, 0.5) AS median")
-        )
+        result = list(db.execute_cypher("MATCH (n:Val) RETURN percentileDisc(n.v, 0.5) AS median"))
         assert result[0]["median"] == 30
 
     def test_percentile_cont(self, db):
         for v in [10, 20, 30, 40, 50]:
             db.create_node(["Val"], {"v": v})
-        result = list(
-            db.execute_cypher("MATCH (n:Val) RETURN percentileCont(n.v, 0.5) AS median")
-        )
+        result = list(db.execute_cypher("MATCH (n:Val) RETURN percentileCont(n.v, 0.5) AS median"))
         assert result[0]["median"] == 30.0
 
 
@@ -966,9 +853,7 @@ class TestCypherPredicateFunctions:
     def test_exists_property(self, db):
         db.create_node(["Item"], {"name": "With", "email": "a@b.com"})
         db.create_node(["Item"], {"name": "Without"})
-        result = list(
-            db.execute_cypher("MATCH (n:Item) WHERE exists(n.email) RETURN n.name")
-        )
+        result = list(db.execute_cypher("MATCH (n:Item) WHERE exists(n.email) RETURN n.name"))
         assert len(result) == 1
         assert result[0]["n.name"] == "With"
 
@@ -976,9 +861,7 @@ class TestCypherPredicateFunctions:
         db.create_node(["Data"], {"name": "AllPos", "scores": [1, 2, 3]})
         db.create_node(["Data"], {"name": "HasNeg", "scores": [1, -2, 3]})
         result = list(
-            db.execute_cypher(
-                "MATCH (n:Data) WHERE all(x IN n.scores WHERE x > 0) RETURN n.name"
-            )
+            db.execute_cypher("MATCH (n:Data) WHERE all(x IN n.scores WHERE x > 0) RETURN n.name")
         )
         assert len(result) == 1
         assert result[0]["n.name"] == "AllPos"
@@ -998,9 +881,7 @@ class TestCypherPredicateFunctions:
         db.create_node(["Data"], {"name": "AllPos", "scores": [1, 2, 3]})
         db.create_node(["Data"], {"name": "HasNeg", "scores": [1, -2, 3]})
         result = list(
-            db.execute_cypher(
-                "MATCH (n:Data) WHERE none(x IN n.scores WHERE x < 0) RETURN n.name"
-            )
+            db.execute_cypher("MATCH (n:Data) WHERE none(x IN n.scores WHERE x < 0) RETURN n.name")
         )
         assert len(result) == 1
         assert result[0]["n.name"] == "AllPos"
@@ -1009,9 +890,7 @@ class TestCypherPredicateFunctions:
         db.create_node(["Data"], {"name": "OneMatch", "ids": [1, 2, 3]})
         db.create_node(["Data"], {"name": "TwoMatch", "ids": [1, 1, 3]})
         result = list(
-            db.execute_cypher(
-                "MATCH (n:Data) WHERE single(x IN n.ids WHERE x = 1) RETURN n.name"
-            )
+            db.execute_cypher("MATCH (n:Data) WHERE single(x IN n.ids WHERE x = 1) RETURN n.name")
         )
         assert len(result) == 1
         assert result[0]["n.name"] == "OneMatch"
@@ -1031,9 +910,7 @@ class TestCypherPatterns:
 
     def test_directed_edge_pattern(self, pattern_db):
         result = list(
-            pattern_db.execute_cypher(
-                "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name"
-            )
+            pattern_db.execute_cypher("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name")
         )
         assert len(result) == 3
 
@@ -1058,8 +935,7 @@ class TestCypherPatterns:
 
         result = list(
             db.execute_cypher(
-                "MATCH (start:Node {name: 'a'})-[:NEXT*1..3]->(end_node:Node) "
-                "RETURN end_node.name"
+                "MATCH (start:Node {name: 'a'})-[:NEXT*1..3]->(end_node:Node) RETURN end_node.name"
             )
         )
         names = {r["end_node.name"] for r in result}

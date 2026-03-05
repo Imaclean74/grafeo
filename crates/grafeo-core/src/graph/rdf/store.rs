@@ -1156,7 +1156,7 @@ mod tests {
         store.insert(triples[0].clone());
         assert_eq!(store.len(), 1);
 
-        // Batch insert all 4 — only 3 should be new
+        // Batch insert all 4: only 3 should be new
         let inserted = store.batch_insert(triples.clone());
         assert_eq!(inserted, 3);
         assert_eq!(store.len(), 4);

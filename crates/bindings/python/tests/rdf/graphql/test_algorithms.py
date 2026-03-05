@@ -10,6 +10,7 @@ algorithm execution is independent of query language.
 """
 
 import random
+
 from tests.bases.test_algorithms import BaseAlgorithmsTest
 
 # Try to import grafeo
@@ -22,9 +23,7 @@ except ImportError:
 
 import pytest
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 class TestRDFGraphQLAlgorithms(BaseAlgorithmsTest):

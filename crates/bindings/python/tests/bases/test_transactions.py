@@ -119,15 +119,9 @@ class BaseTransactionsTest(ABC):
         """Test multiple operations in a single transaction."""
         with db.begin_transaction() as tx:
             # Create multiple nodes
-            self.execute_in_tx(
-                tx, self.insert_query(["Person"], {"name": "Multi1", "idx": 1})
-            )
-            self.execute_in_tx(
-                tx, self.insert_query(["Person"], {"name": "Multi2", "idx": 2})
-            )
-            self.execute_in_tx(
-                tx, self.insert_query(["Person"], {"name": "Multi3", "idx": 3})
-            )
+            self.execute_in_tx(tx, self.insert_query(["Person"], {"name": "Multi1", "idx": 1}))
+            self.execute_in_tx(tx, self.insert_query(["Person"], {"name": "Multi2", "idx": 2}))
+            self.execute_in_tx(tx, self.insert_query(["Person"], {"name": "Multi3", "idx": 3}))
             tx.commit()
 
         # All nodes should exist
@@ -145,9 +139,7 @@ class BaseTransactionsTest(ABC):
         elif len(rows[0]) > 0:
             first_value = list(rows[0].values())[0]
             # If it's a number, use it as count; otherwise count the rows
-            count_value = (
-                first_value if isinstance(first_value, (int, float)) else len(rows)
-            )
+            count_value = first_value if isinstance(first_value, (int, float)) else len(rows)
         else:
             count_value = len(rows)
         assert count_value >= 3

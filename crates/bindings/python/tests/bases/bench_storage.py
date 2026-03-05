@@ -18,13 +18,14 @@ Read Operations:
 - Pattern matching (triangles)
 """
 
-import time
 import gc
 import statistics
+import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from collections.abc import Callable
 from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -77,7 +78,7 @@ class BaseBenchStorage(ABC):
         name: str,
         setup: Callable[[], Any],
         operation: Callable[[Any], None],
-        teardown: Optional[Callable[[Any], None]] = None,
+        teardown: Callable[[Any], None] | None = None,
         ops_count: int = 1,
     ) -> BenchmarkResult:
         """Run a benchmark with setup, operation, and optional teardown."""
@@ -137,7 +138,8 @@ class BaseBenchStorage(ABC):
         max_name_len = max(len(r.name) for r in self.results)
 
         print(
-            f"{'Benchmark':<{max_name_len}} | {'Mean (ms)':<12} | {'Std (ms)':<10} | {'Ops/sec':<12}"
+            f"{'Benchmark':<{max_name_len}} | {'Mean (ms)':<12} | "
+            f"{'Std (ms)':<10} | {'Ops/sec':<12}"
         )
         print("-" * 80)
 
@@ -206,9 +208,7 @@ class BaseBenchStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def sort_query(
-        self, label: str, sort_prop: str, desc: bool = False, limit: int = 100
-    ) -> str:
+    def sort_query(self, label: str, sort_prop: str, desc: bool = False, limit: int = 100) -> str:
         """Query: MATCH (n:Label) RETURN n ORDER BY n.prop [DESC] LIMIT x"""
         raise NotImplementedError
 
@@ -239,9 +239,7 @@ class BaseBenchStorage(ABC):
 
         def operation(db):
             for i in range(count):
-                self.create_single_node(
-                    db, ["Person"], {"name": f"Person{i}", "age": 25 + i % 50}
-                )
+                self.create_single_node(db, ["Person"], {"name": f"Person{i}", "age": 25 + i % 50})
 
         return self.benchmark(
             f"Insert {count} nodes",
@@ -292,9 +290,7 @@ class BaseBenchStorage(ABC):
             db, node_ids = ctx
             for i in range(len(node_ids)):
                 for j in range(i + 1, min(i + 10, len(node_ids))):
-                    self.create_edge(
-                        db, node_ids[i], node_ids[j], "CONNECTED", {"weight": i + j}
-                    )
+                    self.create_edge(db, node_ids[i], node_ids[j], "CONNECTED", {"weight": i + j})
 
         return self.benchmark(
             f"Insert edges ({node_count} nodes)",
@@ -457,9 +453,7 @@ class BaseBenchStorage(ABC):
 
         def operation(db):
             for i in range(lookup_count):
-                query = self.point_lookup_query(
-                    "Person", "email", f"user{i}@example.com"
-                )
+                query = self.point_lookup_query("Person", "email", f"user{i}@example.com")
                 list(self.execute_query(db, query))
 
         return self.benchmark(
@@ -546,9 +540,7 @@ class BaseBenchStorage(ABC):
             ops_count=1,
         )
 
-    def bench_triangle_count(
-        self, db_factory, num_cliques: int = 10, clique_size: int = 10
-    ):
+    def bench_triangle_count(self, db_factory, num_cliques: int = 10, clique_size: int = 10):
         """Benchmark triangle counting."""
 
         def setup():
@@ -579,9 +571,7 @@ class BaseBenchStorage(ABC):
         self.bench_many_properties(db_factory, count=50, prop_count=30)
         self.bench_multi_label_nodes(db_factory, count=200)
 
-    def run_read_benchmarks(
-        self, db_factory, node_count: int = 500, avg_edges: int = 5
-    ):
+    def run_read_benchmarks(self, db_factory, node_count: int = 500, avg_edges: int = 5):
         """Run all read benchmarks."""
 
         def setup_func(db):

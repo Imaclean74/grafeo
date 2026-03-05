@@ -4,7 +4,9 @@ Benchmarks storage operations using Gremlin syntax.
 """
 
 import random
+
 import pytest
+
 from tests.bases.bench_storage import BaseBenchStorage
 
 
@@ -58,9 +60,7 @@ class BenchGremlinStorage(BaseBenchStorage):
         self, from_label: str, rel_type: str, to_label: str, limit: int = None
     ) -> str:
         """Gremlin 1-hop traversal query."""
-        query = (
-            f"g.V().hasLabel('{from_label}').out('{rel_type}').hasLabel('{to_label}')"
-        )
+        query = f"g.V().hasLabel('{from_label}').out('{rel_type}').hasLabel('{to_label}')"
         if limit:
             query += f".limit({limit})"
         return query
@@ -72,21 +72,13 @@ class BenchGremlinStorage(BaseBenchStorage):
     def aggregation_query(self, label: str, group_prop: str, agg_prop: str) -> str:
         """Gremlin aggregation query."""
         return (
-            f"g.V().hasLabel('{label}')"
-            f".group().by('{group_prop}')"
-            f".by(values('{agg_prop}').mean())"
+            f"g.V().hasLabel('{label}').group().by('{group_prop}').by(values('{agg_prop}').mean())"
         )
 
-    def sort_query(
-        self, label: str, sort_prop: str, desc: bool = False, limit: int = 100
-    ) -> str:
+    def sort_query(self, label: str, sort_prop: str, desc: bool = False, limit: int = 100) -> str:
         """Gremlin sort query."""
         order = "desc" if desc else "asc"
-        return (
-            f"g.V().hasLabel('{label}')"
-            f".order().by('{sort_prop}', {order})"
-            f".limit({limit})"
-        )
+        return f"g.V().hasLabel('{label}').order().by('{sort_prop}', {order}).limit({limit})"
 
     def triangle_query(self, label: str, rel_type: str) -> str:
         """Gremlin triangle pattern query."""

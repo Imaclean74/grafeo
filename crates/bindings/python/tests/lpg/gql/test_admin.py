@@ -28,9 +28,7 @@ class TestGqlAdmin(BaseAdminTest):
         # Create Person nodes
         alix = db.create_node(["Person"], {"name": "Alix", "age": 30, "city": "NYC"})
         gus = db.create_node(["Person"], {"name": "Gus", "age": 25, "city": "LA"})
-        charlie = db.create_node(
-            ["Person"], {"name": "Charlie", "age": 35, "city": "NYC"}
-        )
+        charlie = db.create_node(["Person"], {"name": "Charlie", "age": 35, "city": "NYC"})
 
         # Create Company nodes
         acme = db.create_node(["Company"], {"name": "Acme Corp", "founded": 2010})

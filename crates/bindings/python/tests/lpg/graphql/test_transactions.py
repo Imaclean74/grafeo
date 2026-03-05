@@ -4,6 +4,7 @@ Tests transaction commit, rollback, and isolation using GraphQL syntax.
 """
 
 import pytest
+
 from tests.bases.test_transactions import BaseTransactionsTest
 
 
@@ -29,8 +30,7 @@ class TestGraphQLTransactions(BaseTransactionsTest):
         """Return GraphQL create mutation."""
         label = labels[0] if labels else "Node"
         args = ", ".join(
-            f'{k}: "{v}"' if isinstance(v, str) else f"{k}: {v}"
-            for k, v in props.items()
+            f'{k}: "{v}"' if isinstance(v, str) else f"{k}: {v}" for k, v in props.items()
         )
         return f"""
             mutation {{

@@ -688,7 +688,7 @@ fn test_stress_transaction_conflicts() {
 #[test]
 #[ignore = "stress test: slow in CI, run locally with --ignored"]
 fn test_stress_concurrent_epoch_pressure() {
-    // 4 threads each running 8 sequential transactions — creates many epochs
+    // 4 threads each running 8 sequential transactions, creates many epochs
     let db = Arc::new(GrafeoDB::new_in_memory());
 
     let num_threads = 4;

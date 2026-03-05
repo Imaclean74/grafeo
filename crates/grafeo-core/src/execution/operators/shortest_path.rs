@@ -252,7 +252,7 @@ impl ShortestPathOperator {
                 if let Some(b) = best
                     && depth + 1 > b
                 {
-                    // Clear the queue — no further expansion can improve
+                    // Clear the queue; no further expansion can improve
                     forward_queue.clear();
                     continue;
                 }

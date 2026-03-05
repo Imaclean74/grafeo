@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn test_memory_backend() {
-        let backend = MemoryBackend::new();
+        let backend = MemoryBackend::new().unwrap();
         let store = backend.store();
 
         let id = store.create_node(&["Test"]);

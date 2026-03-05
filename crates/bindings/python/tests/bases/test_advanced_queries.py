@@ -56,18 +56,14 @@ class BaseAdvancedQueriesTest(ABC):
     # =========================================================================
 
     def test_merge_create_new(self, db):
-        result = self.execute_query(
-            db, "MERGE (n:Animal {species: 'Cat'}) RETURN n.species"
-        )
+        result = self.execute_query(db, "MERGE (n:Animal {species: 'Cat'}) RETURN n.species")
         rows = list(result)
         assert len(rows) == 1
 
     def test_merge_match_existing(self, db):
         self.setup_social_graph(db)
         before = db.node_count
-        result = self.execute_query(
-            db, "MERGE (n:Person {name: 'Alix'}) RETURN n.name"
-        )
+        result = self.execute_query(db, "MERGE (n:Person {name: 'Alix'}) RETURN n.name")
         rows = list(result)
         assert len(rows) == 1
         assert db.node_count == before
@@ -75,7 +71,8 @@ class BaseAdvancedQueriesTest(ABC):
     def test_merge_on_create_set(self, db):
         result = self.execute_query(
             db,
-            "MERGE (n:Person {name: 'NewGuy'}) ON CREATE SET n.created = true RETURN n.name, n.created",
+            "MERGE (n:Person {name: 'NewGuy'}) "
+            "ON CREATE SET n.created = true RETURN n.name, n.created",
         )
         rows = list(result)
         assert len(rows) == 1
@@ -97,7 +94,8 @@ class BaseAdvancedQueriesTest(ABC):
         self.setup_social_graph(db)
         result = self.execute_query(
             db,
-            "MATCH (a:Person {name: 'Alix'}) OPTIONAL MATCH (a)-[:KNOWS]->(b:Person) RETURN a.name, b.name",
+            "MATCH (a:Person {name: 'Alix'}) "
+            "OPTIONAL MATCH (a)-[:KNOWS]->(b:Person) RETURN a.name, b.name",
         )
         rows = list(result)
         assert len(rows) >= 1
@@ -131,9 +129,7 @@ class BaseAdvancedQueriesTest(ABC):
 
     def test_null_property_access(self, db):
         self.setup_social_graph(db)
-        result = self.execute_query(
-            db, "MATCH (n:Person {name: 'Alix'}) RETURN n.nonexistent"
-        )
+        result = self.execute_query(db, "MATCH (n:Person {name: 'Alix'}) RETURN n.nonexistent")
         rows = list(result)
         assert len(rows) == 1
 

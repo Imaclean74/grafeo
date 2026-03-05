@@ -5,6 +5,7 @@ GraphQL is used for setup only.
 """
 
 import random
+
 from tests.bases.bench_algorithms import BaseBenchAlgorithms
 
 
@@ -15,9 +16,7 @@ class BenchGraphQLAlgorithms(BaseBenchAlgorithms):
     Uses Python API for graph setup (faster for benchmarks).
     """
 
-    def setup_random_graph(
-        self, db, n_nodes: int, n_edges: int, weighted: bool = True
-    ) -> dict:
+    def setup_random_graph(self, db, n_nodes: int, n_edges: int, weighted: bool = True) -> dict:
         """Set up a random graph for benchmarking."""
         rng = random.Random(42)
 

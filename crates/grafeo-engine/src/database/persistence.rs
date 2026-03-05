@@ -293,7 +293,7 @@ impl super::GrafeoDB {
             }
         }
 
-        // Validation passed — build the database
+        // Validation passed: build the database
         let db = Self::new_in_memory();
 
         for node in snapshot.nodes {

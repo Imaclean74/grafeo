@@ -5,10 +5,12 @@ Compares Grafeo algorithm results against NetworkX to verify correctness.
 
 import random
 import time
+
 from grafeo import GrafeoDB
+
 from tests.bases.test_networkx import (
-    BaseNetworkXComparisonTest,
     BaseNetworkXBenchmarkTest,
+    BaseNetworkXComparisonTest,
 )
 
 

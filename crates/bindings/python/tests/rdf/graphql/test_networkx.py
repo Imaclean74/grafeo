@@ -10,10 +10,12 @@ NetworkX comparison tests use LPG data for graph structure.
 
 import random
 import time
+
 import pytest
+
 from tests.bases.test_networkx import (
-    BaseNetworkXComparisonTest,
     BaseNetworkXBenchmarkTest,
+    BaseNetworkXComparisonTest,
 )
 
 # Try to import grafeo
@@ -25,9 +27,7 @@ except ImportError:
     GRAFEO_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 @pytest.fixture

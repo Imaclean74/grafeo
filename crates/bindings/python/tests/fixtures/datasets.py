@@ -6,10 +6,10 @@ This module provides functions to create common test graphs.
 import random
 
 from .generators import (
-    SocialNetworkGenerator,
-    LDBCLikeGenerator,
-    TreeGenerator,
     CliqueGenerator,
+    LDBCLikeGenerator,
+    SocialNetworkGenerator,
+    TreeGenerator,
     load_data_into_db,
 )
 
@@ -26,9 +26,7 @@ def create_social_graph(db, size: int = 50, avg_edges: int = 5, seed: int = 42):
     Returns:
         dict with 'node_count', 'edge_count'
     """
-    gen = SocialNetworkGenerator(
-        num_nodes=size, avg_edges_per_node=avg_edges, seed=seed
-    )
+    gen = SocialNetworkGenerator(num_nodes=size, avg_edges_per_node=avg_edges, seed=seed)
     node_count, edge_count = load_data_into_db(db, gen)
     return {"node_count": node_count, "edge_count": edge_count}
 
@@ -83,9 +81,7 @@ def create_clique_graph(db, num_cliques: int = 5, clique_size: int = 5, seed: in
     return {"node_count": node_count, "edge_count": edge_count}
 
 
-def create_algorithm_test_graph(
-    db, n_nodes: int = 100, n_edges: int = 300, seed: int = 42
-):
+def create_algorithm_test_graph(db, n_nodes: int = 100, n_edges: int = 300, seed: int = 42):
     """Create a random graph for algorithm testing.
 
     Args:

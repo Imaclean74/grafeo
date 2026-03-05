@@ -6,8 +6,9 @@ create_property_index, drop_property_index, has_property_index,
 find_nodes_by_property, get_nodes_by_label, get_property_batch.
 """
 
+from datetime import UTC, datetime
+
 import pytest
-from datetime import datetime, timezone
 
 try:
     import grafeo
@@ -16,9 +17,7 @@ try:
 except ImportError:
     GRAFEO_AVAILABLE = False
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 @pytest.fixture
@@ -55,9 +54,7 @@ class TestSetNodeProperty:
         db.set_node_property(alix.id, "city", "NYC")
         node = db.get_node(alix.id)
         assert node is not None
-        result = db.execute(
-            f"MATCH (n:Person) WHERE id(n) = {alix.id} RETURN n.city AS c"
-        )
+        result = db.execute(f"MATCH (n:Person) WHERE id(n) = {alix.id} RETURN n.city AS c")
         rows = list(result)
         assert rows[0]["c"] == "NYC"
 
@@ -65,9 +62,7 @@ class TestSetNodeProperty:
         db = populated_db["db"]
         alix = populated_db["alix"]
         db.set_node_property(alix.id, "name", "Alicia")
-        result = db.execute(
-            f"MATCH (n:Person) WHERE id(n) = {alix.id} RETURN n.name AS name"
-        )
+        result = db.execute(f"MATCH (n:Person) WHERE id(n) = {alix.id} RETURN n.name AS name")
         rows = list(result)
         assert rows[0]["name"] == "Alicia"
 
@@ -405,7 +400,7 @@ class TestTypeRoundtrips:
         assert v is not None
 
     def test_datetime_roundtrip(self, db):
-        dt = datetime(2024, 6, 15, 12, 30, 0, tzinfo=timezone.utc)
+        dt = datetime(2024, 6, 15, 12, 30, 0, tzinfo=UTC)
         node = db.create_node(["T"])
         db.set_node_property(node.id, "val", dt)
         result = db.execute(f"MATCH (n) WHERE id(n) = {node.id} RETURN n.val AS v")
@@ -456,7 +451,7 @@ class TestErrorHandling:
     """Test error conditions raise appropriate exceptions."""
 
     def test_invalid_query_syntax(self, db):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match=r".+"):
             db.execute("THIS IS NOT VALID GQL")
 
     def test_execute_on_closed_in_memory_db(self, db):

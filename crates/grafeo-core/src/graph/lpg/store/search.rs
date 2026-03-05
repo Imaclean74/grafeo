@@ -263,7 +263,7 @@ impl LpgStore {
                             (Value::String(a), Value::String(b)) => a.contains(b.as_str()),
                             _ => false,
                         },
-                        _ => false, // Unknown operator — no match
+                        _ => false, // Unknown operator: no match
                     }
                 })
             }

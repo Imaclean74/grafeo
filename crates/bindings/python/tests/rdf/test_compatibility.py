@@ -5,7 +5,6 @@ Verifies that SPARQL and GraphQL return consistent results on RDF data.
 
 import pytest
 
-
 # Try to import grafeo
 try:
     from grafeo import GrafeoDB
@@ -15,9 +14,7 @@ except ImportError:
     GRAFEO_AVAILABLE = False
 
 
-pytestmark = pytest.mark.skipif(
-    not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed"
-)
+pytestmark = pytest.mark.skipif(not GRAFEO_AVAILABLE, reason="Grafeo Python bindings not installed")
 
 
 class TestRDFCrossLanguageConsistency:
@@ -88,8 +85,7 @@ class TestRDFCrossLanguageConsistency:
         """URI-based queries should return consistent results."""
         # Using GQL with URI property
         result = self.db.execute(
-            "MATCH (r:Resource) WHERE r.uri = 'http://example.org/person/alix' "
-            "RETURN r.name"
+            "MATCH (r:Resource) WHERE r.uri = 'http://example.org/person/alix' RETURN r.name"
         )
         rows = list(result)
         assert len(rows) == 1
@@ -107,9 +103,7 @@ class TestRDFTripleModelConsistency:
     def _setup_test_data(self):
         """Create RDF-style data using LPG."""
         # Model triples as: subject node -> predicate edge -> object node
-        self.subject = self.db.create_node(
-            ["Resource"], {"uri": "http://example.org/book/1"}
-        )
+        self.subject = self.db.create_node(["Resource"], {"uri": "http://example.org/book/1"})
         self.object = self.db.create_node(
             ["Literal"], {"value": "The Great Gatsby", "datatype": "xsd:string"}
         )
@@ -132,8 +126,7 @@ class TestRDFTripleModelConsistency:
     def test_subject_query(self):
         """Query all triples for a subject."""
         result = self.db.execute(
-            "MATCH (s:Resource {uri: 'http://example.org/book/1'})-[p]->(o) "
-            "RETURN type(p), o"
+            "MATCH (s:Resource {uri: 'http://example.org/book/1'})-[p]->(o) RETURN type(p), o"
         )
         rows = list(result)
         # Should find the title triple

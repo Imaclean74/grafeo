@@ -72,9 +72,7 @@ class TestGQLSpecificTransactions:
             tx.commit()
 
         # All three should exist
-        result = db.execute(
-            "MATCH (n:Person) WHERE n.name STARTS WITH 'TxPerson' RETURN n.name"
-        )
+        result = db.execute("MATCH (n:Person) WHERE n.name STARTS WITH 'TxPerson' RETURN n.name")
         rows = list(result)
         assert len(rows) == 3
 
@@ -168,15 +166,11 @@ class TestEdgeTypeVisibilityAfterTransaction:
             tx.execute("INSERT (:Person {id: 'txpy_b'})")
             tx.commit()
 
-        db.execute(
-            "MATCH (a {id: 'txpy_a'}), (b {id: 'txpy_b'}) CREATE (a)-[:KNOWS]->(b)"
-        )
+        db.execute("MATCH (a {id: 'txpy_a'}), (b {id: 'txpy_b'}) CREATE (a)-[:KNOWS]->(b)")
 
         rows = list(db.execute("MATCH ({id: 'txpy_a'})-[r]->() RETURN type(r) AS t"))
         assert len(rows) == 1, "Edge should exist"
-        assert rows[0]["t"] == "KNOWS", (
-            f"Edge type must be 'KNOWS', got {rows[0]['t']!r}"
-        )
+        assert rows[0]["t"] == "KNOWS", f"Edge type must be 'KNOWS', got {rows[0]['t']!r}"
 
     def test_tx_nodes_tx_edge_type(self, db):
         """Nodes in first tx, edge in second tx: type(r) must be correct."""
@@ -186,10 +180,7 @@ class TestEdgeTypeVisibilityAfterTransaction:
             tx.commit()
 
         with db.begin_transaction() as tx:
-            tx.execute(
-                "MATCH (a {id: 'txpy2_a'}), (b {id: 'txpy2_b'}) "
-                "CREATE (a)-[:FRIENDS]->(b)"
-            )
+            tx.execute("MATCH (a {id: 'txpy2_a'}), (b {id: 'txpy2_b'}) CREATE (a)-[:FRIENDS]->(b)")
             tx.commit()
 
         rows = list(db.execute("MATCH ({id: 'txpy2_a'})-[r]->() RETURN type(r) AS t"))
@@ -204,9 +195,7 @@ class TestEdgeTypeVisibilityAfterTransaction:
             tx.execute("INSERT (:Person {id: 'pytx_y'})")
             tx.commit()
 
-        db.execute(
-            "MATCH (a {id: 'pyauto_x'}), (b {id: 'pytx_y'}) CREATE (a)-[:LINKED]->(b)"
-        )
+        db.execute("MATCH (a {id: 'pyauto_x'}), (b {id: 'pytx_y'}) CREATE (a)-[:LINKED]->(b)")
 
         rows = list(db.execute("MATCH ({id: 'pyauto_x'})-[r]->() RETURN type(r) AS t"))
         assert len(rows) == 1
@@ -219,10 +208,7 @@ class TestEdgeTypeVisibilityAfterTransaction:
             tx.execute("INSERT (:Person {id: 'filter_b'})")
             tx.commit()
 
-        db.execute(
-            "MATCH (a {id: 'filter_a'}), (b {id: 'filter_b'}) "
-            "CREATE (a)-[:WORKS_AT]->(b)"
-        )
+        db.execute("MATCH (a {id: 'filter_a'}), (b {id: 'filter_b'}) CREATE (a)-[:WORKS_AT]->(b)")
 
         rows = list(db.execute("MATCH ()-[r:WORKS_AT]->() RETURN type(r) AS t"))
         assert len(rows) >= 1, "Type-filtered MATCH should find the edge"

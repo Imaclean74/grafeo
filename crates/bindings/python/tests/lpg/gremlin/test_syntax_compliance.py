@@ -6,7 +6,6 @@ source steps, navigation, filters, map steps, side effects, and predicates.
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -64,12 +63,8 @@ def social_graph(db):
         Diana:   Person  age=28, city="Chicago", score=4.1
         Acme:    Company revenue=1000000
     """
-    alix = db.create_node(
-        ["Person"], {"name": "Alix", "age": 30, "city": "NYC", "score": 4.5}
-    )
-    gus = db.create_node(
-        ["Person"], {"name": "Gus", "age": 25, "city": "LA", "score": 3.8}
-    )
+    alix = db.create_node(["Person"], {"name": "Alix", "age": 30, "city": "NYC", "score": 4.5})
+    gus = db.create_node(["Person"], {"name": "Gus", "age": 25, "city": "LA", "score": 3.8})
     charlie = db.create_node(
         ["Person"], {"name": "Charlie", "age": 35, "city": "NYC", "score": 4.9}
     )
@@ -596,9 +591,7 @@ class TestGremlinMap:
             ".choose(has('age', gt(29)), constant('senior'), constant('junior'))",
         )
         assert len(rows) == 4
-        values = [
-            r if not isinstance(r, dict) else next(iter(r.values())) for r in rows
-        ]
+        values = [r if not isinstance(r, dict) else next(iter(r.values())) for r in rows]
         assert values.count("senior") == 2  # Alix(30), Charlie(35)
         assert values.count("junior") == 2  # Gus(25), Diana(28)
 
@@ -729,9 +722,7 @@ class TestGremlinSideEffects:
         db, _ = social_graph
         rows = _rows(
             db,
-            "g.V().hasLabel('Person').aggregate('x')"
-            ".out('knows').aggregate('y')"
-            ".select('x')",
+            "g.V().hasLabel('Person').aggregate('x').out('knows').aggregate('y').select('x')",
         )
         # The select('x') should return the collected person vertices
         assert len(rows) >= 1

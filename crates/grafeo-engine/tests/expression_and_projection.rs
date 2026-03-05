@@ -54,7 +54,7 @@ fn create_test_graph() -> GrafeoDB {
 }
 
 // ============================================================================
-// CASE expressions — covers expression.rs Case branch
+// CASE expressions: covers expression.rs Case branch
 // ============================================================================
 
 #[test]
@@ -79,7 +79,7 @@ fn test_case_when_then_else() {
 }
 
 // ============================================================================
-// EXISTS subquery — covers expression.rs ExistsSubquery, extract_exists_pattern
+// EXISTS subquery: covers expression.rs ExistsSubquery, extract_exists_pattern
 // ============================================================================
 
 #[test]
@@ -113,7 +113,7 @@ fn test_exists_subquery_no_match() {
 }
 
 // ============================================================================
-// Complex EXISTS subquery — covers semi-join rewrite in planner/filter.rs
+// Complex EXISTS subquery: covers semi-join rewrite in planner/filter.rs
 // ============================================================================
 
 /// Extended graph: Person nodes with KNOWS edges, City nodes with LIVES_IN edges.
@@ -303,7 +303,7 @@ fn test_exists_complex_gql_syntax() {
 }
 
 // ============================================================================
-// List/Map expressions — covers expression.rs List, Map branches
+// List/Map expressions: covers expression.rs List, Map branches
 // ============================================================================
 
 #[test]
@@ -326,7 +326,7 @@ fn test_list_property_in_return() {
 }
 
 // ============================================================================
-// Index/slice access — covers expression.rs IndexAccess, SliceAccess
+// Index/slice access: covers expression.rs IndexAccess, SliceAccess
 // ============================================================================
 
 #[test]
@@ -346,7 +346,7 @@ fn test_index_access() {
 }
 
 // ============================================================================
-// RETURN with type() function — covers project.rs "type" branch
+// RETURN with type() function: covers project.rs "type" branch
 // ============================================================================
 
 #[test]
@@ -365,7 +365,7 @@ fn test_return_type_function() {
 }
 
 // ============================================================================
-// ORDER BY — covers plan_sort property projections
+// ORDER BY: covers plan_sort property projections
 // ============================================================================
 
 #[test]
@@ -401,7 +401,7 @@ fn test_order_by_property_desc() {
 }
 
 // ============================================================================
-// WITH clause — covers plan_project
+// WITH clause: covers plan_project
 // ============================================================================
 
 #[test]
@@ -423,7 +423,7 @@ fn test_with_filters_pipeline() {
     let db = create_test_graph();
     let session = db.session();
 
-    // WITH n WHERE ... filters before RETURN — the WHERE applies to the WITH clause
+    // WITH n WHERE ... filters before RETURN, the WHERE applies to the WITH clause
     let result = session
         .execute("MATCH (n:Person) WHERE n.age > 28 WITH n RETURN n.name")
         .unwrap();
@@ -433,7 +433,7 @@ fn test_with_filters_pipeline() {
 }
 
 // ============================================================================
-// Aggregations — covers gql_translator extract_aggregates_and_groups
+// Aggregations: covers gql_translator extract_aggregates_and_groups
 // ============================================================================
 
 #[test]
@@ -524,7 +524,7 @@ fn test_aggregate_order_by() {
 }
 
 // ============================================================================
-// SKIP and LIMIT — covers plan_skip, plan_limit
+// SKIP and LIMIT: covers plan_skip, plan_limit
 // ============================================================================
 
 #[test]
@@ -556,7 +556,7 @@ fn test_skip_offsets_rows() {
 }
 
 // ============================================================================
-// DISTINCT — covers DistinctOp planning
+// DISTINCT: covers DistinctOp planning
 // ============================================================================
 
 #[test]

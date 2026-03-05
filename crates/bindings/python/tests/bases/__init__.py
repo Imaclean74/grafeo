@@ -19,15 +19,13 @@ Comparison Test Classes:
 - BaseSolvORBenchmarkTest: Benchmark against OR-Tools
 """
 
-from .test_mutations import BaseMutationsTest
-from .test_transactions import BaseTransactionsTest
-from .test_algorithms import BaseAlgorithmsTest
-
-from .bench_storage import BaseBenchStorage, BenchmarkResult
 from .bench_algorithms import BaseBenchAlgorithms
-
-from .test_networkx import BaseNetworkXComparisonTest, BaseNetworkXBenchmarkTest
-from .test_solvor import BaseSolvORComparisonTest, BaseSolvORBenchmarkTest
+from .bench_storage import BaseBenchStorage, BenchmarkResult
+from .test_algorithms import BaseAlgorithmsTest
+from .test_mutations import BaseMutationsTest
+from .test_networkx import BaseNetworkXBenchmarkTest, BaseNetworkXComparisonTest
+from .test_solvor import BaseSolvORBenchmarkTest, BaseSolvORComparisonTest
+from .test_transactions import BaseTransactionsTest
 
 __all__ = [
     # Test base classes

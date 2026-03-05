@@ -638,7 +638,7 @@ impl Binder {
                 }
                 Ok(())
             }
-            // DDL operators don't need binding — they're handled before the binder
+            // DDL operators don't need binding: they're handled before the binder
             LogicalOperator::CreatePropertyGraph(_) => Ok(()),
             // Procedure calls: register yielded columns as variables for downstream operators
             LogicalOperator::CallProcedure(call) => {

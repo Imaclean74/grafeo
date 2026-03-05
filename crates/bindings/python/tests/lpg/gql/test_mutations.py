@@ -41,9 +41,7 @@ class TestGQLMutations(BaseMutationsTest):
             value_str = f"'{value}'"
         else:
             value_str = str(value)
-        return (
-            f"MATCH (n:{label}) WHERE n.{prop} {op} {value_str} RETURN n.{return_prop}"
-        )
+        return f"MATCH (n:{label}) WHERE n.{prop} {op} {value_str} RETURN n.{return_prop}"
 
     def delete_node_query(self, label: str, prop: str, value) -> str:
         """GQL: MATCH (n:<label>) WHERE n.<prop> = <value> DELETE n"""
@@ -121,9 +119,7 @@ class TestGQLSpecificMutations:
 
     def test_gql_multiple_labels_syntax(self, db):
         """Test GQL multiple labels syntax."""
-        result = db.execute(
-            "INSERT (:Person:Developer:Senior {name: 'MultiLabel'}) RETURN *"
-        )
+        result = db.execute("INSERT (:Person:Developer:Senior {name: 'MultiLabel'}) RETURN *")
         list(result)
 
         result = db.execute("MATCH (n:Person:Developer) RETURN n.name")
@@ -144,14 +140,9 @@ class TestGQLSpecificMutations:
         """Test SET with multiple properties."""
         db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'NYC'})")
 
-        db.execute(
-            "MATCH (n:Person) WHERE n.name = 'Alix' "
-            "SET n.age = 31, n.city = 'LA' RETURN n"
-        )
+        db.execute("MATCH (n:Person) WHERE n.name = 'Alix' SET n.age = 31, n.city = 'LA' RETURN n")
 
-        result = db.execute(
-            "MATCH (n:Person) WHERE n.name = 'Alix' RETURN n.age, n.city"
-        )
+        result = db.execute("MATCH (n:Person) WHERE n.name = 'Alix' RETURN n.age, n.city")
         rows = list(result)
         assert len(rows) == 1
         assert rows[0]["n.age"] == 31
@@ -207,8 +198,6 @@ class TestGQLSpecificMutations:
         rows = list(result)
         assert rows[0]["cnt"] == 1
 
-        result = db.execute(
-            "MATCH (n:Person) WHERE n.name = 'MergeExisting' RETURN n.age"
-        )
+        result = db.execute("MATCH (n:Person) WHERE n.name = 'MergeExisting' RETURN n.age")
         rows = list(result)
         assert rows[0]["n.age"] == 31

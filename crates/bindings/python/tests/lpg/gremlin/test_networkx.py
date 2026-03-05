@@ -6,11 +6,13 @@ Note: These tests use Python API only, they don't require Gremlin support.
 
 import random
 import time
+
 import pytest
 from grafeo import GrafeoDB
+
 from tests.bases.test_networkx import (
-    BaseNetworkXComparisonTest,
     BaseNetworkXBenchmarkTest,
+    BaseNetworkXComparisonTest,
 )
 
 
