@@ -77,8 +77,8 @@ with db.begin_transaction() as tx:
 ```python
 # Using context manager
 with db.begin_transaction() as tx:
-    tx.execute("INSERT (:Person {name: 'Alice'})")
-    tx.execute("INSERT (:Person {name: 'Bob'})")
+    tx.execute("INSERT (:Person {name: 'Alix'})")
+    tx.execute("INSERT (:Person {name: 'Gus'})")
     tx.commit()  # Both inserts committed atomically
 
 # Rollback on error
@@ -90,7 +90,7 @@ with db.begin_transaction() as tx:
 with db.begin_transaction() as tx:
     tx.execute_sparql("""
         INSERT DATA {
-            <http://example.org/alice> <http://xmlns.com/foaf/0.1/name> "Alice" .
+            <http://example.org/alix> <http://xmlns.com/foaf/0.1/name> "Alix" .
         }
     """)
     tx.commit()

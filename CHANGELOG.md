@@ -2,23 +2,55 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.14] - Unreleased
+## [0.5.14] - 2025-03-05
+
+Moving crates and lots of small improvements & fixes
 
 ### Added
 
 - **EXPLAIN statement**: `EXPLAIN <query>` in GQL and Cypher returns the optimized logical plan tree with operator names, parameters, and structure
 - **EXPLAIN pushdown hints**: EXPLAIN output annotates filters with execution strategy (`[index: prop]`, `[range: prop]`, `[label-first]`)
 - **WASM size optimization**: `wasm-opt -Oz` now applied during release builds for smaller binaries
+- **NetworkX bridge**: added `adj` property (adjacency dict-of-dicts) and `subgraph(nodes)` method for induced subgraph extraction
+- **SPARQL date/time functions**: NOW, YEAR, MONTH, DAY, HOURS, MINUTES, SECONDS, TIMEZONE, TZ in RDF execution path
+- **SPARQL hash functions**: MD5, SHA1, SHA256, SHA384, SHA512 (new `md5`, `sha1`, `sha2` deps, gated behind `rdf` feature)
+- **SPARQL RDF term functions**: LANG, DATATYPE, IRI/URI, BNODE, STRDT, STRLANG, UUID, STRUUID, sameTerm in RDF execution path
+- **SPARQL numeric functions**: RAND in RDF execution path
+- **GROUP_CONCAT aggregate**: proper string concatenation with separator (was mapped to Collect)
+- **SAMPLE aggregate**: returns first non-null value from group (was mapped to Collect)
+
+### Fixed
+
+- **Cypher count(\*) parser**: `count(*)` now parses correctly when `count` is tokenized as a contextual keyword identifier (fixes FOREACH + RETURN count(\*) queries)
+- **SPARQL unary plus**: unary `+` operator now treated as identity (was incorrectly mapped to `NOT`)
+- **Auto-commit for mutations**: queries with mutations (INSERT, CREATE, DELETE, MERGE, SET) now automatically begin and commit a transaction when no explicit transaction is active, fixing data loss when using single-shot `execute()` calls or the CLI
+- **WAL store compilation**: fixed `wal_store.rs` build errors (missing `ArcStr` re-export, iterator/Vec mismatch) that blocked `--all-features` builds
+- **WAL persistence for queries**: INSERT/DELETE/SET executed via GQL/Cypher now persist to WAL (previously only the CRUD API logged to WAL)
+- **CLI `data dump --format` panic**: renamed conflicting `--format` flag to `--export-format`
+- **CLI silent DB creation**: all commands now error on nonexistent databases instead of silently creating them
+- **WASM test suite**: fixed compilation (`run_in_node` removal) and runtime panics (`Instant::now` on wasm32)
+- **WAL remove property**: `remove_node_property` and `remove_edge_property` now log to WAL for persistence
+- **CLI `data dump`/`data load`**: implemented JSON Lines export/import for nodes and edges
+- **CLI `compact`**: implemented actual compaction (MVCC garbage collection), not just dry-run
+- **CLI `index list`**: now shows detailed per-index information (name, type, target)
+- **`detailed_stats().index_count`**: now returns actual catalog index count instead of hardcoded 0
 
 ### Changed
 
+- **Node.js `nodeCount`/`edgeCount`**: changed from getter properties to methods for consistency with the rest of the API (use `db.nodeCount()` instead of `db.nodeCount`)
 - **Arena allocator error handling**: `Arena` and `ArenaAllocator` methods now return `Result<T, AllocError>` instead of panicking on allocation failure (OOM, insufficient space, invalid epoch)
-- **Planner consolidation**: extracted shared planning logic (limit, skip, distinct, union, except, intersect, join, apply, etc.) into `planner/common.rs`, eliminating duplication between LPG and RDF planners
-- **Translator consolidation**: extracted 6 plan-builder functions (`wrap_filter`, `wrap_sort`, `wrap_skip`, `wrap_limit`, `wrap_distinct`, `wrap_return`) into `translator_common.rs`, replacing 100+ repeated operator constructions across all 7 translators
+- **Clippy lint audit**: removed 16 workspace-wide clippy allows by fixing code (comparison chains, elidable lifetimes, manual map/clamp/fill, non-canonical PartialOrd, zero-sized map values, etc.) or narrowing to per-item allows; workspace clippy allows reduced
+- **Dependency refresh**: bumped all transitive dependencies to latest compatible versions (tokio, syn, rustls, zerocopy, etc.)
+- **Planner architecture**: split monolithic planner into `planner/lpg/` and `planner/rdf/` with shared infrastructure in `planner/mod.rs` (PhysicalPlan, expression converters) and `planner/common.rs` (reusable operator builders for limit, skip, distinct, union, except, intersect, join, apply)
+- **Translator architecture**: extracted shared plan-builder functions (`wrap_filter`, `wrap_sort`, `wrap_skip`, `wrap_limit`, `wrap_distinct`, `wrap_return`) into `translators/common.rs`, replacing 100+ repeated operator constructions, and moved all 7 translators into `query/translators/` submodule
+- **Dependency cleanup**: removed unused Arrow/Polars/rustc-hash deps, replaced ahash with foldhash (zero transitive deps), narrowed tokio features, unified getrandom versions
+- **Bob's your uncle**: used better, more orignal names in all examples (documentation, docstrings, etc.)
 
 ## [0.5.13] - 2026-03-04
 
-### Completed
+Improved GQL, Cypher and SPARQL feature support
+
+### Improved
 
 - **GQL**: full compliance with ISO/IEC 39075:2024 (Graph Query Language), covering all features practical for a graph database
 - **Cypher**: improved compliance with openCypher v9 specification, plus common additions (e.g., pattern comprehension, CALL subqueries, FOREACH)
@@ -91,6 +123,8 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.12] - 2026-03-02
 
+Test bases fixes and improvements
+
 ### Added
 
 - **PreparedCommit**: two-phase commit with `session.prepare_commit()`, inspect pending mutation counts and attach metadata before finalizing
@@ -108,6 +142,8 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 - **Unit test coverage**: added tests for `with_store()` integration, snapshot round-trips, Cypher aggregate/union translation, and `LpgStore::clear()`
 
 ## [0.5.11] - 2026-03-02
+
+Query language improvements
 
 ### Added
 
@@ -127,6 +163,8 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.10] - 2026-02-29
 
+Robustness improvements
+
 ### Added
 
 - **Skip index for adjacency chunks**: compressed cold chunks now maintain a zone-map skip index with per-chunk `(min, max)` destination metadata. New `contains_edge(src, dst)` provides O(log n) point lookups by only decompressing chunks whose range overlaps the target. `edges_in_range(src, min, max)` supports efficient range queries with the same pruning
@@ -141,6 +179,8 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 - **Hardened panic messages**: converted ~50 bare `unwrap()` calls to `expect()` with invariant descriptions across graph algorithms (centrality, community detection, components, flow, MST, structure, clustering) and execution operators (expand, join, unwind, project, merge, shortest path, variable-length expand, factorized chunks). No behavioral change - improves diagnostic quality if an internal invariant is ever violated
 
 ## [0.5.9] - 2026-02-28
+
+WASM and property storage improvements
 
 ### Added
 
@@ -164,6 +204,8 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.8] - 2026-02-22
 
+Shared bindings, code slimming and QoL features
+
 ### Added
 
 - **`grafeo-bindings-common` crate**: shared library for all language bindings, eliminating duplicated entity extraction, error classification, and JSON-to-Value conversion. All four bindings (Python, Node.js, C, WASM) now delegate to the common crate
@@ -185,17 +227,19 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.7] - 2026-02-19
 
+UNWIND fixes and architecture improvements
+
 ### Fixed
 
 - **UNWIND mutation property access**: `UNWIND $edges AS e MATCH (a {id: e.src}), (b {id: e.tgt}) CREATE (a)-[:REL {w: e.weight}]->(b)` now correctly resolves map property access (`e.src`, `e.weight`) in CREATE/SET property lists. Previously only column references and constants were supported, causing map properties to resolve as NULL
 
 ### Added
 
-- **`algos` feature flag**: graph algorithms (7,500+ LOC) are now gated behind an `algos` feature flag across grafeo-adapters, grafeo-engine, and Python bindings. Included in the `full` feature group so existing users are unaffected. Reduces compile time and binary size when algorithms are not needed
+- **`algos` feature flag**: graph algorithms are now gated behind an `algos` feature flag across grafeo-adapters, grafeo-engine, and Python bindings. Included in the `full` feature group so existing users are unaffected. Reduces compile time and binary size when algorithms are not needed
 
 ### Improved
 
-- **LpgStore submodule split**: split the monolithic `store.rs` (4,600+ lines) into 10 focused submodules (node_ops, edge_ops, property_ops, traversal, schema, index, search, statistics, versioning). No public API changes. Same pattern as the earlier `database/` module split
+- **LpgStore submodule split**: split the monolithic `store.rs` into 10 focused submodules (node_ops, edge_ops, property_ops, traversal, schema, index, search, statistics, versioning). No public API changes. Same pattern as the earlier `database/` module split
 - **Translator consolidation**: extracted shared `is_aggregate_function` and `to_aggregate_function` helpers from GQL and Cypher translators into a common `translator_common` module, removing code duplication
 - **Doc-test fixes**: converted 9 ignored doc-tests to compilable `no_run` examples across fold.rs, cardinality.rs, and embedding config. Fixed incorrect function signatures in parallel_partition doc-test
 
@@ -241,7 +285,7 @@ Small bugfixes and code quality improvements. 0.5.x will continue to be like thi
 
 ### Added
 
-- **Filter pushdown optimization**: equality predicates on labeled node scans are now pushed down to the store level, bypassing DataChunk materialization and expression evaluation. Compound predicates (e.g., `WHERE n.name = 'Alice' AND n.age > 30`) correctly split: equality part pushed down, remainder kept as post-filter
+- **Filter pushdown optimization**: equality predicates on labeled node scans are now pushed down to the store level, bypassing DataChunk materialization and expression evaluation. Compound predicates (e.g., `WHERE n.name = 'Alix' AND n.age > 30`) correctly split: equality part pushed down, remainder kept as post-filter
 - **Query error positions**: all six parsers (GQL, Cypher, SPARQL, Gremlin, GraphQL, SQL/PGQ) now produce errors with line/column positions and source-caret display
 
 ### Fixed
@@ -322,7 +366,7 @@ Adds SQL/PGQ (SQL:2023) graph queries, MMR search for RAG, auto-syncing vector i
 - **CLI distribution**: install `grafeo-cli` via `cargo install`, `pip install`, or `npm install -g` on Linux, macOS, and Windows (x64 + ARM64)
 - **Configurable cardinality estimation**: tune 9 selectivity parameters via `SelectivityConfig` and compare estimates vs. actuals with `EstimationLog`
 - **AdminService trait**: one interface for all database introspection and maintenance, `info()`, `detailed_stats()`, `schema()`, `validate()`, `wal_status()`, `wal_checkpoint()`
-- **GQL `IN` operator**: `WHERE n.name IN ['Alice', 'Bob']` now works in GQL
+- **GQL `IN` operator**: `WHERE n.name IN ['Alix', 'Gus']` now works in GQL
 - **String escape sequences**: `\'`, `\"`, `\\`, `\n`, `\r`, `\t` now work correctly in GQL, Cypher, and SQL/PGQ strings
 - Comprehensive binding READMEs for Node.js, C, and Python
 - All public API items are now documented (`missing_docs` lint enabled workspace-wide)

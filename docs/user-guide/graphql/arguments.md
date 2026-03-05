@@ -18,7 +18,7 @@ The simplest filter uses direct property equality:
 ```graphql
 # Exact match
 {
-  Person(name: "Alice") {
+  Person(name: "Alix") {
     name
     age
   }
@@ -66,7 +66,7 @@ Use the `where` argument for advanced filtering with comparison operators:
 
 | Suffix | Operator | Example |
 |--------|----------|---------|
-| *(none)* | Equals | `name: "Alice"` |
+| *(none)* | Equals | `name: "Alix"` |
 | `_gt` | Greater than | `age_gt: 30` |
 | `_gte` | Greater than or equal | `age_gte: 30` |
 | `_lt` | Less than | `age_lt: 50` |
@@ -139,8 +139,8 @@ import grafeo
 db = grafeo.GrafeoDB()
 
 # Create data
-db.execute("INSERT (:Person {name: 'Alice', age: 30, city: 'Seattle'})")
-db.execute("INSERT (:Person {name: 'Bob', age: 25, city: 'Portland'})")
+db.execute("INSERT (:Person {name: 'Alix', age: 30, city: 'Seattle'})")
+db.execute("INSERT (:Person {name: 'Gus', age: 25, city: 'Portland'})")
 db.execute("INSERT (:Person {name: 'Charlie', age: 35, city: 'Seattle'})")
 
 # Where clause with operators
@@ -153,7 +153,7 @@ result = db.execute_graphql("""
 }
 """)
 for row in result:
-    print(row)  # Alice (30), Charlie (35)
+    print(row)  # Alix (30), Charlie (35)
 
 # String filtering
 result = db.execute_graphql("""

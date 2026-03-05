@@ -298,12 +298,12 @@ AS {
 
 ```sql
 -- Call with YIELD to select output fields
-CALL find_friends('Alice') YIELD friend_name, mutual_count
+CALL find_friends('Alix') YIELD friend_name, mutual_count
 RETURN friend_name, mutual_count
 ORDER BY mutual_count DESC
 
 -- Filter yielded results
-CALL find_friends('Alice') YIELD friend_name, mutual_count
+CALL find_friends('Alix') YIELD friend_name, mutual_count
 WHERE mutual_count > 3
 RETURN friend_name
 ```

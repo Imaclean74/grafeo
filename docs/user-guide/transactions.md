@@ -11,8 +11,8 @@ db = GrafeoDB()
 
 # Explicit transaction
 with db.begin_transaction() as tx:
-    tx.execute("CREATE (n:Person {name: 'Alice'})")
-    tx.execute("CREATE (n:Person {name: 'Bob'})")
+    tx.execute("CREATE (n:Person {name: 'Alix'})")
+    tx.execute("CREATE (n:Person {name: 'Gus'})")
     tx.commit()  # All changes visible atomically
 
 # Auto-commit mode (default)

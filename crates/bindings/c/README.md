@@ -33,8 +33,8 @@ int main(void) {
     // Create nodes
     uint64_t alice_id, bob_id;
     const char *labels[] = {"Person"};
-    grafeo_create_node(db, labels, 1, "{\"name\":\"Alice\",\"age\":30}", &alice_id);
-    grafeo_create_node(db, labels, 1, "{\"name\":\"Bob\",\"age\":25}", &bob_id);
+    grafeo_create_node(db, labels, 1, "{\"name\":\"Alix\",\"age\":30}", &alice_id);
+    grafeo_create_node(db, labels, 1, "{\"name\":\"Gus\",\"age\":25}", &bob_id);
 
     // Query with GQL
     GrafeoResult *result = NULL;
