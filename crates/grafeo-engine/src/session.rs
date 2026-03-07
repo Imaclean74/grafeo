@@ -555,7 +555,7 @@ impl Session {
             };
         }
 
-        match cmd {
+        let result = match cmd {
             SchemaStatement::CreateNodeType(stmt) => {
                 #[cfg(feature = "wal")]
                 let props_for_wal: Vec<(String, String, bool)> = stmt
@@ -1250,7 +1250,15 @@ impl Session {
                 wal_log!(self, WalRecord::DropProcedure { name: name.clone() });
                 Ok(QueryResult::status(format!("Dropped procedure '{name}'")))
             }
+        };
+
+        // Invalidate all cached query plans after any successful DDL change.
+        // DDL is rare, so clearing the entire cache is cheap and correct.
+        if result.is_ok() {
+            self.query_cache.clear();
         }
+
+        result
     }
 
     /// Creates a vector index on the store by scanning existing nodes.
@@ -2088,6 +2096,21 @@ impl Session {
     /// # Ok(())
     /// # }
     /// ```
+    /// Clears all cached query plans.
+    ///
+    /// The plan cache is shared across all sessions on the same database,
+    /// so clearing from one session affects all sessions.
+    pub fn clear_plan_cache(&self) {
+        self.query_cache.clear();
+    }
+
+    /// Begins a new transaction on this session.
+    ///
+    /// Uses the default isolation level (`SnapshotIsolation`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a transaction is already active.
     pub fn begin_transaction(&mut self) -> Result<()> {
         self.begin_transaction_inner(false, None)
     }
