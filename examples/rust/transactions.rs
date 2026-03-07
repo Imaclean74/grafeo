@@ -8,100 +8,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = GrafeoDB::new_in_memory();
     let mut session = db.session();
 
-    // Set up two bank accounts as nodes with a balance property
-    session.execute("INSERT (:Account {owner: 'Alix', balance: 1000})")?;
-    session.execute("INSERT (:Account {owner: 'Gus', balance: 500})")?;
-
-    print_balances(&session, "Initial balances")?;
-
-    // ── Act 1: Committed transfer ─────────────────────────────────
+    // ── Act 1: Committed transaction ──────────────────────────────
     // Begin a transaction. All changes are isolated until commit.
+    // Note: begin_transaction() requires &mut self.
     session.begin_transaction()?;
 
-    // Transfer 200 from Alix to Gus
+    // Create several people inside the transaction
+    session.execute("INSERT (:Person {name: 'Alix', city: 'Utrecht'})")?;
+    session.execute("INSERT (:Person {name: 'Gus', city: 'Leiden'})")?;
     session.execute(
-        "MATCH (a:Account {owner: 'Alix'})
-         SET a.balance = a.balance - 200",
+        "MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'})
+         INSERT (a)-[:KNOWS]->(b)",
     )?;
-    session.execute(
-        "MATCH (a:Account {owner: 'Gus'})
-         SET a.balance = a.balance + 200",
-    )?;
+
+    // Before commit: data is visible within this transaction
+    let count: i64 = session
+        .execute("MATCH (p:Person) RETURN COUNT(p)")?
+        .scalar()?;
+    println!("Inside transaction (before commit): {count} people");
 
     // Commit makes the changes permanent
     session.commit()?;
-    print_balances(&session, "After committed transfer (Alix -> Gus, 200)")?;
 
-    // ── Act 2: Rolled-back transfer ───────────────────────────────
+    let count: i64 = session
+        .execute("MATCH (p:Person) RETURN COUNT(p)")?
+        .scalar()?;
+    println!("After commit: {count} people");
+
+    // ── Act 2: Rolled-back transaction ────────────────────────────
     // Start another transaction, but this time undo everything.
     session.begin_transaction()?;
 
-    // Attempt to transfer 300 from Gus to Alix
-    session.execute(
-        "MATCH (a:Account {owner: 'Gus'})
-         SET a.balance = a.balance - 300",
-    )?;
-    session.execute(
-        "MATCH (a:Account {owner: 'Alix'})
-         SET a.balance = a.balance + 300",
-    )?;
+    // Insert more data that we'll discard
+    session.execute("INSERT (:Person {name: 'Vincent', city: 'Paris'})")?;
+    session.execute("INSERT (:Person {name: 'Jules', city: 'Berlin'})")?;
 
-    // Oops, rollback discards all changes in this transaction
+    let count: i64 = session
+        .execute("MATCH (p:Person) RETURN COUNT(p)")?
+        .scalar()?;
+    println!("\nInside transaction (before rollback): {count} people");
+
+    // Rollback discards all changes in this transaction
     session.rollback()?;
-    print_balances(&session, "After rollback (no change)")?;
+
+    let count: i64 = session
+        .execute("MATCH (p:Person) RETURN COUNT(p)")?
+        .scalar()?;
+    println!("After rollback: {count} people (unchanged)");
 
     // ── Act 3: Savepoints for partial rollback ────────────────────
     // Savepoints let you undo part of a transaction while keeping
     // the rest.
     session.begin_transaction()?;
 
-    // Step 1: create a new account (will be kept)
-    session.execute("INSERT (:Account {owner: 'Vincent', balance: 750})")?;
+    // Step 1: create a person (will be kept)
+    session.execute("INSERT (:Person {name: 'Mia', city: 'Barcelona'})")?;
 
     // Mark this point so we can come back to it
-    session.savepoint("after_vincent")?;
+    session.savepoint("after_mia")?;
 
-    // Step 2: create another account (will be undone)
-    session.execute("INSERT (:Account {owner: 'Jules', balance: 250})")?;
+    // Step 2: create another person (will be undone)
+    session.execute("INSERT (:Person {name: 'Butch', city: 'Prague'})")?;
+
+    let count: i64 = session
+        .execute("MATCH (p:Person) RETURN COUNT(p)")?
+        .scalar()?;
+    println!("\nInside transaction (both Mia and Butch): {count} people");
 
     // Undo step 2, but keep step 1
-    session.rollback_to_savepoint("after_vincent")?;
+    session.rollback_to_savepoint("after_mia")?;
 
-    // Commit: only Vincent's account persists
+    // Commit: only Mia's node persists
     session.commit()?;
 
-    // Verify: Vincent exists, Jules does not
-    let vincent: i64 = session
-        .execute("MATCH (a:Account {owner: 'Vincent'}) RETURN COUNT(a)")?
+    // Verify: Mia exists, Butch does not
+    let mia: i64 = session
+        .execute("MATCH (p:Person {name: 'Mia'}) RETURN COUNT(p)")?
         .scalar()?;
-    let jules: i64 = session
-        .execute("MATCH (a:Account {owner: 'Jules'}) RETURN COUNT(a)")?
+    let butch: i64 = session
+        .execute("MATCH (p:Person {name: 'Butch'}) RETURN COUNT(p)")?
         .scalar()?;
 
     println!("After savepoint rollback and commit:");
-    println!("  Vincent exists: {}", vincent == 1);
-    println!("  Jules exists:   {}", jules == 1);
+    println!("  Mia exists:   {}", mia == 1);
+    println!("  Butch exists: {}", butch == 1);
+
+    // Final count should be 3: Alix, Gus (act 1) + Mia (act 3)
+    let total: i64 = session
+        .execute("MATCH (p:Person) RETURN COUNT(p)")?
+        .scalar()?;
+    println!("\nTotal people: {total}");
 
     println!("\nDone!");
-    Ok(())
-}
-
-/// Helper to print all account balances
-fn print_balances(
-    session: &grafeo::Session,
-    label: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let result = session.execute(
-        "MATCH (a:Account)
-         RETURN a.owner, a.balance
-         ORDER BY a.owner",
-    )?;
-
-    println!("\n{label}:");
-    for row in result.iter() {
-        let owner = row[0].as_str().unwrap_or("?");
-        let balance = row[1].as_int64().unwrap_or(0);
-        println!("  {:<10} ${}", owner, balance);
-    }
     Ok(())
 }

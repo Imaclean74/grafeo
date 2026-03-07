@@ -1958,11 +1958,27 @@ impl Session {
     pub fn execute_sparql_with_params(
         &self,
         query: &str,
-        _params: std::collections::HashMap<String, Value>,
+        params: std::collections::HashMap<String, Value>,
     ) -> Result<QueryResult> {
-        // TODO: Implement parameter substitution for SPARQL
-        // For now, just execute the query without parameters
-        self.execute_sparql(query)
+        use crate::query::{
+            Executor, optimizer::Optimizer, planner::rdf::RdfPlanner, processor::substitute_params,
+            translators::sparql,
+        };
+
+        let mut logical_plan = sparql::translate(query)?;
+
+        substitute_params(&mut logical_plan, &params)?;
+
+        let optimizer = Optimizer::from_graph_store(&*self.graph_store);
+        let optimized_plan = optimizer.optimize(logical_plan)?;
+
+        let planner = RdfPlanner::new(Arc::clone(&self.rdf_store))
+            .with_transaction_id(*self.current_transaction.lock());
+        let mut physical_plan = planner.plan(&optimized_plan)?;
+
+        let executor = Executor::with_columns(physical_plan.columns.clone())
+            .with_deadline(self.query_deadline());
+        executor.execute(physical_plan.operator.as_mut())
     }
 
     /// Executes a query in the specified language by name.

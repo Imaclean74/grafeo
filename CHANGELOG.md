@@ -15,6 +15,7 @@ Performance enhancements, bug fixes and rust examples
 - **GQL `-->` shorthand**: parser recognizes `-->` as a directed outgoing edge instead of splitting into `--` and `>`
 - **EXISTS bare patterns**: `EXISTS { (a)-[r]->(b) }` without explicit MATCH keyword now works in GQL and Cypher
 - **CASE WHEN in aggregates**: expressions like `sum(CASE WHEN ... THEN 1 ELSE 0 END)` resolve correctly in the LPG planner
+- **SPARQL parameters**: `execute_sparql_with_params()` now substitutes `$param` values instead of ignoring them
 
 ## [0.5.15] - 2026-03-07
 
