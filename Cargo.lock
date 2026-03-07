@@ -1238,6 +1238,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "grafeo-examples"
+version = "0.5.16"
+dependencies = [
+ "grafeo",
+]
+
+[[package]]
 name = "grafeo-node"
 version = "0.5.16"
 dependencies = [
