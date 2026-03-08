@@ -32,6 +32,7 @@ pub mod operators;
 #[cfg(feature = "parallel")]
 pub mod parallel;
 pub mod pipeline;
+pub mod profile;
 pub mod selection;
 pub mod sink;
 pub mod source;
@@ -58,6 +59,7 @@ pub use parallel::{
     ParallelSource, RangeSource,
 };
 pub use pipeline::{ChunkCollector, ChunkSizeHint, Pipeline, PushOperator, Sink, Source};
+pub use profile::{ProfileStats, ProfiledOperator, SharedProfileStats};
 pub use selection::SelectionVector;
 pub use sink::{CollectorSink, CountingSink, LimitingSink, MaterializingSink, NullSink};
 pub use source::{ChunkSource, EmptySource, GeneratorSource, OperatorSource, VectorSource};
