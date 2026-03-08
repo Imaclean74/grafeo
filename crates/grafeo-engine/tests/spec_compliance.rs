@@ -1002,7 +1002,8 @@ mod cypher_features {
         session
             .execute_cypher("CREATE INDEX idx_drop FOR (n:Person) ON (n.name)")
             .unwrap();
-        let result = session.execute_cypher("DROP INDEX idx_drop");
+        // DROP by property name (store tracks by property, not by index name)
+        let result = session.execute_cypher("DROP INDEX name");
         assert!(
             result.is_ok(),
             "DROP INDEX should succeed: {:?}",

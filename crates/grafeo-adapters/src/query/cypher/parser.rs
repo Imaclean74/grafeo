@@ -88,20 +88,18 @@ impl<'a> Parser<'a> {
         }
         if self.current.kind == TokenKind::Identifier
             && self.current.text.eq_ignore_ascii_case("DROP")
+            && let Some(stmt) = self.try_parse_schema_drop()?
         {
-            if let Some(stmt) = self.try_parse_schema_drop()? {
-                self.skip_semicolons();
-                return Ok(stmt);
-            }
+            self.skip_semicolons();
+            return Ok(stmt);
         }
         // SHOW INDEXES / SHOW CONSTRAINTS
         if self.current.kind == TokenKind::Identifier
             && self.current.text.eq_ignore_ascii_case("SHOW")
+            && let Some(stmt) = self.try_parse_show()?
         {
-            if let Some(stmt) = self.try_parse_show()? {
-                self.skip_semicolons();
-                return Ok(stmt);
-            }
+            self.skip_semicolons();
+            return Ok(stmt);
         }
 
         let stmt = self.parse_statement()?;
@@ -1860,7 +1858,7 @@ impl<'a> Parser<'a> {
             self.advance();
             if self.current.kind == TokenKind::Not {
                 self.advance();
-                if self.is_contextual("EXISTS") {
+                if self.current.kind == TokenKind::Exists {
                     self.advance();
                     return true;
                 }
@@ -1880,7 +1878,7 @@ impl<'a> Parser<'a> {
             let saved = self.lexer.clone();
             let saved_cur = self.current.clone();
             self.advance();
-            if self.is_contextual("EXISTS") {
+            if self.current.kind == TokenKind::Exists {
                 self.advance();
                 return true;
             }
@@ -1999,7 +1997,7 @@ impl<'a> Parser<'a> {
                 gql::ConstraintKind::Unique
             } else if self.current.kind == TokenKind::Not {
                 self.advance();
-                self.expect_contextual("NULL")?;
+                self.expect(TokenKind::Null)?;
                 gql::ConstraintKind::NotNull
             } else if self.is_contextual("NODE") {
                 self.advance();
@@ -3186,5 +3184,61 @@ mod tests {
         parse_ok("RETURN 1;;;");
         // Semicolon after full query
         parse_ok("MATCH (n) RETURN n;");
+    }
+
+    // === Schema DDL Tests ===
+
+    #[test]
+    fn test_parse_create_index() {
+        let stmt = parse_ok("CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_create_index_if_not_exists() {
+        let stmt = parse_ok("CREATE INDEX idx_name IF NOT EXISTS FOR (n:Person) ON (n.name)");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_drop_index() {
+        let stmt = parse_ok("DROP INDEX idx_name");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_drop_index_if_exists() {
+        let stmt = parse_ok("DROP INDEX idx_name IF EXISTS");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_create_constraint_unique() {
+        let stmt = parse_ok("CREATE CONSTRAINT uniq FOR (n:Person) REQUIRE n.email IS UNIQUE");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_create_constraint_not_null() {
+        let stmt = parse_ok("CREATE CONSTRAINT nn FOR (n:Person) REQUIRE n.name IS NOT NULL");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_drop_constraint() {
+        let stmt = parse_ok("DROP CONSTRAINT uniq");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_show_indexes() {
+        let stmt = parse_ok("SHOW INDEXES");
+        assert!(matches!(stmt, Statement::ShowIndexes));
+    }
+
+    #[test]
+    fn test_parse_show_constraints() {
+        let stmt = parse_ok("SHOW CONSTRAINTS");
+        assert!(matches!(stmt, Statement::ShowConstraints));
     }
 }
