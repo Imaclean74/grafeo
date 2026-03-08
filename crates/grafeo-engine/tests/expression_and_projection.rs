@@ -377,7 +377,11 @@ fn test_correlated_not_exists_bare_pattern() {
          ORDER BY a.name, b.name",
     );
 
-    assert!(result.is_ok(), "Bare pattern query failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Bare pattern query failed: {:?}",
+        result.err()
+    );
     let rows = &result.unwrap().rows;
     assert_eq!(rows.len(), 5, "Expected 5 rows but got {}", rows.len());
 }
@@ -404,7 +408,11 @@ fn test_case_when_in_aggregate() {
                 sum(CASE WHEN f.file_type = 'source' THEN 1 ELSE 0 END) AS source_count",
     );
 
-    assert!(result.is_ok(), "CASE in aggregate failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "CASE in aggregate failed: {:?}",
+        result.err()
+    );
     let rows = &result.unwrap().rows;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0][0], Value::Int64(3), "total should be 3");
@@ -502,19 +510,13 @@ fn test_any_labels_in_list() {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
 
-    session
-        .execute("INSERT (:A:B:C {name: 'Test'})")
-        .unwrap();
+    session.execute("INSERT (:A:B:C {name: 'Test'})").unwrap();
 
     // Should return 1 row: node has labels A and B which are in the list
     let result = session.execute_cypher(
         "MATCH (n) WHERE any(lbl IN labels(n) WHERE lbl IN ['A', 'B']) RETURN n.name",
     );
-    assert!(
-        result.is_ok(),
-        "any() IN list failed: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "any() IN list failed: {:?}", result.err());
     let rows = &result.unwrap().rows;
     assert_eq!(rows.len(), 1, "Expected 1 row but got {}", rows.len());
 
