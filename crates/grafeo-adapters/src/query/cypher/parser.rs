@@ -76,6 +76,32 @@ impl<'a> Parser<'a> {
             return Ok(Statement::Profile(Box::new(inner)));
         }
 
+        // Schema DDL: CREATE INDEX, DROP INDEX, CREATE CONSTRAINT, DROP CONSTRAINT
+        if self.current.kind == TokenKind::Create
+            && self.peek_kind() == TokenKind::Identifier
+            && (self.peek_text_eq_ignore_case("INDEX")
+                || self.peek_text_eq_ignore_case("CONSTRAINT"))
+        {
+            let stmt = self.parse_schema_create()?;
+            self.skip_semicolons();
+            return Ok(stmt);
+        }
+        if self.current.kind == TokenKind::Identifier
+            && self.current.text.eq_ignore_ascii_case("DROP")
+            && let Some(stmt) = self.try_parse_schema_drop()?
+        {
+            self.skip_semicolons();
+            return Ok(stmt);
+        }
+        // SHOW INDEXES / SHOW CONSTRAINTS
+        if self.current.kind == TokenKind::Identifier
+            && self.current.text.eq_ignore_ascii_case("SHOW")
+            && let Some(stmt) = self.try_parse_show()?
+        {
+            self.skip_semicolons();
+            return Ok(stmt);
+        }
+
         let stmt = self.parse_statement()?;
         // Check for UNION continuation
         if self.current.kind == TokenKind::Union {
@@ -188,11 +214,13 @@ impl<'a> Parser<'a> {
                     }
                 }
                 _ => {
-                    // FOREACH is a contextual keyword (not reserved)
+                    // FOREACH and LOAD are contextual keywords (not reserved)
                     if self.can_be_identifier()
                         && self.get_identifier_text().to_uppercase() == "FOREACH"
                     {
                         clauses.push(Clause::ForEach(self.parse_foreach_clause()?));
+                    } else if self.is_contextual("LOAD") {
+                        clauses.push(Clause::LoadCsv(self.parse_load_csv_clause()?));
                     } else {
                         break;
                     }
@@ -261,6 +289,65 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses a FOREACH clause: `FOREACH (var IN expr | clauses)`.
+    /// Parses a LOAD CSV clause:
+    /// `LOAD CSV [WITH HEADERS] FROM 'path' AS variable [FIELDTERMINATOR 'sep']`
+    fn parse_load_csv_clause(&mut self) -> Result<LoadCsvClause> {
+        self.advance(); // consume LOAD
+
+        self.expect_contextual("CSV")?;
+
+        // Optional WITH HEADERS
+        let with_headers = if self.current.kind == TokenKind::With {
+            self.advance(); // consume WITH
+            self.expect_contextual("HEADERS")?;
+            true
+        } else {
+            false
+        };
+
+        // FROM 'path'
+        self.expect_contextual("FROM")?;
+        let path = if self.current.kind == TokenKind::String {
+            let raw = self.current.text.clone();
+            self.advance();
+            // Strip quotes and unescape
+            unescape_string(&raw[1..raw.len() - 1])
+        } else {
+            return Err(self.error("Expected string literal for file path"));
+        };
+
+        // AS variable
+        self.expect(TokenKind::As)?;
+        let variable = self.expect_identifier()?;
+
+        // Optional FIELDTERMINATOR 'char'
+        let field_terminator = if self.is_contextual("FIELDTERMINATOR") {
+            self.advance();
+            if self.current.kind == TokenKind::String {
+                let raw = self.current.text.clone();
+                self.advance();
+                let unescaped = unescape_string(&raw[1..raw.len() - 1]);
+                let ch = unescaped
+                    .chars()
+                    .next()
+                    .ok_or_else(|| self.error("FIELDTERMINATOR must be a single character"))?;
+                Some(ch)
+            } else {
+                return Err(self.error("Expected string literal for FIELDTERMINATOR"));
+            }
+        } else {
+            None
+        };
+
+        Ok(LoadCsvClause {
+            with_headers,
+            path,
+            variable,
+            field_terminator,
+            span: None,
+        })
+    }
+
     fn parse_foreach_clause(&mut self) -> Result<ForEachClause> {
         self.advance(); // consume FOREACH identifier
         self.expect(TokenKind::LParen)?;
@@ -848,7 +935,7 @@ impl<'a> Parser<'a> {
         };
 
         // Parse relationship details [r:TYPE*1..3 {props}]
-        let (variable, types, length, properties, final_direction) =
+        let (variable, types, length, properties, rel_where, final_direction) =
             if has_bracket || self.current.kind == TokenKind::LBracket {
                 if self.current.kind == TokenKind::LBracket {
                     self.advance();
@@ -857,11 +944,12 @@ impl<'a> Parser<'a> {
                 // Parse optional variable name - could be followed by : for type
                 // Allow contextual keywords like 'end' to be used as variable names
                 let var = if self.can_be_identifier() {
-                    // Check if this is a variable (followed by : or ] or { or *)
+                    // Check if this is a variable (followed by :, ], {, *, or WHERE)
                     let is_variable = self.peek_kind() == TokenKind::Colon
                         || self.peek_kind() == TokenKind::RBracket
                         || self.peek_kind() == TokenKind::LBrace
-                        || self.peek_kind() == TokenKind::Star;
+                        || self.peek_kind() == TokenKind::Star
+                        || self.peek_kind() == TokenKind::Where;
                     if is_variable {
                         let name = self.get_identifier_text();
                         self.advance();
@@ -898,6 +986,14 @@ impl<'a> Parser<'a> {
                     Vec::new()
                 };
 
+                // Parse inline WHERE clause: -[r WHERE expr]->
+                let where_expr = if self.current.kind == TokenKind::Where {
+                    self.advance();
+                    Some(self.parse_expression()?)
+                } else {
+                    None
+                };
+
                 self.expect(TokenKind::RBracket)?;
 
                 // Determine direction from closing symbol
@@ -915,9 +1011,9 @@ impl<'a> Parser<'a> {
                     direction
                 };
 
-                (var, rel_types, len, props, dir)
+                (var, rel_types, len, props, where_expr, dir)
             } else {
-                (None, Vec::new(), None, Vec::new(), direction)
+                (None, Vec::new(), None, Vec::new(), None, direction)
             };
 
         let target = self.parse_node_pattern()?;
@@ -928,6 +1024,7 @@ impl<'a> Parser<'a> {
             direction: final_direction,
             length,
             properties,
+            where_clause: rel_where,
             target,
             span: None,
         })
@@ -1782,6 +1879,262 @@ impl<'a> Parser<'a> {
         kind
     }
 
+    fn peek_text_eq_ignore_case(&mut self, expected: &str) -> bool {
+        let saved_pos = self.lexer.clone();
+        let token = self.lexer.next_token();
+        let matches = token.text.eq_ignore_ascii_case(expected);
+        self.lexer = saved_pos;
+        matches
+    }
+
+    fn skip_semicolons(&mut self) {
+        while self.current.kind == TokenKind::Semicolon {
+            self.advance();
+        }
+    }
+
+    /// Expects the current token to be an identifier matching `expected` (case-insensitive).
+    fn expect_contextual(&mut self, expected: &str) -> Result<()> {
+        if self.can_be_identifier() && self.get_identifier_text().eq_ignore_ascii_case(expected) {
+            self.advance();
+            Ok(())
+        } else {
+            Err(self.error(&format!("Expected '{expected}'")))
+        }
+    }
+
+    /// Checks if the current token is a contextual keyword (case-insensitive).
+    fn is_contextual(&self, keyword: &str) -> bool {
+        self.current.kind == TokenKind::Identifier
+            && self.current.text.eq_ignore_ascii_case(keyword)
+    }
+
+    /// Parses IF NOT EXISTS, returns true if present.
+    fn parse_if_not_exists(&mut self) -> bool {
+        if self.current.kind == TokenKind::Identifier
+            && self.current.text.eq_ignore_ascii_case("IF")
+        {
+            let saved = self.lexer.clone();
+            let saved_cur = self.current.clone();
+            self.advance();
+            if self.current.kind == TokenKind::Not {
+                self.advance();
+                if self.current.kind == TokenKind::Exists {
+                    self.advance();
+                    return true;
+                }
+            }
+            // Rewind
+            self.lexer = saved;
+            self.current = saved_cur;
+        }
+        false
+    }
+
+    /// Parses IF EXISTS, returns true if present.
+    fn parse_if_exists(&mut self) -> bool {
+        if self.current.kind == TokenKind::Identifier
+            && self.current.text.eq_ignore_ascii_case("IF")
+        {
+            let saved = self.lexer.clone();
+            let saved_cur = self.current.clone();
+            self.advance();
+            if self.current.kind == TokenKind::Exists {
+                self.advance();
+                return true;
+            }
+            // Rewind
+            self.lexer = saved;
+            self.current = saved_cur;
+        }
+        false
+    }
+
+    // ========================================================================
+    // Schema DDL parsing
+    // ========================================================================
+
+    /// Parses CREATE INDEX or CREATE CONSTRAINT.
+    fn parse_schema_create(&mut self) -> Result<Statement> {
+        self.expect(TokenKind::Create)?; // consume CREATE
+
+        if self.is_contextual("INDEX") {
+            self.advance();
+            self.parse_create_index()
+        } else if self.is_contextual("CONSTRAINT") {
+            self.advance();
+            self.parse_create_constraint()
+        } else {
+            Err(self.error("Expected INDEX or CONSTRAINT after CREATE"))
+        }
+    }
+
+    /// CREATE INDEX name [IF NOT EXISTS] FOR (n:Label) ON (n.property)
+    fn parse_create_index(&mut self) -> Result<Statement> {
+        let name = self.expect_identifier()?;
+        let if_not_exists = self.parse_if_not_exists();
+
+        self.expect_contextual("FOR")?;
+        self.expect(TokenKind::LParen)?;
+        let _var = self.expect_identifier()?;
+        self.expect(TokenKind::Colon)?;
+        let label = self.expect_identifier()?;
+        self.expect(TokenKind::RParen)?;
+
+        self.expect_contextual("ON")?;
+        self.expect(TokenKind::LParen)?;
+        let mut properties = Vec::new();
+        loop {
+            let _prop_var = self.expect_identifier()?;
+            self.expect(TokenKind::Dot)?;
+            properties.push(self.expect_identifier()?);
+            if self.current.kind != TokenKind::Comma {
+                break;
+            }
+            self.advance();
+        }
+        self.expect(TokenKind::RParen)?;
+
+        use crate::query::gql::ast as gql;
+        Ok(Statement::Schema(gql::SchemaStatement::CreateIndex(
+            gql::CreateIndexStatement {
+                name,
+                index_kind: gql::IndexKind::Property,
+                label,
+                properties,
+                options: gql::IndexOptions::default(),
+                if_not_exists,
+                span: None,
+            },
+        )))
+    }
+
+    /// CREATE CONSTRAINT name [IF NOT EXISTS] FOR (n:Label) REQUIRE n.property IS UNIQUE
+    fn parse_create_constraint(&mut self) -> Result<Statement> {
+        let name = self.expect_identifier()?;
+        let if_not_exists = self.parse_if_not_exists();
+
+        self.expect_contextual("FOR")?;
+        self.expect(TokenKind::LParen)?;
+        let var = self.expect_identifier()?;
+        self.expect(TokenKind::Colon)?;
+        let label = self.expect_identifier()?;
+        self.expect(TokenKind::RParen)?;
+
+        self.expect_contextual("REQUIRE")?;
+
+        // Parse property references: n.prop1, n.prop2, ...
+        // or (n.prop1, n.prop2, ...)
+        let has_parens = self.current.kind == TokenKind::LParen;
+        if has_parens {
+            self.advance();
+        }
+        let mut properties = Vec::new();
+        loop {
+            // Expect var.prop or just prop
+            if self.can_be_identifier()
+                && self.get_identifier_text().eq_ignore_ascii_case(&var)
+                && self.peek_kind() == TokenKind::Dot
+            {
+                self.advance(); // skip var
+                self.advance(); // skip dot
+            }
+            properties.push(self.expect_identifier()?);
+            if self.current.kind != TokenKind::Comma {
+                break;
+            }
+            self.advance();
+        }
+        if has_parens {
+            self.expect(TokenKind::RParen)?;
+        }
+
+        // Parse constraint kind: IS UNIQUE, IS NOT NULL, IS NODE KEY
+        use crate::query::gql::ast as gql;
+        let constraint_kind = if self.current.kind == TokenKind::Is {
+            self.advance();
+            if self.is_contextual("UNIQUE") {
+                self.advance();
+                gql::ConstraintKind::Unique
+            } else if self.current.kind == TokenKind::Not {
+                self.advance();
+                self.expect(TokenKind::Null)?;
+                gql::ConstraintKind::NotNull
+            } else if self.is_contextual("NODE") {
+                self.advance();
+                self.expect_contextual("KEY")?;
+                gql::ConstraintKind::NodeKey
+            } else {
+                return Err(self.error("Expected UNIQUE, NOT NULL, or NODE KEY after IS"));
+            }
+        } else {
+            return Err(self.error("Expected IS after property reference"));
+        };
+
+        Ok(Statement::Schema(gql::SchemaStatement::CreateConstraint(
+            gql::CreateConstraintStatement {
+                name: Some(name),
+                constraint_kind,
+                label,
+                properties,
+                if_not_exists,
+                span: None,
+            },
+        )))
+    }
+
+    /// DROP INDEX name [IF EXISTS] / DROP CONSTRAINT name [IF EXISTS]
+    fn try_parse_schema_drop(&mut self) -> Result<Option<Statement>> {
+        // Current token is "DROP" identifier
+        let saved_lexer = self.lexer.clone();
+        let saved_cur = self.current.clone();
+        self.advance(); // consume DROP
+
+        use crate::query::gql::ast as gql;
+
+        if self.is_contextual("INDEX") {
+            self.advance();
+            let name = self.expect_identifier()?;
+            let if_exists = self.parse_if_exists();
+            Ok(Some(Statement::Schema(gql::SchemaStatement::DropIndex {
+                name,
+                if_exists,
+            })))
+        } else if self.is_contextual("CONSTRAINT") {
+            self.advance();
+            let name = self.expect_identifier()?;
+            let if_exists = self.parse_if_exists();
+            Ok(Some(Statement::Schema(
+                gql::SchemaStatement::DropConstraint { name, if_exists },
+            )))
+        } else {
+            // Not a schema DROP, rewind
+            self.lexer = saved_lexer;
+            self.current = saved_cur;
+            Ok(None)
+        }
+    }
+
+    /// SHOW INDEXES / SHOW CONSTRAINTS
+    fn try_parse_show(&mut self) -> Result<Option<Statement>> {
+        let saved_lexer = self.lexer.clone();
+        let saved_cur = self.current.clone();
+        self.advance(); // consume SHOW
+
+        if self.is_contextual("INDEXES") || self.is_contextual("INDEX") {
+            self.advance();
+            Ok(Some(Statement::ShowIndexes))
+        } else if self.is_contextual("CONSTRAINTS") || self.is_contextual("CONSTRAINT") {
+            self.advance();
+            Ok(Some(Statement::ShowConstraints))
+        } else {
+            // Not a SHOW command, rewind
+            self.lexer = saved_lexer;
+            self.current = saved_cur;
+            Ok(None)
+        }
+    }
+
     fn error(&self, message: &str) -> grafeo_common::utils::error::Error {
         QueryError::new(QueryErrorKind::Syntax, message)
             .with_span(self.current.span)
@@ -1948,6 +2301,42 @@ mod tests {
                 let length = path.chain[0].length.as_ref().unwrap();
                 assert_eq!(length.min, None);
                 assert_eq!(length.max, None);
+            } else {
+                panic!("Expected Path pattern");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_relationship_where() {
+        let stmt = parse_ok("MATCH (a)-[r:KNOWS WHERE r.since > 2020]->(b) RETURN a, b");
+        if let Statement::Query(Query { clauses, .. }) = stmt
+            && let Clause::Match(MatchClause { patterns, .. }) = &clauses[0]
+        {
+            if let Pattern::Path(path) = &patterns[0] {
+                assert!(
+                    path.chain[0].where_clause.is_some(),
+                    "Expected inline WHERE on relationship"
+                );
+                assert!(
+                    path.chain[0].variable.as_deref() == Some("r"),
+                    "Expected variable 'r'"
+                );
+            } else {
+                panic!("Expected Path pattern");
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_relationship_where_no_type() {
+        let stmt = parse_ok("MATCH (a)-[r WHERE r.weight > 0.5]->(b) RETURN a, b");
+        if let Statement::Query(Query { clauses, .. }) = stmt
+            && let Clause::Match(MatchClause { patterns, .. }) = &clauses[0]
+        {
+            if let Pattern::Path(path) = &patterns[0] {
+                assert!(path.chain[0].where_clause.is_some());
+                assert!(path.chain[0].types.is_empty());
             } else {
                 panic!("Expected Path pattern");
             }
@@ -2856,5 +3245,125 @@ mod tests {
         parse_ok("RETURN 1;;;");
         // Semicolon after full query
         parse_ok("MATCH (n) RETURN n;");
+    }
+
+    // === Schema DDL Tests ===
+
+    #[test]
+    fn test_parse_create_index() {
+        let stmt = parse_ok("CREATE INDEX idx_name FOR (n:Person) ON (n.name)");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_create_index_if_not_exists() {
+        let stmt = parse_ok("CREATE INDEX idx_name IF NOT EXISTS FOR (n:Person) ON (n.name)");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_drop_index() {
+        let stmt = parse_ok("DROP INDEX idx_name");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_drop_index_if_exists() {
+        let stmt = parse_ok("DROP INDEX idx_name IF EXISTS");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_create_constraint_unique() {
+        let stmt = parse_ok("CREATE CONSTRAINT uniq FOR (n:Person) REQUIRE n.email IS UNIQUE");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_create_constraint_not_null() {
+        let stmt = parse_ok("CREATE CONSTRAINT nn FOR (n:Person) REQUIRE n.name IS NOT NULL");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_drop_constraint() {
+        let stmt = parse_ok("DROP CONSTRAINT uniq");
+        assert!(matches!(stmt, Statement::Schema(_)));
+    }
+
+    #[test]
+    fn test_parse_show_indexes() {
+        let stmt = parse_ok("SHOW INDEXES");
+        assert!(matches!(stmt, Statement::ShowIndexes));
+    }
+
+    #[test]
+    fn test_parse_show_constraints() {
+        let stmt = parse_ok("SHOW CONSTRAINTS");
+        assert!(matches!(stmt, Statement::ShowConstraints));
+    }
+
+    #[test]
+    fn test_parse_load_csv_with_headers() {
+        let stmt = parse_ok("LOAD CSV WITH HEADERS FROM 'data.csv' AS row RETURN row.name");
+        if let Statement::Query(q) = stmt {
+            assert!(
+                matches!(&q.clauses[0], Clause::LoadCsv(lc) if lc.with_headers && lc.path == "data.csv" && lc.variable == "row")
+            );
+        } else {
+            panic!("Expected Query");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_csv_without_headers() {
+        let stmt = parse_ok("LOAD CSV FROM 'data.csv' AS line RETURN line[0]");
+        if let Statement::Query(q) = stmt {
+            assert!(
+                matches!(&q.clauses[0], Clause::LoadCsv(lc) if !lc.with_headers && lc.variable == "line")
+            );
+        } else {
+            panic!("Expected Query");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_csv_fieldterminator() {
+        let stmt = parse_ok(
+            "LOAD CSV WITH HEADERS FROM 'data.tsv' AS row FIELDTERMINATOR '\\t' RETURN row.name",
+        );
+        if let Statement::Query(q) = stmt {
+            assert!(
+                matches!(&q.clauses[0], Clause::LoadCsv(lc) if lc.field_terminator == Some('\t'))
+            );
+        } else {
+            panic!("Expected Query");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_csv_with_create() {
+        let stmt = parse_ok(
+            "LOAD CSV WITH HEADERS FROM 'people.csv' AS row CREATE (p:Person {name: row.name})",
+        );
+        if let Statement::Query(q) = stmt {
+            assert!(matches!(&q.clauses[0], Clause::LoadCsv(_)));
+            assert!(matches!(&q.clauses[1], Clause::Create(_)));
+        } else {
+            panic!("Expected Query");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_csv_file_uri() {
+        let stmt =
+            parse_ok("LOAD CSV WITH HEADERS FROM 'file:///data/people.csv' AS row RETURN row.name");
+        if let Statement::Query(q) = stmt {
+            assert!(
+                matches!(&q.clauses[0], Clause::LoadCsv(lc) if lc.path == "file:///data/people.csv")
+            );
+        } else {
+            panic!("Expected Query");
+        }
     }
 }

@@ -2,6 +2,7 @@
 //!
 //! This AST represents the openCypher 9.0 query language.
 
+use crate::query::gql::ast as gql_ast;
 use grafeo_common::utils::error::SourceSpan;
 
 /// A Cypher statement.
@@ -30,6 +31,12 @@ pub enum Statement {
     Explain(Box<Statement>),
     /// PROFILE: executes the query and returns per-operator metrics.
     Profile(Box<Statement>),
+    /// Schema DDL (CREATE/DROP INDEX, CREATE/DROP CONSTRAINT, SHOW).
+    Schema(gql_ast::SchemaStatement),
+    /// SHOW INDEXES: lists all indexes.
+    ShowIndexes,
+    /// SHOW CONSTRAINTS: lists all constraints.
+    ShowConstraints,
 }
 
 /// A complete Cypher query.
@@ -78,6 +85,8 @@ pub enum Clause {
     CallSubquery(Query),
     /// FOREACH (variable IN list | update_clauses).
     ForEach(ForEachClause),
+    /// LOAD CSV clause.
+    LoadCsv(LoadCsvClause),
 }
 
 /// A FOREACH clause for iterating and applying updates.
@@ -93,6 +102,25 @@ pub struct ForEachClause {
     pub list: Expression,
     /// The update clauses to apply for each element.
     pub clauses: Vec<Clause>,
+}
+
+/// A LOAD CSV clause.
+///
+/// ```text
+/// LOAD CSV [WITH HEADERS] FROM 'file.csv' AS row [FIELDTERMINATOR ',']
+/// ```
+#[derive(Debug, Clone)]
+pub struct LoadCsvClause {
+    /// Whether the CSV has a header row (WITH HEADERS).
+    pub with_headers: bool,
+    /// File path (local filesystem).
+    pub path: String,
+    /// Row variable name (the AS alias).
+    pub variable: String,
+    /// Optional field terminator override (default: comma).
+    pub field_terminator: Option<char>,
+    /// Source span.
+    pub span: Option<SourceSpan>,
 }
 
 /// A CALL clause for invoking procedures.
@@ -194,6 +222,8 @@ pub struct RelationshipPattern {
     pub length: Option<LengthRange>,
     /// Property map.
     pub properties: Vec<(String, Expression)>,
+    /// Inline WHERE clause (Neo4j 5.x): `-[r WHERE r.since > 2020]->`.
+    pub where_clause: Option<Expression>,
     /// Target node pattern.
     pub target: NodePattern,
     /// Source span.

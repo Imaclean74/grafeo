@@ -10,10 +10,10 @@ use super::common::{
 use crate::query::plan::{
     AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp, CallProcedureOp,
     CountExpr, CreateEdgeOp, CreateNodeOp, DeleteNodeOp, ExpandDirection, ExpandOp, LeftJoinOp,
-    ListPredicateKind, LogicalExpression, LogicalOperator, LogicalPlan, MapProjectionEntry,
-    MergeOp, MergeRelationshipOp, NodeScanOp, ParameterScanOp, PathMode, ProcedureYield, ProjectOp,
-    Projection, RemoveLabelOp, ReturnItem, SetPropertyOp, ShortestPathOp, SortKey, SortOrder,
-    UnaryOp, UnionOp, UnwindOp,
+    ListPredicateKind, LoadCsvOp, LogicalExpression, LogicalOperator, LogicalPlan,
+    MapProjectionEntry, MergeOp, MergeRelationshipOp, NodeScanOp, ParameterScanOp, PathMode,
+    ProcedureYield, ProjectOp, Projection, RemoveLabelOp, ReturnItem, SetPropertyOp,
+    ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp, UnwindOp,
 };
 use grafeo_adapters::query::cypher::{self, ast};
 use grafeo_common::types::Value;
@@ -21,11 +21,34 @@ use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
+/// Result of translating a Cypher query: either a plan or a schema DDL command.
+pub enum CypherTranslationResult {
+    /// Regular query or mutation, produces a logical plan.
+    Plan(LogicalPlan),
+    /// Schema DDL (CREATE/DROP INDEX, CREATE/DROP CONSTRAINT).
+    SchemaCommand(grafeo_adapters::query::gql::ast::SchemaStatement),
+    /// SHOW INDEXES introspection.
+    ShowIndexes,
+    /// SHOW CONSTRAINTS introspection.
+    ShowConstraints,
+}
+
 /// Translates a Cypher query string to a logical plan.
 pub fn translate(query: &str) -> Result<LogicalPlan> {
+    match translate_full(query)? {
+        CypherTranslationResult::Plan(plan) => Ok(plan),
+        _ => Err(Error::Query(QueryError::new(
+            QueryErrorKind::Semantic,
+            "Schema commands cannot be translated to a logical plan",
+        ))),
+    }
+}
+
+/// Translates a Cypher query, returning either a plan or a schema command.
+pub fn translate_full(query: &str) -> Result<CypherTranslationResult> {
     let statement = cypher::parse(query)?;
     let translator = CypherTranslator::new();
-    translator.translate_statement(&statement)
+    translator.translate_statement_full(&statement)
 }
 
 /// Cypher AST to logical plan translator.
@@ -111,6 +134,26 @@ impl CypherTranslator {
                 plan.profile = true;
                 Ok(plan)
             }
+            ast::Statement::Schema(_)
+            | ast::Statement::ShowIndexes
+            | ast::Statement::ShowConstraints => Err(Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                "Schema commands should be routed through translate_statement_full",
+            ))),
+        }
+    }
+
+    fn translate_statement_full(&self, stmt: &ast::Statement) -> Result<CypherTranslationResult> {
+        match stmt {
+            ast::Statement::Schema(schema) => {
+                Ok(CypherTranslationResult::SchemaCommand(schema.clone()))
+            }
+            ast::Statement::ShowIndexes => Ok(CypherTranslationResult::ShowIndexes),
+            ast::Statement::ShowConstraints => Ok(CypherTranslationResult::ShowConstraints),
+            other => {
+                let plan = self.translate_statement(other)?;
+                Ok(CypherTranslationResult::Plan(plan))
+            }
         }
     }
 
@@ -156,7 +199,17 @@ impl CypherTranslator {
                 self.translate_call_subquery(inner_query, input)
             }
             ast::Clause::ForEach(foreach) => self.translate_foreach(foreach, input),
+            ast::Clause::LoadCsv(load_csv) => self.translate_load_csv(load_csv),
         }
+    }
+
+    fn translate_load_csv(&self, load_csv: &ast::LoadCsvClause) -> Result<LogicalOperator> {
+        Ok(LogicalOperator::LoadCsv(LoadCsvOp {
+            with_headers: load_csv.with_headers,
+            path: load_csv.path.clone(),
+            variable: load_csv.variable.clone(),
+            field_terminator: load_csv.field_terminator,
+        }))
     }
 
     fn translate_call_clause(
@@ -608,8 +661,8 @@ impl CypherTranslator {
             path_mode: PathMode::Walk,
         });
 
-        if let Some(label) = target_label {
-            Ok(wrap_filter(
+        let mut result = if let Some(label) = target_label {
+            wrap_filter(
                 expand,
                 LogicalExpression::FunctionCall {
                     name: "hasLabel".into(),
@@ -619,10 +672,18 @@ impl CypherTranslator {
                     ],
                     distinct: false,
                 },
-            ))
+            )
         } else {
-            Ok(expand)
+            expand
+        };
+
+        // Apply inline WHERE clause from relationship pattern: -[r WHERE expr]->
+        if let Some(where_expr) = &rel.where_clause {
+            let predicate = self.translate_expression(where_expr)?;
+            result = wrap_filter(result, predicate);
         }
+
+        Ok(result)
     }
 
     fn translate_where(
@@ -1179,6 +1240,45 @@ impl CypherTranslator {
                         operand: Box::new(sub),
                     },
                 ))
+            }
+            ast::Expression::Case {
+                input,
+                whens,
+                else_clause,
+            } => {
+                // Find the first aggregate inside the CASE branches and extract it.
+                // The aggregate is replaced by a variable reference; the rest of
+                // the CASE is translated normally.
+                for (cond, then) in whens {
+                    if contains_aggregate(cond) {
+                        let (agg, _) = self.extract_wrapped_aggregate(cond, synthetic_alias)?;
+                        let full_case = self.translate_expression(expr)?;
+                        return Ok((agg, full_case));
+                    }
+                    if contains_aggregate(then) {
+                        let (agg, _) = self.extract_wrapped_aggregate(then, synthetic_alias)?;
+                        let full_case = self.translate_expression(expr)?;
+                        return Ok((agg, full_case));
+                    }
+                }
+                if let Some(el) = else_clause
+                    && contains_aggregate(el)
+                {
+                    let (agg, _) = self.extract_wrapped_aggregate(el, synthetic_alias)?;
+                    let full_case = self.translate_expression(expr)?;
+                    return Ok((agg, full_case));
+                }
+                if let Some(inp) = input
+                    && contains_aggregate(inp)
+                {
+                    let (agg, _) = self.extract_wrapped_aggregate(inp, synthetic_alias)?;
+                    let full_case = self.translate_expression(expr)?;
+                    return Ok((agg, full_case));
+                }
+                Err(Error::Query(QueryError::new(
+                    QueryErrorKind::Semantic,
+                    "Unsupported expression wrapping an aggregate",
+                )))
             }
             _ => Err(Error::Query(QueryError::new(
                 QueryErrorKind::Semantic,
@@ -2079,11 +2179,31 @@ impl CypherTranslator {
 /// Checks if an AST expression contains an aggregate function call.
 fn contains_aggregate(expr: &ast::Expression) -> bool {
     match expr {
-        ast::Expression::FunctionCall { name, .. } => is_aggregate_function(name),
+        ast::Expression::FunctionCall { name, args, .. } => {
+            is_aggregate_function(name) || args.iter().any(contains_aggregate)
+        }
         ast::Expression::Binary { left, right, .. } => {
             contains_aggregate(left) || contains_aggregate(right)
         }
         ast::Expression::Unary { operand, .. } => contains_aggregate(operand),
+        ast::Expression::Case {
+            input,
+            whens,
+            else_clause,
+        } => {
+            input.as_deref().is_some_and(contains_aggregate)
+                || whens
+                    .iter()
+                    .any(|(w, t)| contains_aggregate(w) || contains_aggregate(t))
+                || else_clause.as_deref().is_some_and(contains_aggregate)
+        }
+        ast::Expression::List(items) => items.iter().any(contains_aggregate),
+        ast::Expression::ListComprehension {
+            filter, projection, ..
+        } => {
+            filter.as_deref().is_some_and(contains_aggregate)
+                || projection.as_deref().is_some_and(contains_aggregate)
+        }
         _ => false,
     }
 }
@@ -2821,6 +2941,46 @@ mod tests {
             }
         }
         assert!(has_aggregate(&plan.root), "Expected Aggregate operator");
+    }
+
+    #[test]
+    fn test_translate_case_inside_aggregate() {
+        // sum(CASE WHEN n.type = 'x' THEN 1 ELSE 0 END) should be detected as aggregate
+        let plan = translate(
+            "MATCH (n:Person) RETURN sum(CASE WHEN n.type = 'source' THEN 1 ELSE 0 END) AS cnt",
+        )
+        .unwrap();
+        fn has_aggregate(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Aggregate(_) => true,
+                LogicalOperator::Return(ret) => has_aggregate(&ret.input),
+                _ => false,
+            }
+        }
+        assert!(
+            has_aggregate(&plan.root),
+            "Expected Aggregate operator for CASE inside aggregate"
+        );
+    }
+
+    #[test]
+    fn test_translate_case_wrapping_aggregate() {
+        // CASE WHEN count(*) > 0 should also be detected as containing an aggregate
+        let plan = translate(
+            "MATCH (n:Person) RETURN CASE WHEN count(*) > 0 THEN 'yes' ELSE 'no' END AS result",
+        )
+        .unwrap();
+        fn has_aggregate(op: &LogicalOperator) -> bool {
+            match op {
+                LogicalOperator::Aggregate(_) => true,
+                LogicalOperator::Return(ret) => has_aggregate(&ret.input),
+                _ => false,
+            }
+        }
+        assert!(
+            has_aggregate(&plan.root),
+            "Expected Aggregate operator for CASE wrapping aggregate"
+        );
     }
 
     #[test]

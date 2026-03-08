@@ -869,6 +869,26 @@ mod cypher_features {
     }
 
     #[test]
+    fn cypher_case_inside_aggregate() {
+        let db = social_network();
+        let session = db.session();
+        // sum(CASE WHEN ... THEN 1 ELSE 0 END) is a common conditional-count pattern
+        let result = session
+            .execute_cypher(
+                "MATCH (p:Person) \
+                 RETURN sum(CASE WHEN p.age >= 30 THEN 1 ELSE 0 END) AS over_30, \
+                        sum(CASE WHEN p.age < 30 THEN 1 ELSE 0 END) AS under_30",
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+        // Alix=30, Gus=25, Harm=35, Dave=28 => over_30=2 (Alix, Harm), under_30=2 (Gus, Dave)
+        let over_30 = &result.rows[0][0];
+        let under_30 = &result.rows[0][1];
+        assert_eq!(*over_30, Value::Int64(2), "Expected 2 people aged >= 30");
+        assert_eq!(*under_30, Value::Int64(2), "Expected 2 people aged < 30");
+    }
+
+    #[test]
     fn cypher_math_functions() {
         let db = social_network();
         let session = db.session();
@@ -944,6 +964,122 @@ mod cypher_features {
     }
 
     #[test]
+    fn cypher_create_index() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        // Set up data so there's a label in the catalog
+        session
+            .execute("INSERT (:Person {name: 'Alix', age: 30})")
+            .unwrap();
+        let result =
+            session.execute_cypher("CREATE INDEX idx_person_name FOR (n:Person) ON (n.name)");
+        assert!(
+            result.is_ok(),
+            "CREATE INDEX should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn cypher_create_index_if_not_exists() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
+        session
+            .execute_cypher("CREATE INDEX idx_test IF NOT EXISTS FOR (n:Person) ON (n.name)")
+            .unwrap();
+        // Running again should not error with IF NOT EXISTS
+        let result = session
+            .execute_cypher("CREATE INDEX idx_test IF NOT EXISTS FOR (n:Person) ON (n.name)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cypher_drop_index() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
+        session
+            .execute_cypher("CREATE INDEX idx_drop FOR (n:Person) ON (n.name)")
+            .unwrap();
+        // DROP by property name (store tracks by property, not by index name)
+        let result = session.execute_cypher("DROP INDEX name");
+        assert!(
+            result.is_ok(),
+            "DROP INDEX should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn cypher_drop_index_if_exists() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        // Dropping non-existent index with IF EXISTS should not error
+        let result = session.execute_cypher("DROP INDEX nonexistent IF EXISTS");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cypher_create_constraint() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
+        let result = session.execute_cypher(
+            "CREATE CONSTRAINT unique_name FOR (n:Person) REQUIRE n.name IS UNIQUE",
+        );
+        assert!(
+            result.is_ok(),
+            "CREATE CONSTRAINT should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn cypher_show_indexes() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute_cypher("SHOW INDEXES");
+        assert!(
+            result.is_ok(),
+            "SHOW INDEXES should succeed: {:?}",
+            result.err()
+        );
+        let qr = result.unwrap();
+        assert_eq!(qr.columns.len(), 4);
+        assert_eq!(qr.columns[0], "name");
+    }
+
+    #[test]
+    fn cypher_show_constraints() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute_cypher("SHOW CONSTRAINTS");
+        assert!(
+            result.is_ok(),
+            "SHOW CONSTRAINTS should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn cypher_relationship_where_clause() {
+        let db = social_network();
+        let session = db.session();
+        // Inline WHERE on relationship pattern (Neo4j 5.x syntax)
+        let result = session.execute_cypher(
+            "MATCH (p:Person)-[r:KNOWS WHERE r.since IS NOT NULL]->(f:Person) \
+                 RETURN p.name, f.name ORDER BY p.name",
+        );
+        // Should parse and execute without errors regardless of data
+        assert!(
+            result.is_ok(),
+            "Relationship WHERE should work: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
     fn cypher_label_check_in_where() {
         let db = social_network();
         let session = db.session();
@@ -964,6 +1100,38 @@ mod cypher_features {
             )
             .unwrap();
         assert!(result.row_count() >= 3); // Alix, Gus, Dave work at TechCorp
+    }
+
+    #[test]
+    fn cypher_exists_bare_pattern() {
+        let db = social_network();
+        let session = db.session();
+        // Bare pattern form: no explicit MATCH keyword inside EXISTS
+        let result = session
+            .execute_cypher(
+                "MATCH (p:Person) WHERE EXISTS { (p)-[:WORKS_AT]->(:Company) } \
+                 RETURN p.name ORDER BY p.name",
+            )
+            .unwrap();
+        assert!(result.row_count() >= 3); // same as the explicit MATCH version
+    }
+
+    #[test]
+    fn cypher_exists_bare_pattern_with_where() {
+        let db = social_network();
+        let session = db.session();
+        // Bare pattern with WHERE inside EXISTS
+        let result = session.execute_cypher(
+            "MATCH (p:Person) WHERE EXISTS { (p)-[r:KNOWS]->() WHERE r.since IS NOT NULL } \
+                 RETURN p.name ORDER BY p.name",
+        );
+        // This may or may not return results depending on test data,
+        // but it should parse and execute without errors
+        assert!(
+            result.is_ok(),
+            "Bare pattern EXISTS with WHERE should parse: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1095,6 +1263,164 @@ mod cypher_features {
         let result =
             db.execute_cypher_with_params("MATCH (p:Person) RETURN p.name LIMIT $n", params);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn cypher_load_csv_with_headers() {
+        use std::io::Write;
+        // Create a temp CSV file
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_load_csv_headers.csv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "name,age,city").unwrap();
+            writeln!(f, "Alix,30,Amsterdam").unwrap();
+            writeln!(f, "Gus,25,Berlin").unwrap();
+            writeln!(f, "Mia,28,Paris").unwrap();
+        }
+
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row RETURN row.name AS name, row.age AS age ORDER BY row.name",
+            csv_path.display()
+        );
+        let result = session.execute_cypher(&query);
+        assert!(
+            result.is_ok(),
+            "LOAD CSV WITH HEADERS failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.row_count(), 3, "Should have 3 rows");
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+        assert_eq!(result.rows[0][1], Value::String("30".into())); // CSV values are strings
+        assert_eq!(result.rows[1][0], Value::String("Gus".into()));
+        assert_eq!(result.rows[2][0], Value::String("Mia".into()));
+
+        std::fs::remove_file(&csv_path).ok();
+    }
+
+    #[test]
+    fn cypher_load_csv_without_headers() {
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_load_csv_no_headers.csv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "Alix,30,Amsterdam").unwrap();
+            writeln!(f, "Gus,25,Berlin").unwrap();
+        }
+
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD CSV FROM '{}' AS row RETURN row[0] AS name, row[1] AS age",
+            csv_path.display()
+        );
+        let result = session.execute_cypher(&query);
+        assert!(
+            result.is_ok(),
+            "LOAD CSV without headers failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.row_count(), 2);
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+        assert_eq!(result.rows[0][1], Value::String("30".into()));
+
+        std::fs::remove_file(&csv_path).ok();
+    }
+
+    #[test]
+    fn cypher_load_csv_create_nodes() {
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_load_csv_create.csv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "name,city").unwrap();
+            writeln!(f, "Vincent,Amsterdam").unwrap();
+            writeln!(f, "Jules,Paris").unwrap();
+        }
+
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row CREATE (p:Person {{name: row.name, city: row.city}})",
+            csv_path.display()
+        );
+        let result = session.execute_cypher(&query);
+        assert!(
+            result.is_ok(),
+            "LOAD CSV + CREATE failed: {:?}",
+            result.err()
+        );
+
+        // Verify nodes were created
+        let check = session
+            .execute_cypher("MATCH (p:Person) RETURN p.name ORDER BY p.name")
+            .unwrap();
+        assert_eq!(check.row_count(), 2);
+        assert_eq!(check.rows[0][0], Value::String("Jules".into()));
+        assert_eq!(check.rows[1][0], Value::String("Vincent".into()));
+
+        std::fs::remove_file(&csv_path).ok();
+    }
+
+    #[test]
+    fn cypher_load_csv_with_fieldterminator() {
+        use std::io::Write;
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_load_csv_tab.tsv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "name\tage").unwrap();
+            writeln!(f, "Alix\t30").unwrap();
+            writeln!(f, "Gus\t25").unwrap();
+        }
+
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row FIELDTERMINATOR '\\t' RETURN row.name, row.age",
+            csv_path.display()
+        );
+        let result = session.execute_cypher(&query);
+        assert!(
+            result.is_ok(),
+            "LOAD CSV with FIELDTERMINATOR failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.row_count(), 2);
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+
+        std::fs::remove_file(&csv_path).ok();
+    }
+
+    #[test]
+    fn cypher_load_csv_file_not_found() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute_cypher(
+            "LOAD CSV WITH HEADERS FROM '/nonexistent/path/file.csv' AS row RETURN row.name",
+        );
+        assert!(result.is_err(), "Should fail for missing file");
+    }
+
+    #[test]
+    fn cypher_load_csv_parse_only() {
+        // Verify LOAD CSV parses without executing (EXPLAIN)
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session
+            .execute_cypher("EXPLAIN LOAD CSV WITH HEADERS FROM 'test.csv' AS row RETURN row.name");
+        assert!(
+            result.is_ok(),
+            "EXPLAIN LOAD CSV should parse: {:?}",
+            result.err()
+        );
     }
 }
 
