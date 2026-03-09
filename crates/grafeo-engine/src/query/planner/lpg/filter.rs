@@ -200,8 +200,95 @@ impl super::Planner {
             output_schema,
         ));
 
-        // If there's a remaining predicate (from AND splitting), wrap with a filter
+        // If there's a remaining predicate (from AND splitting), check if it
+        // contains more EXISTS subqueries that need semi-join rewriting.
         if let Some(remaining) = remaining_predicate {
+            // Recursively handle nested EXISTS in the remaining predicate
+            if let Some((nested_sub, nested_neg, nested_rest)) =
+                self.extract_complex_exists(remaining)
+            {
+                return self.plan_exists_as_semi_join_with_input(
+                    join_op,
+                    &output_columns,
+                    nested_sub,
+                    nested_neg,
+                    nested_rest,
+                );
+            }
+
+            let variable_columns: HashMap<String, usize> = output_columns
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.clone(), i))
+                .collect();
+            let filter_expr = self.convert_expression(remaining)?;
+            let predicate = ExpressionPredicate::new(
+                filter_expr,
+                variable_columns,
+                Arc::clone(&self.store) as Arc<dyn GraphStore>,
+            );
+            let filter_op = Box::new(FilterOperator::new(join_op, Box::new(predicate)));
+            return Ok((filter_op, output_columns));
+        }
+
+        Ok((join_op, output_columns))
+    }
+
+    /// Plans an EXISTS/NOT EXISTS semi-join with an already-planned outer input.
+    ///
+    /// Used when the remaining predicate from a prior semi-join contains additional
+    /// EXISTS subqueries that also need semi-join rewriting (nested NOT EXISTS).
+    fn plan_exists_as_semi_join_with_input(
+        &self,
+        left_op: Box<dyn Operator>,
+        left_columns: &[String],
+        subquery: &LogicalOperator,
+        is_negated: bool,
+        remaining_predicate: Option<&LogicalExpression>,
+    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        let (right_op, right_columns) = self.plan_operator(subquery)?;
+
+        let output_columns = left_columns.to_vec();
+
+        let mut probe_keys = Vec::new();
+        let mut build_keys = Vec::new();
+        for (right_idx, right_col) in right_columns.iter().enumerate() {
+            if let Some(left_idx) = left_columns.iter().position(|c| c == right_col) {
+                probe_keys.push(left_idx);
+                build_keys.push(right_idx);
+            }
+        }
+
+        let output_schema = self.derive_schema_from_columns(&output_columns);
+        let join_type = if is_negated {
+            PhysicalJoinType::Anti
+        } else {
+            PhysicalJoinType::Semi
+        };
+
+        let join_op: Box<dyn Operator> = Box::new(HashJoinOperator::new(
+            left_op,
+            right_op,
+            probe_keys,
+            build_keys,
+            join_type,
+            output_schema,
+        ));
+
+        // Recursively handle any further EXISTS in the remaining predicate
+        if let Some(remaining) = remaining_predicate {
+            if let Some((nested_sub, nested_neg, nested_rest)) =
+                self.extract_complex_exists(remaining)
+            {
+                return self.plan_exists_as_semi_join_with_input(
+                    join_op,
+                    &output_columns,
+                    nested_sub,
+                    nested_neg,
+                    nested_rest,
+                );
+            }
+
             let variable_columns: HashMap<String, usize> = output_columns
                 .iter()
                 .enumerate()

@@ -2,7 +2,7 @@
 //!
 //! Translates GQL AST to the common logical plan representation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::common::{
     combine_with_and, is_aggregate_function, is_binary_set_function, to_aggregate_function,
@@ -11,10 +11,11 @@ use super::common::{
 use crate::query::plan::{
     self as plan, AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp,
     CallProcedureOp, CreateEdgeOp, CreateNodeOp, DeleteNodeOp, EntityKind, ExceptOp,
-    ExpandDirection, ExpandOp, HorizontalAggregateOp, IntersectOp, JoinOp, JoinType, LeftJoinOp,
-    LogicalExpression, LogicalOperator, LogicalPlan, MergeOp, MergeRelationshipOp, NodeScanOp,
-    NullsOrdering, OtherwiseOp, PathMode, ProcedureYield, ProjectOp, Projection, RemoveLabelOp,
-    ReturnItem, SetPropertyOp, ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp, UnwindOp,
+    ExpandDirection, ExpandOp, HorizontalAggregateOp, IntersectOp, JoinCondition, JoinOp, JoinType,
+    LeftJoinOp, LogicalExpression, LogicalOperator, LogicalPlan, MergeOp, MergeRelationshipOp,
+    NodeScanOp, NullsOrdering, OtherwiseOp, PathMode, ProcedureYield, ProjectOp, Projection,
+    RemoveLabelOp, ReturnItem, SetPropertyOp, ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp,
+    UnwindOp,
 };
 #[cfg(test)]
 use crate::query::plan::{FilterOp, LimitOp, SkipOp};
@@ -756,19 +757,61 @@ impl GqlTranslator {
         Ok(LogicalPlan::new(plan))
     }
 
+    /// Extracts all named variables from a GQL AST pattern.
+    fn pattern_variables(pattern: &ast::Pattern) -> HashSet<String> {
+        let mut vars = HashSet::new();
+        match pattern {
+            ast::Pattern::Node(node) => {
+                if let Some(v) = &node.variable {
+                    vars.insert(v.clone());
+                }
+            }
+            ast::Pattern::Path(path) => {
+                if let Some(v) = &path.source.variable {
+                    vars.insert(v.clone());
+                }
+                for edge in &path.edges {
+                    if let Some(v) = &edge.variable {
+                        vars.insert(v.clone());
+                    }
+                    if let Some(v) = &edge.target.variable {
+                        vars.insert(v.clone());
+                    }
+                }
+            }
+            ast::Pattern::Quantified {
+                pattern,
+                subpath_var,
+                ..
+            } => {
+                if let Some(v) = subpath_var {
+                    vars.insert(v.clone());
+                }
+                vars.extend(Self::pattern_variables(pattern));
+            }
+            ast::Pattern::Union(patterns) | ast::Pattern::MultisetUnion(patterns) => {
+                for p in patterns {
+                    vars.extend(Self::pattern_variables(p));
+                }
+            }
+        }
+        vars
+    }
+
     /// Translates a MATCH clause with an optional initial input.
     ///
     /// When `initial_input` is provided (e.g. from a preceding UNWIND), the
     /// first pattern's NodeScan receives it as input. This creates a nested
     /// loop join that keeps prior variables (like UNWIND variables) in scope
     /// so that property filters like `{id: x}` can reference them.
+    ///
+    /// When multiple comma-separated patterns share variables, creates proper
+    /// `JoinOp` operators with equality conditions instead of cross products.
     fn translate_match_with_input(
         &self,
         match_clause: &ast::MatchClause,
         initial_input: Option<LogicalOperator>,
     ) -> Result<LogicalOperator> {
-        let mut plan: Option<LogicalOperator> = initial_input;
-
         let mut path_mode = match match_clause.path_mode {
             Some(ast::PathMode::Walk) | None => PathMode::Walk,
             Some(ast::PathMode::Trail) => PathMode::Trail,
@@ -795,36 +838,74 @@ impl GqlTranslator {
             )
         );
 
-        for aliased_pattern in &match_clause.patterns {
-            // Handle shortestPath patterns specially
-            if let Some(path_function) = &aliased_pattern.path_function {
-                plan = Some(self.translate_shortest_path(
+        // Collect variables for each pattern to detect shared variables
+        let pattern_vars: Vec<HashSet<String>> = match_clause
+            .patterns
+            .iter()
+            .map(|ap| Self::pattern_variables(&ap.pattern))
+            .collect();
+
+        let mut plan: Option<LogicalOperator> = initial_input;
+        let mut bound_vars: HashSet<String> = HashSet::new();
+
+        for (index, aliased_pattern) in match_clause.patterns.iter().enumerate() {
+            let current_vars = &pattern_vars[index];
+            let shared: Vec<String> = current_vars.intersection(&bound_vars).cloned().collect();
+
+            // Determine the input for this pattern: if shared variables exist,
+            // translate independently and join; otherwise chain as before.
+            let pattern_input = if shared.is_empty() { plan.take() } else { None };
+
+            let pattern_plan = if let Some(path_function) = &aliased_pattern.path_function {
+                self.translate_shortest_path(
                     &aliased_pattern.pattern,
                     aliased_pattern.alias.as_deref(),
                     *path_function,
-                    plan.take(),
-                )?);
+                    pattern_input,
+                )?
             } else if use_shortest {
-                // ISO path search prefix maps to ShortestPath operator
                 let pf = match &match_clause.search_prefix {
                     Some(ast::PathSearchPrefix::AllShortest) => ast::PathFunction::AllShortestPaths,
                     _ => ast::PathFunction::ShortestPath,
                 };
-                plan = Some(self.translate_shortest_path(
+                self.translate_shortest_path(
                     &aliased_pattern.pattern,
                     aliased_pattern.alias.as_deref(),
                     pf,
-                    plan.take(),
-                )?);
+                    pattern_input,
+                )?
             } else {
-                let pattern_plan = self.translate_pattern_with_alias(
+                self.translate_pattern_with_alias(
                     &aliased_pattern.pattern,
-                    plan.take(),
+                    pattern_input,
                     aliased_pattern.alias.as_deref(),
                     path_mode,
-                )?;
+                )?
+            };
+
+            if !shared.is_empty() {
+                // Join on shared variables
+                let left = plan
+                    .take()
+                    .expect("bound_vars non-empty implies plan exists");
+                let conditions = shared
+                    .iter()
+                    .map(|var| JoinCondition {
+                        left: LogicalExpression::Variable(var.clone()),
+                        right: LogicalExpression::Variable(var.clone()),
+                    })
+                    .collect();
+                plan = Some(LogicalOperator::Join(JoinOp {
+                    left: Box::new(left),
+                    right: Box::new(pattern_plan),
+                    join_type: JoinType::Inner,
+                    conditions,
+                }));
+            } else {
                 plan = Some(pattern_plan);
             }
+
+            bound_vars.extend(current_vars.iter().cloned());
         }
 
         plan.ok_or_else(|| {

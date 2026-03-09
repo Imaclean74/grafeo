@@ -1172,6 +1172,23 @@ impl Binder {
             }
         }
 
+        // Register group-by output column names so ORDER BY / HAVING
+        // can reference them (e.g. "n.city" from Property(n, city)).
+        for expr in &agg.group_by {
+            let col_name = crate::query::planner::common::expression_to_string(expr);
+            if !self.context.contains(&col_name) {
+                self.context.add_variable(
+                    col_name.clone(),
+                    VariableInfo {
+                        name: col_name,
+                        data_type: LogicalType::Any,
+                        is_node: false,
+                        is_edge: false,
+                    },
+                );
+            }
+        }
+
         Ok(())
     }
 }

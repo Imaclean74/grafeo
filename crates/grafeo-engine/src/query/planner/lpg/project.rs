@@ -27,6 +27,24 @@ impl super::Planner {
         input_op: Box<dyn Operator>,
         input_columns: Vec<String>,
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+        let (operator, columns) = self.plan_return_projection(ret, input_op, input_columns)?;
+
+        // Apply DISTINCT if requested
+        if ret.distinct {
+            let schema = vec![LogicalType::Any; columns.len()];
+            Ok(common::build_distinct(operator, columns, None, schema))
+        } else {
+            Ok((operator, columns))
+        }
+    }
+
+    /// Plans the projection part of a RETURN clause (without DISTINCT).
+    fn plan_return_projection(
+        &self,
+        ret: &ReturnOp,
+        input_op: Box<dyn Operator>,
+        input_columns: Vec<String>,
+    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
         // Expand RETURN * wildcard: replace with all user-visible input columns
         let expanded_items;
         let items = if ret.items.len() == 1

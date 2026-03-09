@@ -5,13 +5,17 @@ use crate::query::planner::common;
 
 impl super::Planner {
     /// Plans a JOIN operator.
+    ///
+    /// When join conditions reference shared variables, deduplicates the output
+    /// columns by projecting out the right-side copies (whose values are equal
+    /// to the left-side copies due to the join condition).
     pub(super) fn plan_join(&self, join: &JoinOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
         let (left_op, left_columns) = self.plan_operator(&join.left)?;
         let (right_op, right_columns) = self.plan_operator(&join.right)?;
 
-        // Build combined output columns
-        let mut columns = left_columns.clone();
-        columns.extend(right_columns.clone());
+        // Full column list before deduplication (HashJoin produces all columns)
+        let mut all_columns = left_columns.clone();
+        all_columns.extend(right_columns.clone());
 
         // Convert join type
         let physical_join_type = match join.join_type {
@@ -42,7 +46,7 @@ impl super::Planner {
                 .unzip()
         };
 
-        let output_schema = self.derive_schema_from_columns(&columns);
+        let output_schema = self.derive_schema_from_columns(&all_columns);
 
         let operator: Box<dyn Operator> = Box::new(HashJoinOperator::new(
             left_op,
@@ -53,7 +57,7 @@ impl super::Planner {
             output_schema,
         ));
 
-        Ok((operator, columns))
+        Ok((operator, all_columns))
     }
 
     /// Plans a multi-way leapfrog join (WCOJ) operator.
