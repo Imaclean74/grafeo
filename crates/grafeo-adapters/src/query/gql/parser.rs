@@ -355,15 +355,16 @@ impl<'a> Parser<'a> {
                     }
                     "ALTER" => self.parse_alter(),
                     "SHOW" => self.parse_show().map(Statement::Schema),
+                    "LOAD" => self.parse_query().map(Statement::Query),
                     _ => Err(self.error(
                         "Expected MATCH, INSERT, DELETE, MERGE, UNWIND, FOR, CREATE, CALL, \
-                         DROP, ALTER, SHOW, USE, SESSION, START, COMMIT, ROLLBACK, or SAVEPOINT",
+                         DROP, ALTER, SHOW, LOAD, USE, SESSION, START, COMMIT, ROLLBACK, or SAVEPOINT",
                     )),
                 }
             }
             _ => Err(self.error(
                 "Expected MATCH, INSERT, DELETE, MERGE, UNWIND, FOR, CREATE, CALL, \
-                 DROP, SHOW, USE, SESSION, START, COMMIT, or ROLLBACK",
+                 DROP, SHOW, LOAD, USE, SESSION, START, COMMIT, or ROLLBACK",
             )),
         }
     }
@@ -579,6 +580,12 @@ impl<'a> Parser<'a> {
                 {
                     let bindings = self.parse_let_clause()?;
                     ordered_clauses.push(QueryClause::Let(bindings));
+                }
+                _ if self.is_identifier()
+                    && self.get_identifier_name().eq_ignore_ascii_case("LOAD") =>
+                {
+                    let clause = self.parse_load_data_clause()?;
+                    ordered_clauses.push(QueryClause::LoadData(clause));
                 }
                 _ => break,
             }
@@ -979,6 +986,159 @@ impl<'a> Parser<'a> {
             self.advance(); // consume comma
         }
         Ok(bindings)
+    }
+
+    /// Parses `LOAD DATA FROM 'path' FORMAT CSV|JSONL|PARQUET [WITH HEADERS] AS variable [FIELDTERMINATOR 'char']`
+    /// Also accepts Cypher-compatible `LOAD CSV [WITH HEADERS] FROM 'path' AS variable [FIELDTERMINATOR 'char']`
+    fn parse_load_data_clause(&mut self) -> Result<LoadDataClause> {
+        let span_start = self.current.span.start;
+        self.advance(); // consume LOAD
+
+        // Check for Cypher-compatible LOAD CSV syntax
+        if self.is_identifier() && self.get_identifier_name().eq_ignore_ascii_case("CSV") {
+            return self.parse_load_csv_compat(span_start);
+        }
+
+        // GQL syntax: LOAD DATA FROM 'path' FORMAT CSV|JSONL|PARQUET [WITH HEADERS] AS variable
+        if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("DATA") {
+            return Err(self.error("Expected DATA or CSV after LOAD"));
+        }
+        self.advance(); // consume DATA
+
+        // FROM 'path'
+        if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("FROM") {
+            return Err(self.error("Expected FROM after DATA in LOAD DATA"));
+        }
+        self.advance(); // consume FROM
+        let path = self.parse_string_value()?;
+
+        // FORMAT CSV|JSONL|PARQUET
+        if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("FORMAT") {
+            return Err(self.error("Expected FORMAT after file path in LOAD DATA"));
+        }
+        self.advance(); // consume FORMAT
+
+        let format = if self.is_identifier() {
+            let name = self.get_identifier_name();
+            self.advance();
+            match name.to_ascii_uppercase().as_str() {
+                "CSV" => LoadFormat::Csv,
+                "JSONL" | "NDJSON" => LoadFormat::Jsonl,
+                "PARQUET" => LoadFormat::Parquet,
+                _ => {
+                    return Err(self.error(&format!(
+                        "Unknown format '{name}', expected CSV, JSONL, or PARQUET"
+                    )));
+                }
+            }
+        } else {
+            return Err(self.error("Expected format name (CSV, JSONL, or PARQUET)"));
+        };
+
+        // Optional: WITH HEADERS (CSV only)
+        let with_headers = if self.current.kind == TokenKind::With {
+            self.advance();
+            if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("HEADERS")
+            {
+                return Err(self.error("Expected HEADERS after WITH in LOAD DATA"));
+            }
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // AS variable
+        self.expect(TokenKind::As)?;
+        if !self.is_identifier() {
+            return Err(self.error("Expected variable name after AS in LOAD DATA"));
+        }
+        let variable = self.get_identifier_name();
+        self.advance();
+
+        // Optional: FIELDTERMINATOR 'char'
+        let field_terminator = self.parse_optional_field_terminator()?;
+
+        Ok(LoadDataClause {
+            path,
+            format,
+            with_headers,
+            variable,
+            field_terminator,
+            span: SourceSpan::new(span_start, self.current.span.end, 1, 1),
+        })
+    }
+
+    /// Parses Cypher-compatible `LOAD CSV [WITH HEADERS] FROM 'path' AS variable [FIELDTERMINATOR 'char']`.
+    fn parse_load_csv_compat(&mut self, span_start: usize) -> Result<LoadDataClause> {
+        self.advance(); // consume CSV
+
+        // Optional: WITH HEADERS
+        let with_headers = if self.current.kind == TokenKind::With {
+            self.advance();
+            if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("HEADERS")
+            {
+                return Err(self.error("Expected HEADERS after WITH"));
+            }
+            self.advance();
+            true
+        } else {
+            false
+        };
+
+        // FROM 'path'
+        if !self.is_identifier() || !self.get_identifier_name().eq_ignore_ascii_case("FROM") {
+            return Err(self.error("Expected FROM after WITH HEADERS or CSV"));
+        }
+        self.advance(); // consume FROM
+        let path = self.parse_string_value()?;
+
+        // AS variable
+        self.expect(TokenKind::As)?;
+        if !self.is_identifier() {
+            return Err(self.error("Expected variable name after AS"));
+        }
+        let variable = self.get_identifier_name();
+        self.advance();
+
+        // Optional: FIELDTERMINATOR 'char'
+        let field_terminator = self.parse_optional_field_terminator()?;
+
+        Ok(LoadDataClause {
+            path,
+            format: LoadFormat::Csv,
+            with_headers,
+            variable,
+            field_terminator,
+            span: SourceSpan::new(span_start, self.current.span.end, 1, 1),
+        })
+    }
+
+    /// Expects and consumes a string literal, returning the unescaped value.
+    fn parse_string_value(&mut self) -> Result<String> {
+        if self.current.kind != TokenKind::String {
+            return Err(self.error("Expected string literal"));
+        }
+        let text = &self.current.text;
+        let inner = &text[1..text.len() - 1];
+        let value = unescape_string(inner);
+        self.advance();
+        Ok(value)
+    }
+
+    /// Parses an optional `FIELDTERMINATOR 'char'` clause.
+    fn parse_optional_field_terminator(&mut self) -> Result<Option<char>> {
+        if self.is_identifier()
+            && self
+                .get_identifier_name()
+                .eq_ignore_ascii_case("FIELDTERMINATOR")
+        {
+            self.advance();
+            let term = self.parse_string_value()?;
+            Ok(term.chars().next())
+        } else {
+            Ok(None)
+        }
     }
 
     fn parse_merge_clause(&mut self) -> Result<MergeClause> {
@@ -8838,5 +8998,139 @@ mod tests {
         } else {
             panic!("Expected ShowGraphType");
         }
+    }
+
+    // --- LOAD DATA ---
+
+    #[test]
+    fn test_parse_load_data_csv() {
+        let mut parser = Parser::new(
+            "LOAD DATA FROM 'people.csv' FORMAT CSV WITH HEADERS AS row RETURN row.name",
+        );
+        let result = parser.parse();
+        assert!(result.is_ok(), "LOAD DATA CSV parse failed: {result:?}");
+        if let Statement::Query(query) = result.unwrap() {
+            assert!(!query.ordered_clauses.is_empty());
+            assert!(matches!(query.ordered_clauses[0], QueryClause::LoadData(_)));
+            if let QueryClause::LoadData(ref ld) = query.ordered_clauses[0] {
+                assert_eq!(ld.path, "people.csv");
+                assert_eq!(ld.format, LoadFormat::Csv);
+                assert!(ld.with_headers);
+                assert_eq!(ld.variable, "row");
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_data_csv_no_headers() {
+        let mut parser = Parser::new("LOAD DATA FROM 'data.csv' FORMAT CSV AS r RETURN r[0]");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "LOAD DATA CSV no headers parse failed: {result:?}"
+        );
+        if let Statement::Query(query) = result.unwrap()
+            && let QueryClause::LoadData(ref ld) = query.ordered_clauses[0]
+        {
+            assert!(!ld.with_headers);
+            assert_eq!(ld.variable, "r");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_data_jsonl() {
+        let mut parser =
+            Parser::new("LOAD DATA FROM 'events.jsonl' FORMAT JSONL AS row RETURN row.title");
+        let result = parser.parse();
+        assert!(result.is_ok(), "LOAD DATA JSONL parse failed: {result:?}");
+        if let Statement::Query(query) = result.unwrap()
+            && let QueryClause::LoadData(ref ld) = query.ordered_clauses[0]
+        {
+            assert_eq!(ld.format, LoadFormat::Jsonl);
+            assert_eq!(ld.path, "events.jsonl");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_data_ndjson() {
+        let mut parser =
+            Parser::new("LOAD DATA FROM 'data.ndjson' FORMAT NDJSON AS row RETURN row");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "LOAD DATA NDJSON alias parse failed: {result:?}"
+        );
+        if let Statement::Query(query) = result.unwrap()
+            && let QueryClause::LoadData(ref ld) = query.ordered_clauses[0]
+        {
+            assert_eq!(ld.format, LoadFormat::Jsonl);
+        }
+    }
+
+    #[test]
+    fn test_parse_load_data_parquet() {
+        let mut parser =
+            Parser::new("LOAD DATA FROM 'data.parquet' FORMAT PARQUET AS row RETURN row.id");
+        let result = parser.parse();
+        assert!(result.is_ok(), "LOAD DATA PARQUET parse failed: {result:?}");
+        if let Statement::Query(query) = result.unwrap()
+            && let QueryClause::LoadData(ref ld) = query.ordered_clauses[0]
+        {
+            assert_eq!(ld.format, LoadFormat::Parquet);
+        }
+    }
+
+    #[test]
+    fn test_parse_load_csv_compat() {
+        // Cypher-compatible LOAD CSV syntax in GQL parser
+        let mut parser =
+            Parser::new("LOAD CSV WITH HEADERS FROM 'file.csv' AS row RETURN row.name");
+        let result = parser.parse();
+        assert!(result.is_ok(), "LOAD CSV compat parse failed: {result:?}");
+        if let Statement::Query(query) = result.unwrap()
+            && let QueryClause::LoadData(ref ld) = query.ordered_clauses[0]
+        {
+            assert_eq!(ld.format, LoadFormat::Csv);
+            assert!(ld.with_headers);
+            assert_eq!(ld.path, "file.csv");
+        }
+    }
+
+    #[test]
+    fn test_parse_load_data_with_fieldterminator() {
+        let mut parser = Parser::new(
+            "LOAD DATA FROM 'data.tsv' FORMAT CSV WITH HEADERS AS row FIELDTERMINATOR '\\t' RETURN row",
+        );
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "LOAD DATA with FIELDTERMINATOR parse failed: {result:?}"
+        );
+        if let Statement::Query(query) = result.unwrap()
+            && let QueryClause::LoadData(ref ld) = query.ordered_clauses[0]
+        {
+            assert_eq!(ld.field_terminator, Some('\t'));
+        }
+    }
+
+    #[test]
+    fn test_parse_load_data_with_insert() {
+        let mut parser = Parser::new(
+            "LOAD DATA FROM 'people.csv' FORMAT CSV WITH HEADERS AS row INSERT (:Person {name: row.name})",
+        );
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "LOAD DATA + INSERT parse failed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_load_data_bad_format() {
+        let mut parser = Parser::new("LOAD DATA FROM 'data.xml' FORMAT XML AS row RETURN row");
+        let result = parser.parse();
+        assert!(result.is_err(), "Should fail with unknown format XML");
     }
 }

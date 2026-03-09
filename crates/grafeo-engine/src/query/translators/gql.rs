@@ -5,17 +5,18 @@
 use std::collections::{HashMap, HashSet};
 
 use super::common::{
-    combine_with_and, is_aggregate_function, is_binary_set_function, to_aggregate_function,
-    wrap_distinct, wrap_filter, wrap_limit, wrap_return, wrap_skip, wrap_sort,
+    build_left_join_with_predicates, combine_with_and, is_aggregate_function,
+    is_binary_set_function, to_aggregate_function, wrap_distinct, wrap_filter, wrap_limit,
+    wrap_return, wrap_skip, wrap_sort,
 };
 use crate::query::plan::{
     self as plan, AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp,
     CallProcedureOp, CreateEdgeOp, CreateNodeOp, DeleteNodeOp, EntityKind, ExceptOp,
     ExpandDirection, ExpandOp, HorizontalAggregateOp, IntersectOp, JoinCondition, JoinOp, JoinType,
-    LeftJoinOp, LogicalExpression, LogicalOperator, LogicalPlan, MergeOp, MergeRelationshipOp,
-    NodeScanOp, NullsOrdering, OtherwiseOp, ParameterScanOp, PathMode, ProcedureYield, ProjectOp,
-    Projection, RemoveLabelOp, ReturnItem, SetPropertyOp, ShortestPathOp, SortKey, SortOrder,
-    UnaryOp, UnionOp, UnwindOp,
+    LeftJoinOp, LoadDataFormat, LoadDataOp, LogicalExpression, LogicalOperator, LogicalPlan,
+    MergeOp, MergeRelationshipOp, NodeScanOp, NullsOrdering, OtherwiseOp, ParameterScanOp,
+    PathMode, ProcedureYield, ProjectOp, Projection, RemoveLabelOp, ReturnItem, SetPropertyOp,
+    ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp, UnwindOp,
 };
 #[cfg(test)]
 use crate::query::plan::{FilterOp, LimitOp, SkipOp};
@@ -297,7 +298,7 @@ impl GqlTranslator {
                 {
                     if let Some(where_clause) = &query.where_clause {
                         let predicate = self.translate_expression(&where_clause.expression)?;
-                        plan = wrap_filter(plan, predicate);
+                        plan = self.apply_where_with_left_join_awareness(plan, predicate);
                     }
                     where_applied = true;
                 }
@@ -420,6 +421,20 @@ impl GqlTranslator {
                             });
                         }
                     }
+                    ast::QueryClause::LoadData(load_clause) => {
+                        let load_plan = self.translate_load_data(load_clause);
+                        if matches!(plan, LogicalOperator::Empty) {
+                            plan = load_plan;
+                        } else {
+                            // Cross join with existing plan
+                            plan = LogicalOperator::Join(JoinOp {
+                                left: Box::new(plan),
+                                right: Box::new(load_plan),
+                                join_type: JoinType::Cross,
+                                conditions: vec![],
+                            });
+                        }
+                    }
                 }
             }
         } else {
@@ -463,7 +478,7 @@ impl GqlTranslator {
         // Apply WHERE filter (skip if already applied before a mutation clause)
         if !where_applied && let Some(where_clause) = &query.where_clause {
             let predicate = self.translate_expression(&where_clause.expression)?;
-            plan = wrap_filter(plan, predicate);
+            plan = self.apply_where_with_left_join_awareness(plan, predicate);
         }
 
         // Legacy path: handle SET/REMOVE/CREATE/DELETE from individual fields.
@@ -987,6 +1002,22 @@ impl GqlTranslator {
     /// Translates `CALL { subquery }` to an Apply operator with proper scope.
     ///
     /// When the subquery starts with `WITH <vars>`, the variables are treated
+    /// Translates a `LoadDataClause` to a `LoadData` logical operator.
+    fn translate_load_data(&self, load: &ast::LoadDataClause) -> LogicalOperator {
+        let format = match load.format {
+            ast::LoadFormat::Csv => LoadDataFormat::Csv,
+            ast::LoadFormat::Jsonl => LoadDataFormat::Jsonl,
+            ast::LoadFormat::Parquet => LoadDataFormat::Parquet,
+        };
+        LogicalOperator::LoadData(LoadDataOp {
+            format,
+            with_headers: load.with_headers,
+            path: load.path.clone(),
+            variable: load.variable.clone(),
+            field_terminator: load.field_terminator,
+        })
+    }
+
     /// as imports from the outer scope: a `ParameterScan` replaces `Empty` as
     /// the inner plan root and `shared_variables` is populated so the planner
     /// can wire them through `ParameterState`.
@@ -1156,6 +1187,29 @@ impl GqlTranslator {
 
     fn translate_match(&self, match_clause: &ast::MatchClause) -> Result<LogicalOperator> {
         self.translate_match_with_input(match_clause, None)
+    }
+
+    /// Applies a WHERE predicate with awareness of LeftJoin semantics.
+    ///
+    /// When the current plan ends with a LeftJoin (from OPTIONAL MATCH),
+    /// right-side predicates are pushed into the join instead of being
+    /// placed as a post-filter (which would incorrectly eliminate NULL rows).
+    fn apply_where_with_left_join_awareness(
+        &self,
+        plan: LogicalOperator,
+        predicate: LogicalExpression,
+    ) -> LogicalOperator {
+        if let LogicalOperator::LeftJoin(left_join) = plan {
+            let (join, post_filter) =
+                build_left_join_with_predicates(*left_join.left, *left_join.right, Some(predicate));
+            if let Some(pf) = post_filter {
+                wrap_filter(join, pf)
+            } else {
+                join
+            }
+        } else {
+            wrap_filter(plan, predicate)
+        }
     }
 
     /// Translates a shortestPath pattern into a logical operator.

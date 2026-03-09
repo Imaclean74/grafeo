@@ -752,7 +752,7 @@ impl super::Planner {
         call: &CallProcedureOp,
         proc_def: &crate::catalog::ProcedureDefinition,
     ) -> Result<(Box<dyn Operator>, Vec<String>)> {
-        use crate::query::executor::user_procedure::UserProcedureOperator;
+        use crate::query::executor::user_procedure::{ProcedureContext, UserProcedureOperator};
 
         // Validate argument count
         if call.arguments.len() != proc_def.params.len() {
@@ -805,11 +805,13 @@ impl super::Planner {
             param_map,
             return_columns,
             yield_columns,
-            Arc::clone(&self.store) as Arc<dyn GraphStoreMut>,
-            self.transaction_manager.clone(),
-            self.transaction_id,
-            self.viewing_epoch,
-            self.catalog.clone(),
+            ProcedureContext {
+                store: Arc::clone(&self.store) as Arc<dyn GraphStoreMut>,
+                transaction_manager: self.transaction_manager.clone(),
+                transaction_id: self.transaction_id,
+                viewing_epoch: self.viewing_epoch,
+                catalog: self.catalog.clone(),
+            },
         ));
 
         // Procedure outputs are scalar values, not node/edge IDs

@@ -77,10 +77,14 @@ ai = ["vector-index", "text-index", "hybrid-search", "cdc"]  # All AI/RAG featur
 storage = ["wal", "spill", "mmap"]  # Persistent storage (WAL, disk spill, memory-mapped files)
 
 # Named profiles (ecosystem-aligned)
-embedded = ["gql", "ai", "algos", "parallel", "regex"]  # Python libs, MCP, in-process
+embedded = ["gql", "ai", "algos", "parallel", "regex", "jsonl-import"]  # Python libs, MCP, in-process
 browser = ["gql", "regex-lite"]  # WASM / grafeo-web
 server = ["full"]  # grafeo-server
-full = ["languages", "ai", "rdf", "parallel", "algos", "storage"]
+full = ["languages", "ai", "rdf", "parallel", "algos", "storage", "jsonl-import", "parquet-import"]
+
+# Data import
+jsonl-import = ["grafeo-core/jsonl-import"]  # JSON Lines file import
+parquet-import = ["grafeo-core/parquet-import"]  # Apache Parquet file import
 
 # Search & AI features
 vector-index = ["grafeo-core/vector-index"]  # HNSW vector index for k-NN search

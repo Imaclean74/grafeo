@@ -32,7 +32,7 @@ mod horizontal_aggregate;
 mod join;
 mod leapfrog_join;
 mod limit;
-mod load_csv;
+mod load_data;
 mod map_collect;
 mod merge;
 mod mutation;
@@ -77,7 +77,7 @@ pub use join::{
 };
 pub use leapfrog_join::LeapfrogJoinOperator;
 pub use limit::{LimitOperator, LimitSkipOperator, SkipOperator};
-pub use load_csv::LoadCsvOperator;
+pub use load_data::{LoadDataFormat, LoadDataOperator};
 pub use map_collect::MapCollectOperator;
 pub use merge::{MergeConfig, MergeOperator, MergeRelationshipConfig, MergeRelationshipOperator};
 pub use mutation::{

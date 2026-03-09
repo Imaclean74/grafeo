@@ -34,7 +34,7 @@ use grafeo_core::execution::operators::{
     FactorizedAggregate, FactorizedAggregateOperator, FilterExpression, FilterOperator,
     HashAggregateOperator, HashJoinOperator, HorizontalAggregateOperator,
     JoinType as PhysicalJoinType, LazyFactorizedChainOperator, LeapfrogJoinOperator,
-    LoadCsvOperator, MapCollectOperator, MergeConfig, MergeOperator, MergeRelationshipConfig,
+    LoadDataOperator, MapCollectOperator, MergeConfig, MergeOperator, MergeRelationshipConfig,
     MergeRelationshipOperator, NestedLoopJoinOperator, NodeListOperator, NullOrder, Operator,
     ParameterScanOperator, ProjectExpr, ProjectOperator, PropertySource, RemoveLabelOperator,
     ScanOperator, SetPropertyOperator, ShortestPathOperator, SimpleAggregateOperator,
@@ -552,9 +552,10 @@ impl Planner {
             }
             LogicalOperator::MultiWayJoin(mwj) => self.plan_multi_way_join(mwj),
             LogicalOperator::HorizontalAggregate(ha) => self.plan_horizontal_aggregate(ha),
-            LogicalOperator::LoadCsv(load) => {
-                let operator: Box<dyn Operator> = Box::new(LoadCsvOperator::new(
+            LogicalOperator::LoadData(load) => {
+                let operator: Box<dyn Operator> = Box::new(LoadDataOperator::new(
                     load.path.clone(),
+                    load.format,
                     load.with_headers,
                     load.field_terminator,
                     load.variable.clone(),

@@ -592,48 +592,30 @@ impl GrafeoDB {
     /// ```
     #[must_use]
     pub fn session(&self) -> Session {
+        let session_cfg = || crate::session::SessionConfig {
+            transaction_manager: Arc::clone(&self.transaction_manager),
+            query_cache: Arc::clone(&self.query_cache),
+            catalog: Arc::clone(&self.catalog),
+            adaptive_config: self.config.adaptive.clone(),
+            factorized_execution: self.config.factorized_execution,
+            graph_model: self.config.graph_model,
+            query_timeout: self.config.query_timeout,
+            commit_counter: Arc::clone(&self.commit_counter),
+            gc_interval: self.config.gc_interval,
+        };
+
         if let Some(ref ext_store) = self.external_store {
-            return Session::with_external_store(
-                Arc::clone(ext_store),
-                Arc::clone(&self.transaction_manager),
-                Arc::clone(&self.query_cache),
-                Arc::clone(&self.catalog),
-                self.config.adaptive.clone(),
-                self.config.factorized_execution,
-                self.config.graph_model,
-                self.config.query_timeout,
-                Arc::clone(&self.commit_counter),
-                self.config.gc_interval,
-            );
+            return Session::with_external_store(Arc::clone(ext_store), session_cfg());
         }
 
         #[cfg(feature = "rdf")]
         let mut session = Session::with_rdf_store_and_adaptive(
             Arc::clone(&self.store),
             Arc::clone(&self.rdf_store),
-            Arc::clone(&self.transaction_manager),
-            Arc::clone(&self.query_cache),
-            Arc::clone(&self.catalog),
-            self.config.adaptive.clone(),
-            self.config.factorized_execution,
-            self.config.graph_model,
-            self.config.query_timeout,
-            Arc::clone(&self.commit_counter),
-            self.config.gc_interval,
+            session_cfg(),
         );
         #[cfg(not(feature = "rdf"))]
-        let mut session = Session::with_adaptive(
-            Arc::clone(&self.store),
-            Arc::clone(&self.transaction_manager),
-            Arc::clone(&self.query_cache),
-            Arc::clone(&self.catalog),
-            self.config.adaptive.clone(),
-            self.config.factorized_execution,
-            self.config.graph_model,
-            self.config.query_timeout,
-            Arc::clone(&self.commit_counter),
-            self.config.gc_interval,
-        );
+        let mut session = Session::with_adaptive(Arc::clone(&self.store), session_cfg());
 
         #[cfg(feature = "wal")]
         if let Some(ref wal) = self.wal {

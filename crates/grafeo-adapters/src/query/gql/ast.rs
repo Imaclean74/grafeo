@@ -153,6 +153,34 @@ pub struct YieldItem {
     pub span: Option<SourceSpan>,
 }
 
+/// File format for LOAD DATA statements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoadFormat {
+    /// CSV (comma-separated values).
+    Csv,
+    /// JSON Lines (one JSON object per line).
+    Jsonl,
+    /// Apache Parquet columnar format.
+    Parquet,
+}
+
+/// LOAD DATA clause: reads data from a file and produces rows.
+#[derive(Debug, Clone)]
+pub struct LoadDataClause {
+    /// File path (local filesystem).
+    pub path: String,
+    /// File format.
+    pub format: LoadFormat,
+    /// Whether the file has a header row (CSV only).
+    pub with_headers: bool,
+    /// Variable name to bind each row to.
+    pub variable: String,
+    /// Optional field terminator override (CSV only).
+    pub field_terminator: Option<char>,
+    /// Source span.
+    pub span: SourceSpan,
+}
+
 /// A clause in a query, preserving source order for correct variable scoping.
 #[derive(Debug, Clone)]
 pub enum QueryClause {
@@ -181,6 +209,8 @@ pub enum QueryClause {
     },
     /// A CALL procedure clause within a query.
     CallProcedure(CallStatement),
+    /// A LOAD DATA clause.
+    LoadData(LoadDataClause),
 }
 
 /// A query statement.

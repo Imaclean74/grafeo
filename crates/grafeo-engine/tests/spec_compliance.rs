@@ -1425,6 +1425,270 @@ mod cypher_features {
 }
 
 // ============================================================================
+// LOAD DATA Features (GQL LOAD DATA, JSONL, Parquet)
+// ============================================================================
+
+#[cfg(feature = "gql")]
+mod load_data_features {
+    use grafeo_engine::GrafeoDB;
+    use std::io::Write;
+
+    #[test]
+    fn gql_load_data_csv_with_headers() {
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_gql_load_csv.csv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "name,age,city").unwrap();
+            writeln!(f, "Alix,30,Amsterdam").unwrap();
+            writeln!(f, "Gus,25,Berlin").unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD DATA FROM '{}' FORMAT CSV WITH HEADERS AS row RETURN row.name AS name, row.age AS age ORDER BY row.name",
+            csv_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD DATA CSV failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn gql_load_data_csv_without_headers() {
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_gql_load_csv_no_headers.csv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "Alix,30,Amsterdam").unwrap();
+            writeln!(f, "Gus,25,Berlin").unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD DATA FROM '{}' FORMAT CSV AS row RETURN row[0] AS name, row[1] AS age",
+            csv_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD DATA CSV without headers failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn gql_load_csv_compat_syntax() {
+        // GQL parser also accepts Cypher-compatible LOAD CSV syntax
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_gql_load_csv_compat.csv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "name,city").unwrap();
+            writeln!(f, "Alix,Amsterdam").unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD CSV WITH HEADERS FROM '{}' AS row RETURN row.name AS name",
+            csv_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD CSV compat failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn gql_load_data_csv_create_nodes() {
+        let dir = std::env::temp_dir();
+        let csv_path = dir.join("grafeo_test_gql_load_csv_create.csv");
+        {
+            let mut f = std::fs::File::create(&csv_path).unwrap();
+            writeln!(f, "name,city").unwrap();
+            writeln!(f, "Alix,Amsterdam").unwrap();
+            writeln!(f, "Gus,Berlin").unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD DATA FROM '{}' FORMAT CSV WITH HEADERS AS row INSERT (:Person {{name: row.name, city: row.city}})",
+            csv_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD DATA + INSERT failed: {:?}",
+            result.err()
+        );
+
+        // Verify nodes were created
+        let verify = session
+            .execute("MATCH (p:Person) RETURN p.name ORDER BY p.name")
+            .unwrap();
+        assert_eq!(verify.rows.len(), 2);
+    }
+
+    #[test]
+    fn gql_load_data_csv_with_fieldterminator() {
+        let dir = std::env::temp_dir();
+        let tsv_path = dir.join("grafeo_test_gql_load_csv_tab.tsv");
+        {
+            let mut f = std::fs::File::create(&tsv_path).unwrap();
+            writeln!(f, "name\tage").unwrap();
+            writeln!(f, "Alix\t30").unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD DATA FROM '{}' FORMAT CSV WITH HEADERS AS row FIELDTERMINATOR '\\t' RETURN row.name AS name",
+            tsv_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD DATA with FIELDTERMINATOR failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 1);
+    }
+
+    #[test]
+    fn gql_load_data_file_not_found() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session
+            .execute("LOAD DATA FROM '/nonexistent/path/file.csv' FORMAT CSV AS row RETURN row");
+        assert!(result.is_err(), "Should fail for missing file");
+    }
+
+    #[test]
+    fn gql_load_data_explain() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let result = session.execute(
+            "EXPLAIN LOAD DATA FROM 'test.csv' FORMAT CSV WITH HEADERS AS row RETURN row.name",
+        );
+        assert!(
+            result.is_ok(),
+            "EXPLAIN LOAD DATA should parse: {:?}",
+            result.err()
+        );
+    }
+
+    #[cfg(feature = "jsonl-import")]
+    #[test]
+    fn gql_load_data_jsonl() {
+        let dir = std::env::temp_dir();
+        let jsonl_path = dir.join("grafeo_test_gql_load_jsonl.jsonl");
+        {
+            let mut f = std::fs::File::create(&jsonl_path).unwrap();
+            writeln!(f, r#"{{"name": "Alix", "age": 30, "city": "Amsterdam"}}"#).unwrap();
+            writeln!(f, r#"{{"name": "Gus", "age": 25, "city": "Berlin"}}"#).unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD DATA FROM '{}' FORMAT JSONL AS row RETURN row.name AS name, row.age AS age ORDER BY row.name",
+            jsonl_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD DATA JSONL failed: {:?}",
+            result.err()
+        );
+        let result = result.unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[cfg(feature = "jsonl-import")]
+    #[test]
+    fn gql_load_data_jsonl_create_nodes() {
+        let dir = std::env::temp_dir();
+        let jsonl_path = dir.join("grafeo_test_gql_load_jsonl_create.jsonl");
+        {
+            let mut f = std::fs::File::create(&jsonl_path).unwrap();
+            writeln!(f, r#"{{"name": "Vincent", "city": "Paris"}}"#).unwrap();
+            writeln!(f, r#"{{"name": "Jules", "city": "Amsterdam"}}"#).unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD DATA FROM '{}' FORMAT JSONL AS row INSERT (:Person {{name: row.name, city: row.city}})",
+            jsonl_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD DATA JSONL + INSERT failed: {:?}",
+            result.err()
+        );
+
+        let verify = session
+            .execute("MATCH (p:Person) RETURN p.name ORDER BY p.name")
+            .unwrap();
+        assert_eq!(verify.rows.len(), 2);
+    }
+
+    #[cfg(feature = "jsonl-import")]
+    #[test]
+    fn gql_load_data_ndjson_alias() {
+        // NDJSON is an alias for JSONL
+        let dir = std::env::temp_dir();
+        let jsonl_path = dir.join("grafeo_test_gql_load_ndjson.jsonl");
+        {
+            let mut f = std::fs::File::create(&jsonl_path).unwrap();
+            writeln!(f, r#"{{"x": 1}}"#).unwrap();
+        }
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+        let query = format!(
+            "LOAD DATA FROM '{}' FORMAT NDJSON AS row RETURN row.x AS x",
+            jsonl_path.display()
+        );
+        let result = session.execute(&query);
+        assert!(
+            result.is_ok(),
+            "GQL LOAD DATA NDJSON alias failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn gql_load_data_parquet_disabled_error() {
+        // When parquet-import feature is disabled, should give a clear error
+        if cfg!(not(feature = "parquet-import")) {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+            let result =
+                session.execute("LOAD DATA FROM 'test.parquet' FORMAT PARQUET AS row RETURN row");
+            assert!(
+                result.is_err(),
+                "Should fail when parquet-import is disabled"
+            );
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("Parquet") || err.contains("parquet"),
+                "Error should mention Parquet: {err}"
+            );
+        }
+    }
+}
+
+// ============================================================================
 // SPARQL Features (covers sparql_translator.rs)
 // ============================================================================
 

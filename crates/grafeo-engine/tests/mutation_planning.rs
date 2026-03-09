@@ -595,6 +595,236 @@ fn test_optional_match_null_when_missing() {
 }
 
 // ============================================================================
+// OPTIONAL MATCH WHERE pushdown: right-side predicates become join conditions
+// ============================================================================
+
+#[test]
+fn test_optional_match_where_right_side_preserves_left() {
+    // WHERE on right-side variable should not filter out left rows.
+    // Harm has no WORKS_AT edge, so the OPTIONAL MATCH right side is empty.
+    // The WHERE m.name = 'TechCorp' must NOT eliminate Harm's row.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute_cypher(
+            "MATCH (a:Person) \
+             OPTIONAL MATCH (a)-[:WORKS_AT]->(c:Company) \
+             WHERE c.name = 'TechCorp' \
+             RETURN a.name, c.name \
+             ORDER BY a.name",
+        )
+        .unwrap();
+
+    // All 3 persons should appear: Alix+TechCorp, Gus+TechCorp, Harm+null
+    assert_eq!(
+        result.rows.len(),
+        3,
+        "All persons should be preserved; WHERE on right side should not filter left rows"
+    );
+
+    // Alix -> TechCorp
+    assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+    assert_eq!(result.rows[0][1], Value::String("TechCorp".into()));
+    // Gus -> TechCorp
+    assert_eq!(result.rows[1][0], Value::String("Gus".into()));
+    assert_eq!(result.rows[1][1], Value::String("TechCorp".into()));
+    // Harm -> null (no WORKS_AT edge, preserved by left join)
+    assert_eq!(result.rows[2][0], Value::String("Harm".into()));
+    assert_eq!(result.rows[2][1], Value::Null);
+}
+
+#[test]
+fn test_optional_match_where_left_side_filters_correctly() {
+    // WHERE on left-side variable should filter left rows normally.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute_cypher(
+            "MATCH (a:Person) \
+             OPTIONAL MATCH (a)-[:WORKS_AT]->(c:Company) \
+             WHERE a.city = 'NYC' \
+             RETURN a.name, c.name \
+             ORDER BY a.name",
+        )
+        .unwrap();
+
+    // Only NYC persons: Alix+TechCorp, Gus+TechCorp (Harm is in London, filtered out)
+    assert_eq!(result.rows.len(), 2);
+    assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+    assert_eq!(result.rows[1][0], Value::String("Gus".into()));
+}
+
+#[test]
+fn test_optional_match_where_mixed_predicates() {
+    // WHERE with both left-side and right-side predicates.
+    // Left predicate (a.city = 'NYC') filters left rows.
+    // Right predicate (c.name = 'TechCorp') becomes a join condition.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute_cypher(
+            "MATCH (a:Person) \
+             OPTIONAL MATCH (a)-[:WORKS_AT]->(c:Company) \
+             WHERE a.city = 'NYC' AND c.name = 'TechCorp' \
+             RETURN a.name, c.name \
+             ORDER BY a.name",
+        )
+        .unwrap();
+
+    // Only NYC persons: Alix+TechCorp, Gus+TechCorp
+    assert_eq!(result.rows.len(), 2);
+    assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+    assert_eq!(result.rows[0][1], Value::String("TechCorp".into()));
+    assert_eq!(result.rows[1][0], Value::String("Gus".into()));
+    assert_eq!(result.rows[1][1], Value::String("TechCorp".into()));
+}
+
+#[test]
+fn test_optional_match_where_right_property_no_match() {
+    // WHERE right-side predicate that no right-side row satisfies.
+    // All left rows should still appear with NULL right side.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute_cypher(
+            "MATCH (a:Person) \
+             OPTIONAL MATCH (a)-[:WORKS_AT]->(c:Company) \
+             WHERE c.name = 'NonExistent' \
+             RETURN a.name, c.name \
+             ORDER BY a.name",
+        )
+        .unwrap();
+
+    // All 3 persons should still appear, all with NULL company
+    assert_eq!(
+        result.rows.len(),
+        3,
+        "All persons preserved with NULL when no right match passes the filter"
+    );
+    for row in &result.rows {
+        assert_eq!(row[1], Value::Null);
+    }
+}
+
+#[test]
+fn test_optional_match_where_cross_side_predicate() {
+    // WHERE predicate referencing both left and right side variables.
+    // m.age > n.age: find friends older than the person.
+    // Since the right side also has `n` (from the pattern), this is classified
+    // as a right-side predicate and pushed into the right filter.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute_cypher(
+            "MATCH (a:Person) \
+             OPTIONAL MATCH (a)-[:KNOWS]->(b:Person) \
+             WHERE b.age > a.age \
+             RETURN a.name, b.name \
+             ORDER BY a.name, b.name",
+        )
+        .unwrap();
+
+    // Alix(30) knows Gus(25) and Harm(35). Only Harm is older -> Alix,Harm
+    // Gus(25) knows Harm(35). Harm is older -> Gus,Harm
+    // Harm(35) knows nobody (no outgoing KNOWS edges) -> Harm,null
+    assert!(
+        result.rows.len() >= 3,
+        "Expected at least 3 rows: Alix+Harm, Gus+Harm, Harm+null, got {}",
+        result.rows.len()
+    );
+
+    // Verify Harm appears with null (preserved by left join)
+    let harm_rows: Vec<_> = result
+        .rows
+        .iter()
+        .filter(|r| r[0] == Value::String("Harm".into()))
+        .collect();
+    assert!(
+        !harm_rows.is_empty(),
+        "Harm should appear (no outgoing KNOWS edges, left join preserves)"
+    );
+    assert_eq!(
+        harm_rows[0][1],
+        Value::Null,
+        "Harm has no outgoing KNOWS edges, right side should be NULL"
+    );
+}
+
+#[test]
+fn test_optional_match_gql_where_pushdown() {
+    // Same test but using GQL syntax.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute(
+            "MATCH (a:Person) \
+             OPTIONAL MATCH (a)-[:WORKS_AT]->(c:Company) \
+             WHERE c.name = 'TechCorp' \
+             RETURN a.name, c.name \
+             ORDER BY a.name",
+        )
+        .unwrap();
+
+    assert_eq!(
+        result.rows.len(),
+        3,
+        "GQL: all persons preserved with right-side WHERE pushdown"
+    );
+    assert_eq!(result.rows[2][0], Value::String("Harm".into()));
+    assert_eq!(result.rows[2][1], Value::Null);
+}
+
+#[test]
+fn test_chained_optional_matches() {
+    // Two independent OPTIONAL MATCHHes.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute_cypher(
+            "MATCH (a:Person {name: 'Harm'}) \
+             OPTIONAL MATCH (a)-[:WORKS_AT]->(c:Company) \
+             OPTIONAL MATCH (a)-[:KNOWS]->(b:Person) \
+             RETURN a.name, c.name, b.name",
+        )
+        .unwrap();
+
+    // Harm has no WORKS_AT and no outgoing KNOWS edges
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][0], Value::String("Harm".into()));
+    assert_eq!(result.rows[0][1], Value::Null);
+    assert_eq!(result.rows[0][2], Value::Null);
+}
+
+#[test]
+fn test_optional_match_is_null_check() {
+    // Verify IS NULL works with OPTIONAL MATCH NULL values.
+    let db = create_social_network();
+    let session = db.session();
+
+    let result = session
+        .execute_cypher(
+            "MATCH (a:Person) \
+             OPTIONAL MATCH (a)-[:MANAGES]->(c) \
+             RETURN a.name, c IS NULL AS no_manages \
+             ORDER BY a.name",
+        )
+        .unwrap();
+
+    // Nobody has a MANAGES edge, so all rows should have c IS NULL = true
+    assert_eq!(result.rows.len(), 3);
+    for row in &result.rows {
+        assert_eq!(row[1], Value::Bool(true));
+    }
+}
+
+// ============================================================================
 // CALL PROCEDURE: covers plan_call_procedure, plan_static_result
 // ============================================================================
 

@@ -53,6 +53,22 @@ fn parse_default_literal(text: &str) -> Value {
     Value::String(text.into())
 }
 
+/// Runtime configuration for creating a new session.
+///
+/// Groups the shared parameters passed to all session constructors, keeping
+/// call sites readable and avoiding long argument lists.
+pub(crate) struct SessionConfig {
+    pub transaction_manager: Arc<TransactionManager>,
+    pub query_cache: Arc<QueryCache>,
+    pub catalog: Arc<Catalog>,
+    pub adaptive_config: AdaptiveConfig,
+    pub factorized_execution: bool,
+    pub graph_model: GraphModel,
+    pub query_timeout: Option<Duration>,
+    pub commit_counter: Arc<AtomicUsize>,
+    pub gc_interval: usize,
+}
+
 /// Your handle to the database - execute queries and manage transactions.
 ///
 /// Get one from [`GrafeoDB::session()`](crate::GrafeoDB::session). Each session
@@ -122,37 +138,26 @@ pub struct Session {
 
 impl Session {
     /// Creates a new session with adaptive execution configuration.
-    #[allow(dead_code, clippy::too_many_arguments)]
-    pub(crate) fn with_adaptive(
-        store: Arc<LpgStore>,
-        transaction_manager: Arc<TransactionManager>,
-        query_cache: Arc<QueryCache>,
-        catalog: Arc<Catalog>,
-        adaptive_config: AdaptiveConfig,
-        factorized_execution: bool,
-        graph_model: GraphModel,
-        query_timeout: Option<Duration>,
-        commit_counter: Arc<AtomicUsize>,
-        gc_interval: usize,
-    ) -> Self {
+    #[allow(dead_code)]
+    pub(crate) fn with_adaptive(store: Arc<LpgStore>, cfg: SessionConfig) -> Self {
         let graph_store = Arc::clone(&store) as Arc<dyn GraphStoreMut>;
         Self {
             store,
             graph_store,
-            catalog,
+            catalog: cfg.catalog,
             #[cfg(feature = "rdf")]
             rdf_store: Arc::new(RdfStore::new()),
-            transaction_manager,
-            query_cache,
+            transaction_manager: cfg.transaction_manager,
+            query_cache: cfg.query_cache,
             current_transaction: parking_lot::Mutex::new(None),
             read_only_tx: parking_lot::Mutex::new(false),
             auto_commit: true,
-            adaptive_config,
-            factorized_execution,
-            graph_model,
-            query_timeout,
-            commit_counter,
-            gc_interval,
+            adaptive_config: cfg.adaptive_config,
+            factorized_execution: cfg.factorized_execution,
+            graph_model: cfg.graph_model,
+            query_timeout: cfg.query_timeout,
+            commit_counter: cfg.commit_counter,
+            gc_interval: cfg.gc_interval,
             transaction_start_node_count: AtomicUsize::new(0),
             transaction_start_edge_count: AtomicUsize::new(0),
             #[cfg(feature = "wal")]
@@ -190,37 +195,28 @@ impl Session {
 
     /// Creates a new session with RDF store and adaptive configuration.
     #[cfg(feature = "rdf")]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_rdf_store_and_adaptive(
         store: Arc<LpgStore>,
         rdf_store: Arc<RdfStore>,
-        transaction_manager: Arc<TransactionManager>,
-        query_cache: Arc<QueryCache>,
-        catalog: Arc<Catalog>,
-        adaptive_config: AdaptiveConfig,
-        factorized_execution: bool,
-        graph_model: GraphModel,
-        query_timeout: Option<Duration>,
-        commit_counter: Arc<AtomicUsize>,
-        gc_interval: usize,
+        cfg: SessionConfig,
     ) -> Self {
         let graph_store = Arc::clone(&store) as Arc<dyn GraphStoreMut>;
         Self {
             store,
             graph_store,
-            catalog,
+            catalog: cfg.catalog,
             rdf_store,
-            transaction_manager,
-            query_cache,
+            transaction_manager: cfg.transaction_manager,
+            query_cache: cfg.query_cache,
             current_transaction: parking_lot::Mutex::new(None),
             read_only_tx: parking_lot::Mutex::new(false),
             auto_commit: true,
-            adaptive_config,
-            factorized_execution,
-            graph_model,
-            query_timeout,
-            commit_counter,
-            gc_interval,
+            adaptive_config: cfg.adaptive_config,
+            factorized_execution: cfg.factorized_execution,
+            graph_model: cfg.graph_model,
+            query_timeout: cfg.query_timeout,
+            commit_counter: cfg.commit_counter,
+            gc_interval: cfg.gc_interval,
             transaction_start_node_count: AtomicUsize::new(0),
             transaction_start_edge_count: AtomicUsize::new(0),
             #[cfg(feature = "wal")]
@@ -240,36 +236,24 @@ impl Session {
     ///
     /// The external store handles all data operations. Transaction management
     /// (begin/commit/rollback) is not supported for external stores.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn with_external_store(
-        store: Arc<dyn GraphStoreMut>,
-        transaction_manager: Arc<TransactionManager>,
-        query_cache: Arc<QueryCache>,
-        catalog: Arc<Catalog>,
-        adaptive_config: AdaptiveConfig,
-        factorized_execution: bool,
-        graph_model: GraphModel,
-        query_timeout: Option<Duration>,
-        commit_counter: Arc<AtomicUsize>,
-        gc_interval: usize,
-    ) -> Self {
+    pub(crate) fn with_external_store(store: Arc<dyn GraphStoreMut>, cfg: SessionConfig) -> Self {
         Self {
             store: Arc::new(LpgStore::new().expect("arena allocation for dummy LpgStore")), // dummy for LpgStore-specific ops
             graph_store: store,
-            catalog,
+            catalog: cfg.catalog,
             #[cfg(feature = "rdf")]
             rdf_store: Arc::new(RdfStore::new()),
-            transaction_manager,
-            query_cache,
+            transaction_manager: cfg.transaction_manager,
+            query_cache: cfg.query_cache,
             current_transaction: parking_lot::Mutex::new(None),
             read_only_tx: parking_lot::Mutex::new(false),
             auto_commit: true,
-            adaptive_config,
-            factorized_execution,
-            graph_model,
-            query_timeout,
-            commit_counter,
-            gc_interval,
+            adaptive_config: cfg.adaptive_config,
+            factorized_execution: cfg.factorized_execution,
+            graph_model: cfg.graph_model,
+            query_timeout: cfg.query_timeout,
+            commit_counter: cfg.commit_counter,
+            gc_interval: cfg.gc_interval,
             transaction_start_node_count: AtomicUsize::new(0),
             transaction_start_edge_count: AtomicUsize::new(0),
             #[cfg(feature = "wal")]

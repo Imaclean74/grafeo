@@ -4,16 +4,17 @@
 //! that can be optimized and executed.
 
 use super::common::{
-    combine_with_and, is_aggregate_function, to_aggregate_function, wrap_distinct, wrap_filter,
-    wrap_limit, wrap_return, wrap_skip, wrap_sort,
+    build_left_join_with_predicates, combine_with_and, is_aggregate_function,
+    to_aggregate_function, wrap_distinct, wrap_filter, wrap_limit, wrap_return, wrap_skip,
+    wrap_sort,
 };
 use crate::query::plan::{
     AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp, CallProcedureOp,
     CountExpr, CreateEdgeOp, CreateNodeOp, DeleteNodeOp, ExpandDirection, ExpandOp, JoinCondition,
-    JoinOp, JoinType, LeftJoinOp, ListPredicateKind, LoadCsvOp, LogicalExpression, LogicalOperator,
-    LogicalPlan, MapProjectionEntry, MergeOp, MergeRelationshipOp, NodeScanOp, ParameterScanOp,
-    PathMode, ProcedureYield, ProjectOp, Projection, RemoveLabelOp, ReturnItem, SetPropertyOp,
-    ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp, UnwindOp,
+    JoinOp, JoinType, LeftJoinOp, ListPredicateKind, LoadDataFormat, LoadDataOp, LogicalExpression,
+    LogicalOperator, LogicalPlan, MapProjectionEntry, MergeOp, MergeRelationshipOp, NodeScanOp,
+    ParameterScanOp, PathMode, ProcedureYield, ProjectOp, Projection, RemoveLabelOp, ReturnItem,
+    SetPropertyOp, ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp, UnwindOp,
 };
 use grafeo_adapters::query::cypher::{self, ast};
 use grafeo_common::types::Value;
@@ -214,7 +215,8 @@ impl CypherTranslator {
     }
 
     fn translate_load_csv(&self, load_csv: &ast::LoadCsvClause) -> Result<LogicalOperator> {
-        Ok(LogicalOperator::LoadCsv(LoadCsvOp {
+        Ok(LogicalOperator::LoadData(LoadDataOp {
+            format: LoadDataFormat::Csv,
             with_headers: load_csv.with_headers,
             path: load_csv.path.clone(),
             variable: load_csv.variable.clone(),
@@ -814,7 +816,20 @@ impl CypherTranslator {
         })?;
         let predicate = self.translate_expression(&where_clause.predicate)?;
 
-        Ok(wrap_filter(input, predicate))
+        // When the input is a LeftJoin (from OPTIONAL MATCH), classify the
+        // predicate so right-side references become join conditions rather
+        // than post-filters (which would incorrectly eliminate NULL rows).
+        if let LogicalOperator::LeftJoin(left_join) = input {
+            let (join, post_filter) =
+                build_left_join_with_predicates(*left_join.left, *left_join.right, Some(predicate));
+            if let Some(pf) = post_filter {
+                Ok(wrap_filter(join, pf))
+            } else {
+                Ok(join)
+            }
+        } else {
+            Ok(wrap_filter(input, predicate))
+        }
     }
 
     fn translate_with(

@@ -221,10 +221,6 @@ impl Default for LpgStoreConfig {
 /// - Statistics lock is always last.
 /// - Read locks are generally safe, but avoid read-to-write upgrades.
 pub struct LpgStore {
-    /// Configuration.
-    #[allow(dead_code)]
-    pub(super) config: LpgStoreConfig,
-
     /// Node records indexed by NodeId, with version chains for MVCC.
     /// Used when `tiered-storage` feature is disabled.
     /// Lock order: 1
@@ -437,7 +433,6 @@ impl LpgStore {
             needs_stats_recompute: AtomicBool::new(false),
             named_graphs: RwLock::new(FxHashMap::default()),
             property_undo_log: RwLock::new(FxHashMap::default()),
-            config,
         })
     }
 
