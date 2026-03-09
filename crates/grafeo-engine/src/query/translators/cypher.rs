@@ -31,6 +31,8 @@ pub enum CypherTranslationResult {
     ShowIndexes,
     /// SHOW CONSTRAINTS introspection.
     ShowConstraints,
+    /// SHOW CURRENT GRAPH TYPE introspection.
+    ShowCurrentGraphType,
 }
 
 /// Translates a Cypher query string to a logical plan.
@@ -140,7 +142,8 @@ impl CypherTranslator {
             }
             ast::Statement::Schema(_)
             | ast::Statement::ShowIndexes
-            | ast::Statement::ShowConstraints => Err(Error::Query(QueryError::new(
+            | ast::Statement::ShowConstraints
+            | ast::Statement::ShowCurrentGraphType => Err(Error::Query(QueryError::new(
                 QueryErrorKind::Semantic,
                 "Schema commands should be routed through translate_statement_full",
             ))),
@@ -154,6 +157,9 @@ impl CypherTranslator {
             }
             ast::Statement::ShowIndexes => Ok(CypherTranslationResult::ShowIndexes),
             ast::Statement::ShowConstraints => Ok(CypherTranslationResult::ShowConstraints),
+            ast::Statement::ShowCurrentGraphType => {
+                Ok(CypherTranslationResult::ShowCurrentGraphType)
+            }
             other => {
                 let plan = self.translate_statement(other)?;
                 Ok(CypherTranslationResult::Plan(plan))

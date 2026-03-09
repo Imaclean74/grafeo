@@ -22,6 +22,37 @@ use crate::database::QueryResult;
 use crate::query::cache::QueryCache;
 use crate::transaction::TransactionManager;
 
+/// Parses a DDL default-value literal string into a [`Value`].
+///
+/// Handles string literals (single- or double-quoted), integers, floats,
+/// booleans (`true`/`false`), and `NULL`.
+fn parse_default_literal(text: &str) -> Value {
+    if text.eq_ignore_ascii_case("null") {
+        return Value::Null;
+    }
+    if text.eq_ignore_ascii_case("true") {
+        return Value::Bool(true);
+    }
+    if text.eq_ignore_ascii_case("false") {
+        return Value::Bool(false);
+    }
+    // String literal: strip surrounding quotes
+    if (text.starts_with('\'') && text.ends_with('\''))
+        || (text.starts_with('"') && text.ends_with('"'))
+    {
+        return Value::String(text[1..text.len() - 1].into());
+    }
+    // Try integer, then float
+    if let Ok(i) = text.parse::<i64>() {
+        return Value::Int64(i);
+    }
+    if let Ok(f) = text.parse::<f64>() {
+        return Value::Float64(f);
+    }
+    // Fallback: treat as string
+    Value::String(text.into())
+}
+
 /// Your handle to the database - execute queries and manage transactions.
 ///
 /// Get one from [`GrafeoDB::session()`](crate::GrafeoDB::session). Each session
@@ -572,10 +603,14 @@ impl Session {
                             name: p.name.clone(),
                             data_type: PropertyDataType::from_type_name(&p.data_type),
                             nullable: p.nullable,
-                            default_value: None,
+                            default_value: p
+                                .default_value
+                                .as_ref()
+                                .map(|s| parse_default_literal(s)),
                         })
                         .collect(),
                     constraints: Vec::new(),
+                    parent_types: stmt.parent_types.clone(),
                 };
                 let result = if stmt.or_replace {
                     let _ = self.catalog.drop_node_type(&stmt.name);
@@ -624,10 +659,15 @@ impl Session {
                             name: p.name.clone(),
                             data_type: PropertyDataType::from_type_name(&p.data_type),
                             nullable: p.nullable,
-                            default_value: None,
+                            default_value: p
+                                .default_value
+                                .as_ref()
+                                .map(|s| parse_default_literal(s)),
                         })
                         .collect(),
                     constraints: Vec::new(),
+                    source_node_types: stmt.source_node_types.clone(),
+                    target_node_types: stmt.target_node_types.clone(),
                 };
                 let result = if stmt.or_replace {
                     let _ = self.catalog.drop_edge_type_def(&stmt.name);
@@ -782,6 +822,7 @@ impl Session {
                 }
             }
             SchemaStatement::CreateConstraint(stmt) => {
+                use crate::catalog::TypeConstraint;
                 use grafeo_adapters::query::gql::ast::ConstraintKind;
                 let kind_str = match stmt.constraint_kind {
                     ConstraintKind::Unique => "unique",
@@ -793,6 +834,45 @@ impl Session {
                     .name
                     .clone()
                     .unwrap_or_else(|| format!("{}_{kind_str}", stmt.label));
+
+                // Register constraint in catalog type definitions
+                match stmt.constraint_kind {
+                    ConstraintKind::Unique => {
+                        for prop in &stmt.properties {
+                            let label_id = self.catalog.get_or_create_label(&stmt.label);
+                            let prop_id = self.catalog.get_or_create_property_key(prop);
+                            let _ = self.catalog.add_unique_constraint(label_id, prop_id);
+                        }
+                        let _ = self.catalog.add_constraint_to_type(
+                            &stmt.label,
+                            TypeConstraint::Unique(stmt.properties.clone()),
+                        );
+                    }
+                    ConstraintKind::NodeKey => {
+                        for prop in &stmt.properties {
+                            let label_id = self.catalog.get_or_create_label(&stmt.label);
+                            let prop_id = self.catalog.get_or_create_property_key(prop);
+                            let _ = self.catalog.add_unique_constraint(label_id, prop_id);
+                            let _ = self.catalog.add_required_property(label_id, prop_id);
+                        }
+                        let _ = self.catalog.add_constraint_to_type(
+                            &stmt.label,
+                            TypeConstraint::PrimaryKey(stmt.properties.clone()),
+                        );
+                    }
+                    ConstraintKind::NotNull | ConstraintKind::Exists => {
+                        for prop in &stmt.properties {
+                            let label_id = self.catalog.get_or_create_label(&stmt.label);
+                            let prop_id = self.catalog.get_or_create_property_key(prop);
+                            let _ = self.catalog.add_required_property(label_id, prop_id);
+                            let _ = self.catalog.add_constraint_to_type(
+                                &stmt.label,
+                                TypeConstraint::NotNull(prop.clone()),
+                            );
+                        }
+                    }
+                }
+
                 wal_log!(
                     self,
                     WalRecord::CreateConstraint {
@@ -851,7 +931,10 @@ impl Session {
                 for inline in &stmt.inline_types {
                     match inline {
                         InlineElementType::Node {
-                            name, properties, ..
+                            name,
+                            properties,
+                            key_labels,
+                            ..
                         } => {
                             let def = NodeTypeDefinition {
                                 name: name.clone(),
@@ -865,6 +948,7 @@ impl Session {
                                     })
                                     .collect(),
                                 constraints: Vec::new(),
+                                parent_types: key_labels.clone(),
                             };
                             // Register or replace so inline defs override existing
                             self.catalog.register_or_replace_node_type(def);
@@ -885,7 +969,11 @@ impl Session {
                             }
                         }
                         InlineElementType::Edge {
-                            name, properties, ..
+                            name,
+                            properties,
+                            source_node_types,
+                            target_node_types,
+                            ..
                         } => {
                             let def = EdgeTypeDefinition {
                                 name: name.clone(),
@@ -899,6 +987,8 @@ impl Session {
                                     })
                                     .collect(),
                                 constraints: Vec::new(),
+                                source_node_types: source_node_types.clone(),
+                                target_node_types: target_node_types.clone(),
                             };
                             self.catalog.register_or_replace_edge_type_def(def);
                             #[cfg(feature = "wal")]
@@ -1018,7 +1108,10 @@ impl Session {
                                 name: prop.name.clone(),
                                 data_type: PropertyDataType::from_type_name(&prop.data_type),
                                 nullable: prop.nullable,
-                                default_value: None,
+                                default_value: prop
+                                    .default_value
+                                    .as_ref()
+                                    .map(|s| parse_default_literal(s)),
                             };
                             self.catalog
                                 .alter_node_type_add_property(&stmt.name, typed)
@@ -1070,7 +1163,10 @@ impl Session {
                                 name: prop.name.clone(),
                                 data_type: PropertyDataType::from_type_name(&prop.data_type),
                                 nullable: prop.nullable,
-                                default_value: None,
+                                default_value: prop
+                                    .default_value
+                                    .as_ref()
+                                    .map(|s| parse_default_literal(s)),
                             };
                             self.catalog
                                 .alter_edge_type_add_property(&stmt.name, typed)
@@ -1250,6 +1346,27 @@ impl Session {
                 wal_log!(self, WalRecord::DropProcedure { name: name.clone() });
                 Ok(QueryResult::status(format!("Dropped procedure '{name}'")))
             }
+            SchemaStatement::ShowIndexes => {
+                return self.execute_show_indexes();
+            }
+            SchemaStatement::ShowConstraints => {
+                return self.execute_show_constraints();
+            }
+            SchemaStatement::ShowNodeTypes => {
+                return self.execute_show_node_types();
+            }
+            SchemaStatement::ShowEdgeTypes => {
+                return self.execute_show_edge_types();
+            }
+            SchemaStatement::ShowGraphTypes => {
+                return self.execute_show_graph_types();
+            }
+            SchemaStatement::ShowGraphType(name) => {
+                return self.execute_show_graph_type(&name);
+            }
+            SchemaStatement::ShowCurrentGraphType => {
+                return self.execute_show_current_graph_type();
+            }
         };
 
         // Invalidate all cached query plans after any successful DDL change.
@@ -1412,6 +1529,191 @@ impl Session {
             ],
             column_types: Vec::new(),
             rows: Vec::new(),
+            ..QueryResult::empty()
+        })
+    }
+
+    /// Returns a table of all registered node types.
+    fn execute_show_node_types(&self) -> Result<QueryResult> {
+        let columns = vec![
+            "name".to_string(),
+            "properties".to_string(),
+            "constraints".to_string(),
+            "parents".to_string(),
+        ];
+        let type_names = self.catalog.all_node_type_names();
+        let rows: Vec<Vec<Value>> = type_names
+            .into_iter()
+            .filter_map(|name| {
+                let def = self.catalog.get_node_type(&name)?;
+                let props: Vec<String> = def
+                    .properties
+                    .iter()
+                    .map(|p| {
+                        let nullable = if p.nullable { "" } else { " NOT NULL" };
+                        format!("{} {}{}", p.name, p.data_type, nullable)
+                    })
+                    .collect();
+                let constraints: Vec<String> =
+                    def.constraints.iter().map(|c| format!("{c:?}")).collect();
+                let parents = def.parent_types.join(", ");
+                Some(vec![
+                    Value::from(name),
+                    Value::from(props.join(", ")),
+                    Value::from(constraints.join(", ")),
+                    Value::from(parents),
+                ])
+            })
+            .collect();
+        Ok(QueryResult {
+            columns,
+            column_types: Vec::new(),
+            rows,
+            ..QueryResult::empty()
+        })
+    }
+
+    /// Returns a table of all registered edge types.
+    fn execute_show_edge_types(&self) -> Result<QueryResult> {
+        let columns = vec![
+            "name".to_string(),
+            "properties".to_string(),
+            "source_types".to_string(),
+            "target_types".to_string(),
+        ];
+        let type_names = self.catalog.all_edge_type_names();
+        let rows: Vec<Vec<Value>> = type_names
+            .into_iter()
+            .filter_map(|name| {
+                let def = self.catalog.get_edge_type_def(&name)?;
+                let props: Vec<String> = def
+                    .properties
+                    .iter()
+                    .map(|p| {
+                        let nullable = if p.nullable { "" } else { " NOT NULL" };
+                        format!("{} {}{}", p.name, p.data_type, nullable)
+                    })
+                    .collect();
+                let src = def.source_node_types.join(", ");
+                let tgt = def.target_node_types.join(", ");
+                Some(vec![
+                    Value::from(name),
+                    Value::from(props.join(", ")),
+                    Value::from(src),
+                    Value::from(tgt),
+                ])
+            })
+            .collect();
+        Ok(QueryResult {
+            columns,
+            column_types: Vec::new(),
+            rows,
+            ..QueryResult::empty()
+        })
+    }
+
+    /// Returns a table of all registered graph types.
+    fn execute_show_graph_types(&self) -> Result<QueryResult> {
+        let columns = vec![
+            "name".to_string(),
+            "open".to_string(),
+            "node_types".to_string(),
+            "edge_types".to_string(),
+        ];
+        let type_names = self.catalog.all_graph_type_names();
+        let rows: Vec<Vec<Value>> = type_names
+            .into_iter()
+            .filter_map(|name| {
+                let def = self.catalog.get_graph_type_def(&name)?;
+                Some(vec![
+                    Value::from(name),
+                    Value::from(def.open),
+                    Value::from(def.allowed_node_types.join(", ")),
+                    Value::from(def.allowed_edge_types.join(", ")),
+                ])
+            })
+            .collect();
+        Ok(QueryResult {
+            columns,
+            column_types: Vec::new(),
+            rows,
+            ..QueryResult::empty()
+        })
+    }
+
+    /// Returns detailed info for a specific graph type.
+    fn execute_show_graph_type(&self, name: &str) -> Result<QueryResult> {
+        use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind};
+
+        let def = self.catalog.get_graph_type_def(name).ok_or_else(|| {
+            Error::Query(QueryError::new(
+                QueryErrorKind::Semantic,
+                format!("Graph type '{name}' not found"),
+            ))
+        })?;
+
+        let columns = vec![
+            "name".to_string(),
+            "open".to_string(),
+            "node_types".to_string(),
+            "edge_types".to_string(),
+        ];
+        let rows = vec![vec![
+            Value::from(def.name),
+            Value::from(def.open),
+            Value::from(def.allowed_node_types.join(", ")),
+            Value::from(def.allowed_edge_types.join(", ")),
+        ]];
+        Ok(QueryResult {
+            columns,
+            column_types: Vec::new(),
+            rows,
+            ..QueryResult::empty()
+        })
+    }
+
+    /// Returns the graph type bound to the current graph.
+    fn execute_show_current_graph_type(&self) -> Result<QueryResult> {
+        let graph_name = self
+            .current_graph()
+            .unwrap_or_else(|| "default".to_string());
+        let columns = vec![
+            "graph".to_string(),
+            "graph_type".to_string(),
+            "open".to_string(),
+            "node_types".to_string(),
+            "edge_types".to_string(),
+        ];
+
+        if let Some(type_name) = self.catalog.get_graph_type_binding(&graph_name)
+            && let Some(def) = self.catalog.get_graph_type_def(&type_name)
+        {
+            let rows = vec![vec![
+                Value::from(graph_name),
+                Value::from(type_name),
+                Value::from(def.open),
+                Value::from(def.allowed_node_types.join(", ")),
+                Value::from(def.allowed_edge_types.join(", ")),
+            ]];
+            return Ok(QueryResult {
+                columns,
+                column_types: Vec::new(),
+                rows,
+                ..QueryResult::empty()
+            });
+        }
+
+        // No graph type binding found
+        Ok(QueryResult {
+            columns,
+            column_types: Vec::new(),
+            rows: vec![vec![
+                Value::from(graph_name),
+                Value::Null,
+                Value::Null,
+                Value::Null,
+                Value::Null,
+            ]],
             ..QueryResult::empty()
         })
     }
@@ -1683,6 +1985,9 @@ impl Session {
             }
             cypher::CypherTranslationResult::ShowConstraints => {
                 return self.execute_show_constraints();
+            }
+            cypher::CypherTranslationResult::ShowCurrentGraphType => {
+                return self.execute_show_current_graph_type();
             }
             cypher::CypherTranslationResult::Plan(_) => {
                 // Fall through to normal execution below
@@ -2819,7 +3124,8 @@ impl Session {
         .with_catalog(Arc::clone(&self.catalog));
 
         // Attach the constraint validator for schema enforcement
-        let validator = CatalogConstraintValidator::new(Arc::clone(&self.catalog));
+        let validator = CatalogConstraintValidator::new(Arc::clone(&self.catalog))
+            .with_store(Arc::clone(&self.graph_store));
         planner = planner.with_validator(Arc::new(validator));
 
         planner
@@ -3931,6 +4237,7 @@ mod tests {
     #[cfg(feature = "gql")]
     mod session_command_tests {
         use super::*;
+        use grafeo_common::types::Value;
 
         #[test]
         fn test_use_graph_sets_current_graph() {
@@ -4228,6 +4535,149 @@ mod tests {
 
             assert_eq!(session1.current_graph(), Some("first".to_string()));
             assert_eq!(session2.current_graph(), Some("second".to_string()));
+        }
+
+        #[test]
+        fn test_show_node_types() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session
+                .execute("CREATE NODE TYPE Person (name STRING NOT NULL, age INTEGER)")
+                .unwrap();
+
+            let result = session.execute("SHOW NODE TYPES").unwrap();
+            assert_eq!(
+                result.columns,
+                vec!["name", "properties", "constraints", "parents"]
+            );
+            assert_eq!(result.rows.len(), 1);
+            // First column is the type name
+            assert_eq!(result.rows[0][0], Value::from("Person"));
+        }
+
+        #[test]
+        fn test_show_edge_types() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session
+                .execute("CREATE EDGE TYPE KNOWS CONNECTING (Person) TO (Person) (since INTEGER)")
+                .unwrap();
+
+            let result = session.execute("SHOW EDGE TYPES").unwrap();
+            assert_eq!(
+                result.columns,
+                vec!["name", "properties", "source_types", "target_types"]
+            );
+            assert_eq!(result.rows.len(), 1);
+            assert_eq!(result.rows[0][0], Value::from("KNOWS"));
+        }
+
+        #[test]
+        fn test_show_graph_types() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session
+                .execute("CREATE NODE TYPE Person (name STRING)")
+                .unwrap();
+            session
+                .execute(
+                    "CREATE GRAPH TYPE social (\
+                        NODE TYPE Person (name STRING)\
+                    )",
+                )
+                .unwrap();
+
+            let result = session.execute("SHOW GRAPH TYPES").unwrap();
+            assert_eq!(
+                result.columns,
+                vec!["name", "open", "node_types", "edge_types"]
+            );
+            assert_eq!(result.rows.len(), 1);
+            assert_eq!(result.rows[0][0], Value::from("social"));
+        }
+
+        #[test]
+        fn test_show_graph_type_named() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            session
+                .execute("CREATE NODE TYPE Person (name STRING)")
+                .unwrap();
+            session
+                .execute(
+                    "CREATE GRAPH TYPE social (\
+                        NODE TYPE Person (name STRING)\
+                    )",
+                )
+                .unwrap();
+
+            let result = session.execute("SHOW GRAPH TYPE social").unwrap();
+            assert_eq!(result.rows.len(), 1);
+            assert_eq!(result.rows[0][0], Value::from("social"));
+        }
+
+        #[test]
+        fn test_show_graph_type_not_found() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("SHOW GRAPH TYPE nonexistent");
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_show_indexes_via_gql() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("SHOW INDEXES").unwrap();
+            assert_eq!(result.columns, vec!["name", "type", "label", "property"]);
+        }
+
+        #[test]
+        fn test_show_constraints_via_gql() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            let result = session.execute("SHOW CONSTRAINTS").unwrap();
+            assert_eq!(result.columns, vec!["name", "type", "label", "properties"]);
+        }
+
+        #[test]
+        fn test_pattern_form_graph_type_roundtrip() {
+            let db = GrafeoDB::new_in_memory();
+            let session = db.session();
+
+            // Register the types first
+            session
+                .execute("CREATE NODE TYPE Person (name STRING NOT NULL)")
+                .unwrap();
+            session
+                .execute("CREATE NODE TYPE City (name STRING)")
+                .unwrap();
+            session
+                .execute("CREATE EDGE TYPE KNOWS (since INTEGER)")
+                .unwrap();
+            session.execute("CREATE EDGE TYPE LIVES_IN").unwrap();
+
+            // Create graph type using pattern form
+            session
+                .execute(
+                    "CREATE GRAPH TYPE social (\
+                        (:Person {name STRING NOT NULL})-[:KNOWS {since INTEGER}]->(:Person),\
+                        (:Person)-[:LIVES_IN]->(:City)\
+                    )",
+                )
+                .unwrap();
+
+            // Verify it was created
+            let result = session.execute("SHOW GRAPH TYPE social").unwrap();
+            assert_eq!(result.rows.len(), 1);
+            assert_eq!(result.rows[0][0], Value::from("social"));
         }
     }
 }

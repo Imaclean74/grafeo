@@ -2,6 +2,8 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
+## [0.5.19] - Unreleased
+
 ## [0.5.18] - 2026-03-09
 
 Query language compliance improvements, expanded test coverage, and Deriva compatibility fixes.

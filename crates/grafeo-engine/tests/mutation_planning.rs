@@ -633,3 +633,443 @@ fn test_call_procedure_with_yield() {
     // Each row should have node_id and score
     assert!(result.columns.len() >= 2);
 }
+
+// ============================================================================
+// REMOVE property: covers gql.rs REMOVE clause (lines 516-533)
+// ============================================================================
+
+#[test]
+fn test_gql_remove_property() {
+    let db = create_social_network();
+    let session = db.session();
+
+    session
+        .execute("MATCH (n:Person {name: 'Alix'}) SET n.temp = 'delete_me'")
+        .unwrap();
+
+    let before = session
+        .execute("MATCH (n:Person {name: 'Alix'}) RETURN n.temp")
+        .unwrap();
+    assert_eq!(before.rows[0][0], Value::String("delete_me".into()));
+
+    session
+        .execute("MATCH (n:Person {name: 'Alix'}) REMOVE n.temp")
+        .unwrap();
+
+    let after = session
+        .execute("MATCH (n:Person {name: 'Alix'}) RETURN n.temp")
+        .unwrap();
+    assert_eq!(after.rows[0][0], Value::Null);
+}
+
+// ============================================================================
+// SET map assignment: covers gql.rs lines 368-377
+// ============================================================================
+
+#[test]
+fn test_gql_set_map_merge() {
+    let db = create_social_network();
+    let session = db.session();
+
+    session
+        .execute(
+            "MATCH (n:Person {name: 'Alix'}) SET n += {email: 'alix@example.com', active: true}",
+        )
+        .unwrap();
+
+    let result = session
+        .execute("MATCH (n:Person {name: 'Alix'}) RETURN n.email, n.active, n.name")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][0], Value::String("alix@example.com".into()));
+    assert_eq!(result.rows[0][1], Value::Bool(true));
+    assert_eq!(result.rows[0][2], Value::String("Alix".into()));
+}
+
+// ============================================================================
+// Multiple labels on SET: covers gql.rs label_operations loop (lines 378-384)
+// ============================================================================
+
+#[test]
+fn test_gql_set_multiple_labels() {
+    let db = create_social_network();
+    let session = db.session();
+
+    session
+        .execute("MATCH (n:Person {name: 'Gus'}) SET n:Employee:Developer")
+        .unwrap();
+
+    let emp = session.execute("MATCH (n:Employee) RETURN n.name").unwrap();
+    let dev = session
+        .execute("MATCH (n:Developer) RETURN n.name")
+        .unwrap();
+
+    assert_eq!(emp.rows.len(), 1);
+    assert_eq!(dev.rows.len(), 1);
+    assert_eq!(emp.rows[0][0], Value::String("Gus".into()));
+}
+
+// ============================================================================
+// MERGE with chained input: covers merge.rs input branch (lines 173-206)
+// ============================================================================
+
+#[test]
+fn test_gql_merge_with_match_input() {
+    let db = create_social_network();
+    let session = db.session();
+
+    session
+        .execute(
+            "MATCH (n:Person {name: 'Alix'}) \
+             MERGE (n)-[:FOLLOWS]->(t:Trend {name: 'Rust'})",
+        )
+        .unwrap();
+
+    let result = session.execute("MATCH (t:Trend) RETURN t.name").unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][0], Value::String("Rust".into()));
+}
+
+// ============================================================================
+// MERGE in ordered_clauses: covers gql.rs line 386-388
+// ============================================================================
+
+#[test]
+fn test_gql_merge_in_ordered_clauses() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    session
+        .execute("MERGE (n:Config {key: 'theme'}) ON CREATE SET n.value = 'dark'")
+        .unwrap();
+
+    session
+        .execute("MERGE (n:Config {key: 'theme'}) ON MATCH SET n.value = 'light'")
+        .unwrap();
+
+    let result = session
+        .execute("MATCH (n:Config) RETURN n.key, n.value")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][1], Value::String("light".into()));
+}
+
+// ============================================================================
+// MATCH + CREATE edge in ordered_clauses: covers gql.rs lines 347-349
+// ============================================================================
+
+#[test]
+fn test_gql_match_create_edge_ordered() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    session.execute("INSERT (:City {name: 'Prague'})").unwrap();
+    session
+        .execute("INSERT (:Country {name: 'Czechia'})")
+        .unwrap();
+
+    session
+        .execute(
+            "MATCH (c:City {name: 'Prague'}), (co:Country {name: 'Czechia'}) \
+             CREATE (c)-[:IN]->(co)",
+        )
+        .unwrap();
+
+    let result = session
+        .execute("MATCH (c:City)-[:IN]->(co:Country) RETURN c.name, co.name")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][0], Value::String("Prague".into()));
+    assert_eq!(result.rows[0][1], Value::String("Czechia".into()));
+}
+
+// ============================================================================
+// MATCH + DETACH DELETE in ordered_clauses: covers gql.rs lines 350-356
+// ============================================================================
+
+#[test]
+fn test_gql_match_detach_delete_ordered() {
+    let db = create_social_network();
+    let session = db.session();
+
+    let before = db.node_count();
+
+    session
+        .execute("MATCH (n:Company {name: 'TechCorp'}) DETACH DELETE n")
+        .unwrap();
+
+    assert_eq!(db.node_count(), before - 1);
+}
+
+// ============================================================================
+// FOR clause in ordered_clauses: covers gql.rs lines 337-346
+// ============================================================================
+
+#[test]
+fn test_gql_for_in_ordered_clauses() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    let result = session
+        .execute("FOR x IN [100, 200, 300] WITH ORDINALITY idx RETURN x, idx ORDER BY x")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 3);
+    assert_eq!(result.rows[0][0], Value::Int64(100));
+    assert_eq!(result.rows[0][1], Value::Int64(1));
+    assert_eq!(result.rows[2][0], Value::Int64(300));
+    assert_eq!(result.rows[2][1], Value::Int64(3));
+}
+
+// ============================================================================
+// CREATE + DELETE ordered: covers gql.rs ordered Create/Delete paths
+// ============================================================================
+
+#[test]
+fn test_gql_ordered_create_delete() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    session
+        .execute("INSERT (:Temp {name: 'ephemeral'})")
+        .unwrap();
+    assert_eq!(db.node_count(), 1);
+
+    session.execute("MATCH (n:Temp) DETACH DELETE n").unwrap();
+    assert_eq!(db.node_count(), 0);
+}
+
+// ============================================================================
+// create_node_with_props convenience: covers traits.rs default implementations
+// ============================================================================
+
+#[test]
+fn test_traits_create_with_props_convenience() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    let node = session.create_node_with_props(
+        &["Widget"],
+        [
+            ("color", Value::String("blue".into())),
+            ("weight", Value::Int64(42)),
+        ],
+    );
+
+    let result = session
+        .execute("MATCH (w:Widget) RETURN w.color, w.weight")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][0], Value::String("blue".into()));
+    assert_eq!(result.rows[0][1], Value::Int64(42));
+
+    let other = session.create_node_with_props(&["Box"], [("size", Value::Int64(10))]);
+    session.create_edge(node, other, "FITS_IN");
+
+    let edge_result = session
+        .execute("MATCH (w:Widget)-[:FITS_IN]->(b:Box) RETURN w.color, b.size")
+        .unwrap();
+
+    assert_eq!(edge_result.rows.len(), 1);
+}
+
+// ============================================================================
+// Cypher: MERGE relationship, DELETE without DETACH, UNWIND standalone,
+// SET map replace/merge, FOREACH, multi-pattern MATCH
+// ============================================================================
+
+#[cfg(feature = "cypher")]
+mod cypher_mutations {
+    use super::*;
+
+    #[test]
+    fn test_merge_relationship_creates() {
+        let db = create_social_network();
+        let session = db.session();
+        let edges_before = db.edge_count();
+
+        session
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Harm'}) \
+                 MERGE (a)-[:LIKES]->(b)",
+            )
+            .unwrap();
+
+        assert_eq!(db.edge_count(), edges_before + 1);
+    }
+
+    #[test]
+    fn test_merge_relationship_matches() {
+        let db = create_social_network();
+        let session = db.session();
+        let edges_before = db.edge_count();
+
+        session
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}) \
+                 MERGE (a)-[:KNOWS]->(b)",
+            )
+            .unwrap();
+
+        assert_eq!(db.edge_count(), edges_before);
+    }
+
+    #[test]
+    fn test_merge_relationship_on_create() {
+        let db = create_social_network();
+        let session = db.session();
+
+        session
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Gus'}), (b:Person {name: 'Alix'}) \
+                 MERGE (a)-[r:MENTORS]->(b) ON CREATE SET r.since = 2025",
+            )
+            .unwrap();
+
+        let result = session
+            .execute_cypher(
+                "MATCH (a:Person {name: 'Gus'})-[r:MENTORS]->(b:Person {name: 'Alix'}) \
+                 RETURN r.since",
+            )
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Int64(2025));
+    }
+
+    #[test]
+    fn test_delete_without_detach_connected_node() {
+        let db = create_social_network();
+        let session = db.session();
+
+        let result = session.execute_cypher("MATCH (n:Person {name: 'Alix'}) DELETE n");
+        assert!(
+            result.is_err(),
+            "DELETE without DETACH on connected node should fail"
+        );
+    }
+
+    #[test]
+    fn test_unwind_standalone_create() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        session
+            .execute_cypher(
+                "UNWIND [{name: 'Alix', age: 30}, {name: 'Gus', age: 25}] AS props \
+                 CREATE (n:Person) SET n.name = props.name, n.age = props.age",
+            )
+            .unwrap();
+
+        let result = session
+            .execute("MATCH (n:Person) RETURN n.name ORDER BY n.name")
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+        assert_eq!(result.rows[1][0], Value::String("Gus".into()));
+    }
+
+    #[test]
+    fn test_set_map_replace() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        session
+            .execute("INSERT (:Item {name: 'Widget', price: 10, color: 'red'})")
+            .unwrap();
+
+        session
+            .execute_cypher("MATCH (n:Item) SET n = {name: 'Gadget', price: 20}")
+            .unwrap();
+
+        let result = session
+            .execute("MATCH (n:Item) RETURN n.name, n.price, n.color")
+            .unwrap();
+
+        assert_eq!(result.rows[0][0], Value::String("Gadget".into()));
+        assert_eq!(result.rows[0][1], Value::Int64(20));
+        assert_eq!(result.rows[0][2], Value::Null);
+    }
+
+    #[test]
+    fn test_set_map_merge() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        session
+            .execute("INSERT (:Item {name: 'Widget', price: 10})")
+            .unwrap();
+
+        session
+            .execute_cypher("MATCH (n:Item) SET n += {color: 'blue', price: 15}")
+            .unwrap();
+
+        let result = session
+            .execute("MATCH (n:Item) RETURN n.name, n.price, n.color")
+            .unwrap();
+
+        assert_eq!(result.rows[0][0], Value::String("Widget".into()));
+        assert_eq!(result.rows[0][1], Value::Int64(15));
+        assert_eq!(result.rows[0][2], Value::String("blue".into()));
+    }
+
+    #[test]
+    fn test_foreach_set_property() {
+        let db = create_social_network();
+        let session = db.session();
+
+        session
+            .execute_cypher(
+                "MATCH (n:Person) \
+                 FOREACH (val IN [1] | SET n.tagged = true)",
+            )
+            .unwrap();
+
+        let result = session
+            .execute("MATCH (n:Person) WHERE n.tagged = true RETURN n.name")
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 3);
+    }
+
+    #[test]
+    fn test_multi_pattern_shared_vars() {
+        let db = create_social_network();
+        let session = db.session();
+
+        let result = session
+            .execute_cypher(
+                "MATCH (n:Person)-[:KNOWS]->(m:Person), (n)-[:WORKS_AT]->(c:Company) \
+                 RETURN DISTINCT n.name, c.name \
+                 ORDER BY n.name",
+            )
+            .unwrap();
+
+        assert!(!result.rows.is_empty());
+        for row in &result.rows {
+            assert_eq!(row[1], Value::String("TechCorp".into()));
+        }
+    }
+
+    #[test]
+    fn test_multi_pattern_no_shared_vars() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        session.execute("INSERT (:A {val: 1})").unwrap();
+        session.execute("INSERT (:B {val: 2})").unwrap();
+
+        let result = session
+            .execute_cypher("MATCH (a:A), (b:B) RETURN a.val, b.val")
+            .unwrap();
+
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::Int64(1));
+        assert_eq!(result.rows[0][1], Value::Int64(2));
+    }
+}

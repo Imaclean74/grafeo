@@ -64,6 +64,35 @@ pub trait ConstraintValidator: Send + Sync {
         edge_type: &str,
         properties: &[(String, Value)],
     ) -> Result<(), OperatorError>;
+
+    /// Validates that the node labels are allowed by the bound graph type.
+    fn validate_node_labels_allowed(&self, labels: &[String]) -> Result<(), OperatorError> {
+        let _ = labels;
+        Ok(())
+    }
+
+    /// Validates that the edge type is allowed by the bound graph type.
+    fn validate_edge_type_allowed(&self, edge_type: &str) -> Result<(), OperatorError> {
+        let _ = edge_type;
+        Ok(())
+    }
+
+    /// Validates that edge endpoints have the correct node type labels.
+    fn validate_edge_endpoints(
+        &self,
+        edge_type: &str,
+        source_labels: &[String],
+        target_labels: &[String],
+    ) -> Result<(), OperatorError> {
+        let _ = (edge_type, source_labels, target_labels);
+        Ok(())
+    }
+
+    /// Injects default values for properties that are defined in a type but
+    /// not explicitly provided.
+    fn inject_defaults(&self, labels: &[String], properties: &mut Vec<(String, Value)>) {
+        let _ = (labels, properties);
+    }
 }
 
 /// Operator that creates new nodes.
@@ -204,11 +233,21 @@ impl CreateNodeOperator {
     fn validate_and_set_properties(
         &self,
         node_id: NodeId,
-        resolved_props: &[(String, Value)],
+        resolved_props: &mut Vec<(String, Value)>,
     ) -> Result<(), OperatorError> {
+        // Phase 0: Validate that node labels are allowed by the bound graph type
+        if let Some(ref validator) = self.validator {
+            validator.validate_node_labels_allowed(&self.labels)?;
+        }
+
+        // Phase 0.5: Inject defaults for properties not explicitly provided
+        if let Some(ref validator) = self.validator {
+            validator.inject_defaults(&self.labels, resolved_props);
+        }
+
         // Phase 1: Validate each property value
         if let Some(ref validator) = self.validator {
-            for (name, value) in resolved_props {
+            for (name, value) in resolved_props.iter() {
                 validator.validate_node_property(&self.labels, name, value)?;
                 validator.check_unique_node_property(&self.labels, name, value)?;
             }
@@ -217,7 +256,7 @@ impl CreateNodeOperator {
         }
 
         // Phase 3: Write properties to the store
-        for (name, value) in resolved_props {
+        for (name, value) in resolved_props.iter() {
             self.store.set_node_property(node_id, name, value.clone());
         }
         Ok(())
@@ -240,7 +279,7 @@ impl Operator for CreateNodeOperator {
 
                 for row in chunk.selected_indices() {
                     // Resolve all property values first (before creating node)
-                    let resolved_props: Vec<(String, Value)> = self
+                    let mut resolved_props: Vec<(String, Value)> = self
                         .properties
                         .iter()
                         .map(|(name, source)| {
@@ -255,7 +294,7 @@ impl Operator for CreateNodeOperator {
                     let node_id = self.store.create_node_versioned(&label_refs, epoch, tx);
 
                     // Validate and set properties
-                    self.validate_and_set_properties(node_id, &resolved_props)?;
+                    self.validate_and_set_properties(node_id, &mut resolved_props)?;
 
                     // Copy input columns to output
                     for col_idx in 0..chunk.column_count() {
@@ -290,7 +329,7 @@ impl Operator for CreateNodeOperator {
             self.executed = true;
 
             // Resolve constant properties
-            let resolved_props: Vec<(String, Value)> = self
+            let mut resolved_props: Vec<(String, Value)> = self
                 .properties
                 .iter()
                 .filter_map(|(name, source)| {
@@ -307,7 +346,7 @@ impl Operator for CreateNodeOperator {
             let node_id = self.store.create_node_versioned(&label_refs, epoch, tx);
 
             // Validate and set properties
-            self.validate_and_set_properties(node_id, &resolved_props)?;
+            self.validate_and_set_properties(node_id, &mut resolved_props)?;
 
             // Build output chunk with just the node ID
             let mut builder = DataChunkBuilder::with_capacity(&self.output_schema, 1);
@@ -466,6 +505,28 @@ impl Operator for CreateEdgeOperator {
                         });
                     }
                 };
+
+                // Validate graph type and edge endpoint constraints
+                if let Some(ref validator) = self.validator {
+                    validator.validate_edge_type_allowed(&self.edge_type)?;
+
+                    // Look up source and target node labels for endpoint validation
+                    let source_labels: Vec<String> = self
+                        .store
+                        .get_node(from_node_id)
+                        .map(|n| n.labels.iter().map(|l| l.to_string()).collect())
+                        .unwrap_or_default();
+                    let target_labels: Vec<String> = self
+                        .store
+                        .get_node(to_node_id)
+                        .map(|n| n.labels.iter().map(|l| l.to_string()).collect())
+                        .unwrap_or_default();
+                    validator.validate_edge_endpoints(
+                        &self.edge_type,
+                        &source_labels,
+                        &target_labels,
+                    )?;
+                }
 
                 // Resolve property values
                 let resolved_props: Vec<(String, Value)> = self

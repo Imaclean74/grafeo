@@ -403,6 +403,7 @@ impl GrafeoDB {
                                 _ => TypeConstraint::Unique(props.clone()),
                             })
                             .collect(),
+                        parent_types: Vec::new(),
                     };
                     let _ = catalog.register_node_type(def);
                 }
@@ -436,6 +437,8 @@ impl GrafeoDB {
                                 _ => TypeConstraint::Unique(props.clone()),
                             })
                             .collect(),
+                        source_node_types: Vec::new(),
+                        target_node_types: Vec::new(),
                     };
                     let _ = catalog.register_edge_type_def(def);
                 }

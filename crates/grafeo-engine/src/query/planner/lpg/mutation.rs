@@ -425,22 +425,26 @@ impl super::Planner {
         // Build output schema
         let output_schema: Vec<LogicalType> = columns.iter().map(|_| LogicalType::Node).collect();
 
-        let operator: Box<dyn Operator> = Box::new(
-            MergeOperator::new(
-                Arc::clone(&self.store),
-                input_op,
-                MergeConfig {
-                    variable: merge.variable.clone(),
-                    labels: merge.labels.clone(),
-                    match_properties,
-                    on_create_properties,
-                    on_match_properties,
-                    output_schema,
-                    output_column,
-                },
-            )
-            .with_transaction_context(self.viewing_epoch, self.transaction_id),
-        );
+        let mut merge_op = MergeOperator::new(
+            Arc::clone(&self.store),
+            input_op,
+            MergeConfig {
+                variable: merge.variable.clone(),
+                labels: merge.labels.clone(),
+                match_properties,
+                on_create_properties,
+                on_match_properties,
+                output_schema,
+                output_column,
+            },
+        )
+        .with_transaction_context(self.viewing_epoch, self.transaction_id);
+
+        if let Some(ref validator) = self.validator {
+            merge_op = merge_op.with_validator(Arc::clone(validator));
+        }
+
+        let operator: Box<dyn Operator> = Box::new(merge_op);
 
         Ok((operator, columns))
     }
@@ -533,10 +537,15 @@ impl super::Planner {
             edge_output_column,
         };
 
-        let operator: Box<dyn Operator> = Box::new(
+        let mut merge_rel_op =
             MergeRelationshipOperator::new(Arc::clone(&self.store), input_op, config)
-                .with_transaction_context(self.viewing_epoch, self.transaction_id),
-        );
+                .with_transaction_context(self.viewing_epoch, self.transaction_id);
+
+        if let Some(ref validator) = self.validator {
+            merge_rel_op = merge_rel_op.with_validator(Arc::clone(validator));
+        }
+
+        let operator: Box<dyn Operator> = Box::new(merge_rel_op);
 
         Ok((operator, columns))
     }

@@ -354,15 +354,16 @@ impl<'a> Parser<'a> {
                         )))
                     }
                     "ALTER" => self.parse_alter(),
+                    "SHOW" => self.parse_show().map(Statement::Schema),
                     _ => Err(self.error(
                         "Expected MATCH, INSERT, DELETE, MERGE, UNWIND, FOR, CREATE, CALL, \
-                         DROP, ALTER, USE, SESSION, START, COMMIT, ROLLBACK, or SAVEPOINT",
+                         DROP, ALTER, SHOW, USE, SESSION, START, COMMIT, ROLLBACK, or SAVEPOINT",
                     )),
                 }
             }
             _ => Err(self.error(
                 "Expected MATCH, INSERT, DELETE, MERGE, UNWIND, FOR, CREATE, CALL, \
-                 DROP, USE, SESSION, START, COMMIT, or ROLLBACK",
+                 DROP, SHOW, USE, SESSION, START, COMMIT, or ROLLBACK",
             )),
         }
     }
@@ -3817,6 +3818,28 @@ impl<'a> Parser<'a> {
                 let name = self.get_identifier_name();
                 self.advance();
 
+                // Optional EXTENDS <parent1>, <parent2>
+                let parent_types = if self.is_identifier()
+                    && self.get_identifier_name().eq_ignore_ascii_case("EXTENDS")
+                {
+                    self.advance();
+                    let mut parents = Vec::new();
+                    if self.is_identifier() || self.is_label_or_type_name() {
+                        parents.push(self.get_identifier_name());
+                        self.advance();
+                        while self.current.kind == TokenKind::Comma {
+                            self.advance();
+                            if self.is_identifier() || self.is_label_or_type_name() {
+                                parents.push(self.get_identifier_name());
+                                self.advance();
+                            }
+                        }
+                    }
+                    parents
+                } else {
+                    Vec::new()
+                };
+
                 // Parse property definitions
                 let properties = if self.current.kind == TokenKind::LParen {
                     self.parse_property_definitions()?
@@ -3827,6 +3850,7 @@ impl<'a> Parser<'a> {
                 Ok(SchemaStatement::CreateNodeType(CreateNodeTypeStatement {
                     name,
                     properties,
+                    parent_types,
                     if_not_exists,
                     or_replace,
                     span: None,
@@ -3845,6 +3869,46 @@ impl<'a> Parser<'a> {
                 let name = self.get_identifier_name();
                 self.advance();
 
+                // Optional CONNECTING (Source) TO (Target)
+                let (source_node_types, target_node_types) = if self.is_identifier()
+                    && self.get_identifier_name().eq_ignore_ascii_case("CONNECTING")
+                {
+                    self.advance();
+                    self.expect(TokenKind::LParen)?;
+                    let mut sources = Vec::new();
+                    while self.is_identifier() || self.is_label_or_type_name() {
+                        sources.push(self.get_identifier_name());
+                        self.advance();
+                        if self.current.kind == TokenKind::Comma {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(TokenKind::RParen)?;
+                    if !(self.is_identifier()
+                        && self.get_identifier_name().eq_ignore_ascii_case("TO"))
+                    {
+                        return Err(self.error("Expected 'TO' after source node types"));
+                    }
+                    self.advance();
+                    self.expect(TokenKind::LParen)?;
+                    let mut targets = Vec::new();
+                    while self.is_identifier() || self.is_label_or_type_name() {
+                        targets.push(self.get_identifier_name());
+                        self.advance();
+                        if self.current.kind == TokenKind::Comma {
+                            self.advance();
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(TokenKind::RParen)?;
+                    (sources, targets)
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+
                 let properties = if self.current.kind == TokenKind::LParen {
                     self.parse_property_definitions()?
                 } else {
@@ -3854,6 +3918,8 @@ impl<'a> Parser<'a> {
                 Ok(SchemaStatement::CreateEdgeType(CreateEdgeTypeStatement {
                     name,
                     properties,
+                    source_node_types,
+                    target_node_types,
                     if_not_exists,
                     or_replace,
                     span: None,
@@ -4427,13 +4493,28 @@ impl<'a> Parser<'a> {
         Ok((node_types, edge_types, open))
     }
 
-    /// Parses the ISO-syntax body of CREATE GRAPH TYPE:
-    /// `(NODE TYPE Name (props), EDGE TYPE Name (props), ...)`
+    /// Parses the ISO-syntax body of CREATE GRAPH TYPE.
+    ///
+    /// Supports two forms:
+    /// - Verbose: `(NODE TYPE Name (props), EDGE TYPE Name (props), ...)`
+    /// - Pattern: `((:Person {name STRING})-[:KNOWS {since INT64}]->(:Person), ...)`
     ///
     /// Returns a list of inline element type definitions.
     fn parse_graph_type_iso_body(&mut self) -> Result<Vec<InlineElementType>> {
         self.expect(TokenKind::LParen)?;
 
+        // Detect which form: pattern form starts with `(` (nested paren for node pattern),
+        // verbose form starts with NODE or EDGE.
+        if self.current.kind == TokenKind::LParen {
+            self.parse_graph_type_pattern_body()
+        } else {
+            self.parse_graph_type_verbose_body()
+        }
+    }
+
+    /// Parses the verbose form: `NODE TYPE Name (props), EDGE TYPE Name (props), ...)`
+    /// (closing `)` included).
+    fn parse_graph_type_verbose_body(&mut self) -> Result<Vec<InlineElementType>> {
         let mut types = Vec::new();
 
         while self.current.kind != TokenKind::RParen && self.current.kind != TokenKind::Eof {
@@ -4496,6 +4577,8 @@ impl<'a> Parser<'a> {
                     name: type_name,
                     properties,
                     key_labels,
+                    source_node_types: Vec::new(),
+                    target_node_types: Vec::new(),
                 });
             }
 
@@ -4507,6 +4590,148 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::RParen)?;
         Ok(types)
+    }
+
+    /// Parses the pattern form of a graph type body:
+    /// `(:Person {name STRING})-[:KNOWS {since INT64}]->(:Person), ...)`
+    /// (closing `)` included).
+    fn parse_graph_type_pattern_body(&mut self) -> Result<Vec<InlineElementType>> {
+        let mut types = Vec::new();
+        // Track which node type names we've already emitted so we don't duplicate them.
+        let mut seen_node_types = std::collections::HashSet::new();
+
+        while self.current.kind != TokenKind::RParen && self.current.kind != TokenKind::Eof {
+            // Parse the first node pattern: (:Label {props})
+            let (src_label, src_props) = self.parse_graph_type_node_pattern()?;
+
+            // Check if an edge follows: `-[` or `<-[`
+            if self.current.kind == TokenKind::Minus || self.current.kind == TokenKind::LeftArrow {
+                let backward = self.current.kind == TokenKind::LeftArrow;
+                if backward {
+                    // <-[ : incoming direction
+                    self.advance(); // consume `<-`
+                } else {
+                    // -[ : outgoing or undirected
+                    self.advance(); // consume `-`
+                }
+
+                self.expect(TokenKind::LBracket)?;
+
+                // Parse edge label: `:EdgeType`
+                self.expect(TokenKind::Colon)?;
+                if !self.is_identifier() && !self.is_label_or_type_name() {
+                    return Err(self.error("Expected edge type name after `:` in pattern"));
+                }
+                let edge_label = self.get_identifier_name();
+                self.advance();
+
+                // Optional properties: { prop TYPE, ... }
+                let edge_props = if self.current.kind == TokenKind::LBrace {
+                    self.parse_property_definitions_braces()?
+                } else {
+                    Vec::new()
+                };
+
+                self.expect(TokenKind::RBracket)?;
+
+                // Parse direction after `]`: `->` for outgoing, `-` for undirected
+                let forward = if self.current.kind == TokenKind::Arrow {
+                    self.advance(); // consume `->`
+                    true
+                } else if self.current.kind == TokenKind::Minus {
+                    self.advance(); // consume `-` (undirected)
+                    false
+                } else {
+                    return Err(self.error("Expected `->` or `-` after edge pattern `]`"));
+                };
+
+                // Parse target node: (:Label {props})
+                let (tgt_label, tgt_props) = self.parse_graph_type_node_pattern()?;
+
+                // Determine source and target based on direction
+                let (effective_src, effective_tgt) = if backward {
+                    (tgt_label.clone(), src_label.clone())
+                } else {
+                    (src_label.clone(), tgt_label.clone())
+                };
+
+                let (src_types, tgt_types) = if !forward && !backward {
+                    // Undirected: both directions
+                    (
+                        vec![src_label.clone(), tgt_label.clone()],
+                        vec![src_label.clone(), tgt_label.clone()],
+                    )
+                } else {
+                    (vec![effective_src], vec![effective_tgt])
+                };
+
+                // Add node types (deduplicated)
+                if seen_node_types.insert(src_label.clone()) {
+                    types.push(InlineElementType::Node {
+                        name: src_label,
+                        properties: src_props,
+                        key_labels: Vec::new(),
+                    });
+                }
+                if seen_node_types.insert(tgt_label.clone()) {
+                    types.push(InlineElementType::Node {
+                        name: tgt_label,
+                        properties: tgt_props,
+                        key_labels: Vec::new(),
+                    });
+                }
+
+                // Add edge type
+                types.push(InlineElementType::Edge {
+                    name: edge_label,
+                    properties: edge_props,
+                    key_labels: Vec::new(),
+                    source_node_types: src_types,
+                    target_node_types: tgt_types,
+                });
+            } else {
+                // Standalone node pattern
+                if seen_node_types.insert(src_label.clone()) {
+                    types.push(InlineElementType::Node {
+                        name: src_label,
+                        properties: src_props,
+                        key_labels: Vec::new(),
+                    });
+                }
+            }
+
+            // Optional comma separator
+            if self.current.kind == TokenKind::Comma {
+                self.advance();
+            }
+        }
+
+        self.expect(TokenKind::RParen)?;
+        Ok(types)
+    }
+
+    /// Parses a node pattern inside a graph type pattern body: `(:Label {prop TYPE, ...})`.
+    ///
+    /// Returns `(label, properties)`.
+    fn parse_graph_type_node_pattern(&mut self) -> Result<(String, Vec<PropertyDefinition>)> {
+        self.expect(TokenKind::LParen)?;
+        self.expect(TokenKind::Colon)?;
+
+        if !self.is_identifier() && !self.is_label_or_type_name() {
+            return Err(self.error("Expected label name in node pattern"));
+        }
+        let label = self.get_identifier_name();
+        self.advance();
+
+        // Optional property definitions in braces
+        let properties = if self.current.kind == TokenKind::LBrace {
+            self.parse_property_definitions_braces()?
+        } else {
+            Vec::new()
+        };
+
+        self.expect(TokenKind::RParen)?;
+        Ok((label, properties))
     }
 
     /// Parses `[T1, T2, T3]`, returning a list of identifiers.
@@ -4733,10 +4958,30 @@ impl<'a> Parser<'a> {
                     } else {
                         true
                     };
+                    // Optional DEFAULT <literal>
+                    let default_value = if self.is_identifier()
+                        && self.get_identifier_name().eq_ignore_ascii_case("DEFAULT")
+                    {
+                        self.advance();
+                        let lit = match self.current.kind {
+                            TokenKind::String
+                            | TokenKind::Integer
+                            | TokenKind::Float
+                            | TokenKind::True
+                            | TokenKind::False
+                            | TokenKind::Null => self.current.text.clone(),
+                            _ => return Err(self.error("Expected literal value after DEFAULT")),
+                        };
+                        self.advance();
+                        Some(lit)
+                    } else {
+                        None
+                    };
                     alterations.push(TypeAlteration::AddProperty(PropertyDefinition {
                         name: prop_name,
                         data_type,
                         nullable,
+                        default_value,
                     }));
                 }
                 "DROP" => {
@@ -4887,10 +5132,31 @@ impl<'a> Parser<'a> {
                     true
                 };
 
+                // Optional DEFAULT <literal>
+                let default_value = if self.is_identifier()
+                    && self.get_identifier_name().eq_ignore_ascii_case("DEFAULT")
+                {
+                    self.advance();
+                    let lit = match self.current.kind {
+                        TokenKind::String
+                        | TokenKind::Integer
+                        | TokenKind::Float
+                        | TokenKind::True
+                        | TokenKind::False
+                        | TokenKind::Null => self.current.text.clone(),
+                        _ => return Err(self.error("Expected literal value after DEFAULT")),
+                    };
+                    self.advance();
+                    Some(lit)
+                } else {
+                    None
+                };
+
                 defs.push(PropertyDefinition {
                     name,
                     data_type,
                     nullable,
+                    default_value,
                 });
 
                 if self.current.kind != TokenKind::Comma {
@@ -4902,6 +5168,173 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenKind::RParen)?;
         Ok(defs)
+    }
+
+    /// Parses property definitions inside braces: `{ name TYPE [NOT NULL], ... }`.
+    ///
+    /// Used by pattern-form graph type syntax where properties use `{}` instead of `()`.
+    fn parse_property_definitions_braces(&mut self) -> Result<Vec<PropertyDefinition>> {
+        self.expect(TokenKind::LBrace)?;
+
+        let mut defs = Vec::new();
+
+        if self.current.kind != TokenKind::RBrace {
+            loop {
+                if !self.is_identifier() {
+                    return Err(self.error("Expected property name"));
+                }
+                let name = self.get_identifier_name();
+                self.advance();
+
+                if !self.is_identifier() {
+                    return Err(self.error("Expected type name"));
+                }
+                let data_type = self.get_identifier_name();
+                self.advance();
+
+                let nullable = if self.current.kind == TokenKind::Not {
+                    self.advance();
+                    if self.current.kind != TokenKind::Null {
+                        return Err(self.error("Expected NULL after NOT"));
+                    }
+                    self.advance();
+                    false
+                } else {
+                    true
+                };
+
+                // Optional DEFAULT <literal>
+                let default_value = if self.is_identifier()
+                    && self.get_identifier_name().eq_ignore_ascii_case("DEFAULT")
+                {
+                    self.advance();
+                    let lit = match self.current.kind {
+                        TokenKind::String
+                        | TokenKind::Integer
+                        | TokenKind::Float
+                        | TokenKind::True
+                        | TokenKind::False
+                        | TokenKind::Null => self.current.text.clone(),
+                        _ => return Err(self.error("Expected literal value after DEFAULT")),
+                    };
+                    self.advance();
+                    Some(lit)
+                } else {
+                    None
+                };
+
+                defs.push(PropertyDefinition {
+                    name,
+                    data_type,
+                    nullable,
+                    default_value,
+                });
+
+                if self.current.kind != TokenKind::Comma {
+                    break;
+                }
+                self.advance();
+            }
+        }
+
+        self.expect(TokenKind::RBrace)?;
+        Ok(defs)
+    }
+
+    /// Parses a SHOW statement.
+    ///
+    /// ```text
+    /// SHOW CONSTRAINTS
+    /// SHOW INDEXES
+    /// SHOW NODE TYPES
+    /// SHOW EDGE TYPES
+    /// SHOW GRAPH TYPES
+    /// SHOW GRAPH TYPE <name>
+    /// ```
+    fn parse_show(&mut self) -> Result<SchemaStatement> {
+        self.advance(); // consume SHOW
+
+        if !self.is_identifier()
+            && self.current.kind != TokenKind::Node
+            && self.current.kind != TokenKind::Edge
+            && self.current.kind != TokenKind::Index
+        {
+            return Err(self.error(
+                "Expected CONSTRAINTS, INDEXES, NODE TYPES, EDGE TYPES, GRAPH TYPES, or GRAPH TYPE <name> after SHOW",
+            ));
+        }
+
+        match self.current.kind {
+            TokenKind::Node => {
+                // SHOW NODE TYPES
+                self.advance();
+                if self.current.kind != TokenKind::Type
+                    && !(self.is_identifier()
+                        && self.get_identifier_name().eq_ignore_ascii_case("TYPES"))
+                {
+                    return Err(self.error("Expected TYPES after SHOW NODE"));
+                }
+                self.advance();
+                Ok(SchemaStatement::ShowNodeTypes)
+            }
+            TokenKind::Edge => {
+                // SHOW EDGE TYPES
+                self.advance();
+                if self.current.kind != TokenKind::Type
+                    && !(self.is_identifier()
+                        && self.get_identifier_name().eq_ignore_ascii_case("TYPES"))
+                {
+                    return Err(self.error("Expected TYPES after SHOW EDGE"));
+                }
+                self.advance();
+                Ok(SchemaStatement::ShowEdgeTypes)
+            }
+            TokenKind::Index => {
+                // SHOW INDEXES (INDEX is a keyword token)
+                self.advance();
+                // Allow optional plural "ES" as a separate token won't happen,
+                // but the keyword is INDEX. Accept both SHOW INDEX and SHOW INDEXES.
+                Ok(SchemaStatement::ShowIndexes)
+            }
+            _ => {
+                let name = self.get_identifier_name();
+                match name.to_uppercase().as_str() {
+                    "CONSTRAINTS" => {
+                        self.advance();
+                        Ok(SchemaStatement::ShowConstraints)
+                    }
+                    "INDEXES" => {
+                        self.advance();
+                        Ok(SchemaStatement::ShowIndexes)
+                    }
+                    "GRAPH" => {
+                        self.advance();
+                        // SHOW GRAPH TYPES or SHOW GRAPH TYPE <name>
+                        if self.current.kind == TokenKind::Type {
+                            self.advance();
+                            // SHOW GRAPH TYPE <name> (singular)
+                            if !self.is_identifier() {
+                                return Err(self.error("Expected graph type name after SHOW GRAPH TYPE"));
+                            }
+                            let type_name = self.get_identifier_name();
+                            self.advance();
+                            Ok(SchemaStatement::ShowGraphType(type_name))
+                        } else if self.is_identifier()
+                            && self.get_identifier_name().eq_ignore_ascii_case("TYPES")
+                        {
+                            // SHOW GRAPH TYPES (plural)
+                            self.advance();
+                            Ok(SchemaStatement::ShowGraphTypes)
+                        } else {
+                            Err(self.error("Expected TYPE <name> or TYPES after SHOW GRAPH"))
+                        }
+                    }
+                    _ => Err(self.error(
+                        "Expected CONSTRAINTS, INDEXES, NODE TYPES, EDGE TYPES, GRAPH TYPES, or GRAPH TYPE <name> after SHOW",
+                    )),
+                }
+            }
+        }
     }
 
     fn advance(&mut self) {
@@ -8155,5 +8588,255 @@ mod tests {
             result.is_ok(),
             "EXISTS bare pattern with WHERE should parse: {result:?}"
         );
+    }
+
+    // ==================== Pattern-form graph type syntax ====================
+
+    #[test]
+    fn test_parse_graph_type_pattern_form_simple() {
+        let mut parser = Parser::new(
+            "CREATE GRAPH TYPE social (\
+                (:Person {name STRING NOT NULL})-[:KNOWS {since INTEGER}]->(:Person)\
+            )",
+        );
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "Pattern-form graph type should parse: {result:?}"
+        );
+        if let Statement::Schema(SchemaStatement::CreateGraphType(stmt)) = result.unwrap() {
+            assert_eq!(stmt.name, "social");
+            assert!(stmt.node_types.contains(&"Person".to_string()));
+            assert!(stmt.edge_types.contains(&"KNOWS".to_string()));
+            // Should have Person node type and KNOWS edge type
+            let node_count = stmt
+                .inline_types
+                .iter()
+                .filter(|t| matches!(t, InlineElementType::Node { .. }))
+                .count();
+            let edge_count = stmt
+                .inline_types
+                .iter()
+                .filter(|t| matches!(t, InlineElementType::Edge { .. }))
+                .count();
+            assert_eq!(
+                node_count, 1,
+                "Should have 1 node type (Person, deduplicated)"
+            );
+            assert_eq!(edge_count, 1, "Should have 1 edge type (KNOWS)");
+            // Check KNOWS edge has source/target
+            for t in &stmt.inline_types {
+                if let InlineElementType::Edge {
+                    name,
+                    source_node_types,
+                    target_node_types,
+                    ..
+                } = t
+                {
+                    assert_eq!(name, "KNOWS");
+                    assert_eq!(source_node_types, &["Person"]);
+                    assert_eq!(target_node_types, &["Person"]);
+                }
+            }
+        } else {
+            panic!("Expected CreateGraphType");
+        }
+    }
+
+    #[test]
+    fn test_parse_graph_type_pattern_form_multiple_patterns() {
+        let mut parser = Parser::new(
+            "CREATE GRAPH TYPE social (\
+                (:Person {name STRING NOT NULL})-[:KNOWS {since INTEGER}]->(:Person),\
+                (:Person)-[:LIVES_IN]->(:City)\
+            )",
+        );
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "Multiple pattern-form entries should parse: {result:?}"
+        );
+        if let Statement::Schema(SchemaStatement::CreateGraphType(stmt)) = result.unwrap() {
+            assert_eq!(stmt.name, "social");
+            assert!(stmt.node_types.contains(&"Person".to_string()));
+            assert!(stmt.node_types.contains(&"City".to_string()));
+            assert!(stmt.edge_types.contains(&"KNOWS".to_string()));
+            assert!(stmt.edge_types.contains(&"LIVES_IN".to_string()));
+            // Person should appear only once despite being in two patterns
+            let node_count = stmt
+                .inline_types
+                .iter()
+                .filter(|t| matches!(t, InlineElementType::Node { .. }))
+                .count();
+            assert_eq!(node_count, 2, "Should have 2 node types (Person, City)");
+        } else {
+            panic!("Expected CreateGraphType");
+        }
+    }
+
+    #[test]
+    fn test_parse_graph_type_pattern_form_standalone_node() {
+        let mut parser = Parser::new(
+            "CREATE GRAPH TYPE basic_nodes (\
+                (:Person {name STRING})\
+            )",
+        );
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "Standalone node pattern should parse: {result:?}"
+        );
+        if let Statement::Schema(SchemaStatement::CreateGraphType(stmt)) = result.unwrap() {
+            assert_eq!(stmt.inline_types.len(), 1);
+            assert!(matches!(
+                &stmt.inline_types[0],
+                InlineElementType::Node { name, .. } if name == "Person"
+            ));
+        } else {
+            panic!("Expected CreateGraphType");
+        }
+    }
+
+    #[test]
+    fn test_parse_graph_type_pattern_form_no_props() {
+        let mut parser = Parser::new(
+            "CREATE GRAPH TYPE bare (\
+                (:Person)-[:KNOWS]->(:Person)\
+            )",
+        );
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "Pattern without properties should parse: {result:?}"
+        );
+        if let Statement::Schema(SchemaStatement::CreateGraphType(stmt)) = result.unwrap() {
+            // Node should have no properties
+            for t in &stmt.inline_types {
+                if let InlineElementType::Node { properties, .. } = t {
+                    assert!(properties.is_empty());
+                }
+                if let InlineElementType::Edge { properties, .. } = t {
+                    assert!(properties.is_empty());
+                }
+            }
+        } else {
+            panic!("Expected CreateGraphType");
+        }
+    }
+
+    #[test]
+    fn test_parse_graph_type_pattern_form_backward_edge() {
+        let mut parser = Parser::new(
+            "CREATE GRAPH TYPE rev (\
+                (:City)<-[:LIVES_IN]-(:Person)\
+            )",
+        );
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "Backward edge pattern should parse: {result:?}"
+        );
+        if let Statement::Schema(SchemaStatement::CreateGraphType(stmt)) = result.unwrap() {
+            for t in &stmt.inline_types {
+                if let InlineElementType::Edge {
+                    name,
+                    source_node_types,
+                    target_node_types,
+                    ..
+                } = t
+                {
+                    assert_eq!(name, "LIVES_IN");
+                    // Backward: source is Person (right side), target is City (left side)
+                    assert_eq!(source_node_types, &["Person"]);
+                    assert_eq!(target_node_types, &["City"]);
+                }
+            }
+        } else {
+            panic!("Expected CreateGraphType");
+        }
+    }
+
+    // ==================== SHOW commands ====================
+
+    #[test]
+    fn test_parse_show_constraints() {
+        let mut parser = Parser::new("SHOW CONSTRAINTS");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SHOW CONSTRAINTS should parse: {result:?}");
+        assert!(matches!(
+            result.unwrap(),
+            Statement::Schema(SchemaStatement::ShowConstraints)
+        ));
+    }
+
+    #[test]
+    fn test_parse_show_indexes() {
+        let mut parser = Parser::new("SHOW INDEXES");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SHOW INDEXES should parse: {result:?}");
+        assert!(matches!(
+            result.unwrap(),
+            Statement::Schema(SchemaStatement::ShowIndexes)
+        ));
+    }
+
+    #[test]
+    fn test_parse_show_index_singular() {
+        // INDEX is a keyword token, so SHOW INDEX should also work
+        let mut parser = Parser::new("SHOW INDEX");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SHOW INDEX should parse: {result:?}");
+        assert!(matches!(
+            result.unwrap(),
+            Statement::Schema(SchemaStatement::ShowIndexes)
+        ));
+    }
+
+    #[test]
+    fn test_parse_show_node_types() {
+        let mut parser = Parser::new("SHOW NODE TYPES");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SHOW NODE TYPES should parse: {result:?}");
+        assert!(matches!(
+            result.unwrap(),
+            Statement::Schema(SchemaStatement::ShowNodeTypes)
+        ));
+    }
+
+    #[test]
+    fn test_parse_show_edge_types() {
+        let mut parser = Parser::new("SHOW EDGE TYPES");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SHOW EDGE TYPES should parse: {result:?}");
+        assert!(matches!(
+            result.unwrap(),
+            Statement::Schema(SchemaStatement::ShowEdgeTypes)
+        ));
+    }
+
+    #[test]
+    fn test_parse_show_graph_types() {
+        let mut parser = Parser::new("SHOW GRAPH TYPES");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SHOW GRAPH TYPES should parse: {result:?}");
+        assert!(matches!(
+            result.unwrap(),
+            Statement::Schema(SchemaStatement::ShowGraphTypes)
+        ));
+    }
+
+    #[test]
+    fn test_parse_show_graph_type_named() {
+        let mut parser = Parser::new("SHOW GRAPH TYPE social");
+        let result = parser.parse();
+        assert!(
+            result.is_ok(),
+            "SHOW GRAPH TYPE <name> should parse: {result:?}"
+        );
+        if let Statement::Schema(SchemaStatement::ShowGraphType(name)) = result.unwrap() {
+            assert_eq!(name, "social");
+        } else {
+            panic!("Expected ShowGraphType");
+        }
     }
 }
