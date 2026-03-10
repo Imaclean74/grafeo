@@ -236,9 +236,16 @@ impl Session {
     ///
     /// The external store handles all data operations. Transaction management
     /// (begin/commit/rollback) is not supported for external stores.
-    pub(crate) fn with_external_store(store: Arc<dyn GraphStoreMut>, cfg: SessionConfig) -> Self {
-        Self {
-            store: Arc::new(LpgStore::new().expect("arena allocation for dummy LpgStore")), // dummy for LpgStore-specific ops
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal arena allocation fails (out of memory).
+    pub(crate) fn with_external_store(
+        store: Arc<dyn GraphStoreMut>,
+        cfg: SessionConfig,
+    ) -> Result<Self> {
+        Ok(Self {
+            store: Arc::new(LpgStore::new()?),
             graph_store: store,
             catalog: cfg.catalog,
             #[cfg(feature = "rdf")]
@@ -266,7 +273,7 @@ impl Session {
             viewing_epoch_override: parking_lot::Mutex::new(None),
             savepoints: parking_lot::Mutex::new(Vec::new()),
             transaction_nesting_depth: parking_lot::Mutex::new(0),
-        }
+        })
     }
 
     /// Returns the graph model this session operates on.
@@ -1898,7 +1905,7 @@ impl Session {
             let processor = QueryProcessor::for_graph_store_with_transaction(
                 Arc::clone(&self.graph_store),
                 Arc::clone(&self.transaction_manager),
-            );
+            )?;
 
             // Apply transaction context if in a transaction
             let processor = if let Some(transaction_id) = transaction_id {
@@ -2141,7 +2148,7 @@ impl Session {
             let processor = QueryProcessor::for_graph_store_with_transaction(
                 Arc::clone(&self.graph_store),
                 Arc::clone(&self.transaction_manager),
-            );
+            )?;
 
             // Apply transaction context if in a transaction
             let processor = if let Some(transaction_id) = transaction_id {
@@ -2232,7 +2239,7 @@ impl Session {
             let processor = QueryProcessor::for_graph_store_with_transaction(
                 Arc::clone(&self.graph_store),
                 Arc::clone(&self.transaction_manager),
-            );
+            )?;
 
             // Apply transaction context if in a transaction
             let processor = if let Some(transaction_id) = transaction_id {
@@ -2291,7 +2298,7 @@ impl Session {
             let processor = QueryProcessor::for_graph_store_with_transaction(
                 Arc::clone(&self.graph_store),
                 Arc::clone(&self.transaction_manager),
-            );
+            )?;
 
             let processor = if let Some(transaction_id) = transaction_id {
                 processor.with_transaction_context(viewing_epoch, transaction_id)
@@ -2416,7 +2423,7 @@ impl Session {
             let processor = QueryProcessor::for_graph_store_with_transaction(
                 Arc::clone(&self.graph_store),
                 Arc::clone(&self.transaction_manager),
-            );
+            )?;
 
             // Apply transaction context if in a transaction
             let processor = if let Some(transaction_id) = transaction_id {
@@ -2521,7 +2528,7 @@ impl Session {
                         let processor = QueryProcessor::for_graph_store_with_transaction(
                             Arc::clone(&self.graph_store),
                             Arc::clone(&self.transaction_manager),
-                        );
+                        )?;
                         let (viewing_epoch, transaction_id) = self.get_transaction_context();
                         let processor = if let Some(transaction_id) = transaction_id {
                             processor.with_transaction_context(viewing_epoch, transaction_id)

@@ -18,6 +18,49 @@ impl LpgStore {
         self.create_node_versioned(labels, self.current_epoch(), TransactionId::SYSTEM)
     }
 
+    /// Registers labels for a node: builds the label ID set, updates the
+    /// label index (single lock acquisition), and stores the node-to-labels
+    /// mapping.
+    pub(super) fn register_node_labels(&self, id: NodeId, labels: &[&str]) {
+        let mut node_label_set = FxHashSet::default();
+        let mut label_ids = Vec::with_capacity(labels.len());
+        for label in labels {
+            let label_id = self.get_or_create_label_id(label);
+            node_label_set.insert(label_id);
+            label_ids.push(label_id);
+        }
+
+        // Update label index with a single lock acquisition
+        let mut index = self.label_index.write();
+        for label_id in label_ids {
+            if index.len() <= label_id as usize {
+                index.resize_with(label_id as usize + 1, FxHashMap::default);
+            }
+            index[label_id as usize].insert(id, ());
+        }
+        drop(index);
+
+        self.node_labels.write().insert(id, node_label_set);
+    }
+
+    /// Builds a `Node` populated with labels and properties for the given ID.
+    fn build_node(&self, id: NodeId) -> Node {
+        let mut node = Node::new(id);
+
+        let id_to_label = self.id_to_label.read();
+        let node_labels = self.node_labels.read();
+        if let Some(label_ids) = node_labels.get(&id) {
+            for &label_id in label_ids {
+                if let Some(label) = id_to_label.get(label_id as usize) {
+                    node.labels.push(label.clone());
+                }
+            }
+        }
+
+        node.properties = self.node_properties.get_all(id).into_iter().collect();
+        node
+    }
+
     /// Creates a new node with the given labels within a transaction context.
     #[cfg(not(feature = "tiered-storage"))]
     #[doc(hidden)]
@@ -32,24 +75,8 @@ impl LpgStore {
         let mut record = NodeRecord::new(id, epoch);
         record.set_label_count(labels.len() as u16);
 
-        // Store labels in node_labels map and label_index
-        let mut node_label_set = FxHashSet::default();
-        for label in labels {
-            let label_id = self.get_or_create_label_id(label);
-            node_label_set.insert(label_id);
+        self.register_node_labels(id, labels);
 
-            // Update label index
-            let mut index = self.label_index.write();
-            while index.len() <= label_id as usize {
-                index.push(FxHashMap::default());
-            }
-            index[label_id as usize].insert(id, ());
-        }
-
-        // Store node's labels
-        self.node_labels.write().insert(id, node_label_set);
-
-        // Create version chain with initial version
         let chain = VersionChain::with_initial(record, epoch, transaction_id);
         self.nodes.write().insert(id, chain);
         self.live_node_count.fetch_add(1, Ordering::Relaxed);
@@ -71,22 +98,7 @@ impl LpgStore {
         let mut record = NodeRecord::new(id, epoch);
         record.set_label_count(labels.len() as u16);
 
-        // Store labels in node_labels map and label_index
-        let mut node_label_set = FxHashSet::default();
-        for label in labels {
-            let label_id = self.get_or_create_label_id(label);
-            node_label_set.insert(label_id);
-
-            // Update label index
-            let mut index = self.label_index.write();
-            while index.len() <= label_id as usize {
-                index.push(FxHashMap::default());
-            }
-            index[label_id as usize].insert(id, ());
-        }
-
-        // Store node's labels
-        self.node_labels.write().insert(id, node_label_set);
+        self.register_node_labels(id, labels);
 
         // Allocate record in arena and get offset (create epoch if needed)
         let arena = self
@@ -195,28 +207,11 @@ impl LpgStore {
         let nodes = self.nodes.read();
         let chain = nodes.get(&id)?;
         let record = chain.visible_at(epoch)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let mut node = Node::new(id);
-
-        // Get labels from node_labels map
-        let id_to_label = self.id_to_label.read();
-        let node_labels = self.node_labels.read();
-        if let Some(label_ids) = node_labels.get(&id) {
-            for &label_id in label_ids {
-                if let Some(label) = id_to_label.get(label_id as usize) {
-                    node.labels.push(label.clone());
-                }
-            }
-        }
-
-        // Get properties
-        node.properties = self.node_properties.get_all(id).into_iter().collect();
-
-        Some(node)
+        drop(nodes);
+        Some(self.build_node(id))
     }
 
     /// Gets a node by ID at a specific epoch.
@@ -227,31 +222,12 @@ impl LpgStore {
         let versions = self.node_versions.read();
         let index = versions.get(&id)?;
         let version_ref = index.visible_at(epoch)?;
-
-        // Read the record from arena
         let record = self.read_node_record(&version_ref)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let mut node = Node::new(id);
-
-        // Get labels from node_labels map
-        let id_to_label = self.id_to_label.read();
-        let node_labels = self.node_labels.read();
-        if let Some(label_ids) = node_labels.get(&id) {
-            for &label_id in label_ids {
-                if let Some(label) = id_to_label.get(label_id as usize) {
-                    node.labels.push(label.clone());
-                }
-            }
-        }
-
-        // Get properties
-        node.properties = self.node_properties.get_all(id).into_iter().collect();
-
-        Some(node)
+        drop(versions);
+        Some(self.build_node(id))
     }
 
     /// Gets a node visible to a specific transaction.
@@ -267,28 +243,11 @@ impl LpgStore {
         let nodes = self.nodes.read();
         let chain = nodes.get(&id)?;
         let record = chain.visible_to(epoch, transaction_id)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let mut node = Node::new(id);
-
-        // Get labels from node_labels map
-        let id_to_label = self.id_to_label.read();
-        let node_labels = self.node_labels.read();
-        if let Some(label_ids) = node_labels.get(&id) {
-            for &label_id in label_ids {
-                if let Some(label) = id_to_label.get(label_id as usize) {
-                    node.labels.push(label.clone());
-                }
-            }
-        }
-
-        // Get properties
-        node.properties = self.node_properties.get_all(id).into_iter().collect();
-
-        Some(node)
+        drop(nodes);
+        Some(self.build_node(id))
     }
 
     /// Gets a node visible to a specific transaction.
@@ -305,31 +264,12 @@ impl LpgStore {
         let versions = self.node_versions.read();
         let index = versions.get(&id)?;
         let version_ref = index.visible_to(epoch, transaction_id)?;
-
-        // Read the record from arena
         let record = self.read_node_record(&version_ref)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let mut node = Node::new(id);
-
-        // Get labels from node_labels map
-        let id_to_label = self.id_to_label.read();
-        let node_labels = self.node_labels.read();
-        if let Some(label_ids) = node_labels.get(&id) {
-            for &label_id in label_ids {
-                if let Some(label) = id_to_label.get(label_id as usize) {
-                    node.labels.push(label.clone());
-                }
-            }
-        }
-
-        // Get properties
-        node.properties = self.node_properties.get_all(id).into_iter().collect();
-
-        Some(node)
+        drop(versions);
+        Some(self.build_node(id))
     }
 
     /// Returns all versions of a node with their creation/deletion epochs, newest first.
@@ -339,35 +279,17 @@ impl LpgStore {
     #[must_use]
     #[cfg(not(feature = "tiered-storage"))]
     pub fn get_node_history(&self, id: NodeId) -> Vec<(EpochId, Option<EpochId>, Node)> {
-        use grafeo_common::types::PropertyMap;
-        use smallvec::SmallVec;
-
         let nodes = self.nodes.read();
         let Some(chain) = nodes.get(&id) else {
             return Vec::new();
         };
 
-        let id_to_label = self.id_to_label.read();
-        let node_labels = self.node_labels.read();
-        let properties: PropertyMap = self.node_properties.get_all(id).into_iter().collect();
-
-        let mut labels: SmallVec<[arcstr::ArcStr; 2]> = SmallVec::new();
-        if let Some(label_ids) = node_labels.get(&id) {
-            for &label_id in label_ids {
-                if let Some(label) = id_to_label.get(label_id as usize) {
-                    labels.push(label.clone());
-                }
-            }
-        }
+        // Cache labels and properties once, clone per version entry
+        let template = self.build_node(id);
 
         chain
             .history()
-            .map(|(info, _record)| {
-                let mut node = Node::new(id);
-                node.labels.clone_from(&labels);
-                node.properties.clone_from(&properties);
-                (info.created_epoch, info.deleted_epoch, node)
-            })
+            .map(|(info, _record)| (info.created_epoch, info.deleted_epoch, template.clone()))
             .collect()
     }
 
@@ -376,36 +298,18 @@ impl LpgStore {
     #[must_use]
     #[cfg(feature = "tiered-storage")]
     pub fn get_node_history(&self, id: NodeId) -> Vec<(EpochId, Option<EpochId>, Node)> {
-        use grafeo_common::types::PropertyMap;
-        use smallvec::SmallVec;
-
         let versions = self.node_versions.read();
         let Some(index) = versions.get(&id) else {
             return Vec::new();
         };
 
-        let id_to_label = self.id_to_label.read();
-        let node_labels = self.node_labels.read();
-        let properties: PropertyMap = self.node_properties.get_all(id).into_iter().collect();
-
-        let mut labels: SmallVec<[arcstr::ArcStr; 2]> = SmallVec::new();
-        if let Some(label_ids) = node_labels.get(&id) {
-            for &label_id in label_ids {
-                if let Some(label) = id_to_label.get(label_id as usize) {
-                    labels.push(label.clone());
-                }
-            }
-        }
+        // Cache labels and properties once, clone per version entry
+        let template = self.build_node(id);
 
         index
             .version_history()
             .into_iter()
-            .map(|(created, deleted, _vref)| {
-                let mut node = Node::new(id);
-                node.labels.clone_from(&labels);
-                node.properties.clone_from(&properties);
-                (created, deleted, node)
-            })
+            .map(|(created, deleted, _vref)| (created, deleted, template.clone()))
             .collect()
     }
 

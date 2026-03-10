@@ -746,6 +746,40 @@ impl ChunkedAdjacency {
         }
     }
 
+    /// Returns estimated heap memory in bytes.
+    #[must_use]
+    pub fn heap_memory_bytes(&self) -> usize {
+        let lists = self.lists.read();
+        // Outer hash map overhead
+        let map_overhead = lists.capacity()
+            * (std::mem::size_of::<NodeId>() + std::mem::size_of::<AdjacencyList>() + 1);
+        // Per-list memory: hot chunks + cold chunks + deltas + deleted set
+        let mut list_bytes = 0usize;
+        for list in lists.values() {
+            // Hot chunks: Vec<AdjacencyChunk> capacity + each chunk's Vec capacity
+            list_bytes += list.hot_chunks.capacity() * std::mem::size_of::<AdjacencyChunk>();
+            for chunk in &list.hot_chunks {
+                list_bytes += chunk.destinations.capacity() * std::mem::size_of::<NodeId>();
+                list_bytes += chunk.edge_ids.capacity() * std::mem::size_of::<EdgeId>();
+            }
+            // Cold chunks: compressed data
+            list_bytes +=
+                list.cold_chunks.capacity() * std::mem::size_of::<CompressedAdjacencyChunk>();
+            for cold in &list.cold_chunks {
+                list_bytes += cold.memory_size();
+            }
+            // Delta buffer (SmallVec inline when < 16 entries)
+            if list.delta_inserts.spilled() {
+                list_bytes += list.delta_inserts.capacity() * 16;
+            }
+            // Deleted set
+            list_bytes += list.deleted.capacity() * (std::mem::size_of::<EdgeId>() + 1);
+            // Skip index
+            list_bytes += list.skip_index.capacity() * std::mem::size_of::<SkipIndexEntry>();
+        }
+        map_overhead + list_bytes
+    }
+
     /// Forces all hot chunks to be compressed for all adjacency lists.
     ///
     /// This is useful when memory pressure is high or during shutdown.

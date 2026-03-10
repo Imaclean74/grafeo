@@ -12,6 +12,7 @@
 mod edge_ops;
 mod graph_store_impl;
 mod index;
+mod memory;
 mod node_ops;
 mod property_ops;
 mod schema;
@@ -416,7 +417,7 @@ impl LpgStore {
             id_to_edge_type: RwLock::new(Vec::new()),
             forward_adj: ChunkedAdjacency::new(),
             backward_adj,
-            label_index: RwLock::new(Vec::new()),
+            label_index: RwLock::new(Vec::with_capacity(16)),
             node_labels: RwLock::new(FxHashMap::default()),
             property_indexes: RwLock::new(FxHashMap::default()),
             #[cfg(feature = "vector-index")]
@@ -692,11 +693,5 @@ impl LpgStore {
         if type_id < counts.len() as u32 {
             counts[type_id as usize] -= 1;
         }
-    }
-}
-
-impl Default for LpgStore {
-    fn default() -> Self {
-        Self::new().expect("failed to allocate arena for default LpgStore")
     }
 }

@@ -1408,6 +1408,135 @@ impl PyGrafeoDB {
         Ok(dict.into())
     }
 
+    /// Returns a hierarchical memory usage breakdown.
+    ///
+    /// Walks all internal structures (store, indexes, MVCC chains, caches,
+    /// string pools, buffer manager) and returns estimated heap bytes.
+    ///
+    /// Returns:
+    ///     dict with keys: total_bytes, store, indexes, mvcc, caches,
+    ///     string_pool, buffer_manager (each a nested dict)
+    ///
+    /// Example:
+    ///     usage = db.memory_usage()
+    ///     print(f"Total: {usage['total_bytes']} bytes")
+    ///     print(f"Store: {usage['store']['total_bytes']} bytes")
+    fn memory_usage(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let db = self.inner.read();
+        let usage = db.memory_usage();
+
+        let store = pyo3::types::PyDict::new(py);
+        store.set_item("total_bytes", usage.store.total_bytes)?;
+        store.set_item("nodes_bytes", usage.store.nodes_bytes)?;
+        store.set_item("edges_bytes", usage.store.edges_bytes)?;
+        store.set_item("node_properties_bytes", usage.store.node_properties_bytes)?;
+        store.set_item("edge_properties_bytes", usage.store.edge_properties_bytes)?;
+        store.set_item("property_column_count", usage.store.property_column_count)?;
+
+        let indexes = pyo3::types::PyDict::new(py);
+        indexes.set_item("total_bytes", usage.indexes.total_bytes)?;
+        indexes.set_item(
+            "forward_adjacency_bytes",
+            usage.indexes.forward_adjacency_bytes,
+        )?;
+        indexes.set_item(
+            "backward_adjacency_bytes",
+            usage.indexes.backward_adjacency_bytes,
+        )?;
+        indexes.set_item("label_index_bytes", usage.indexes.label_index_bytes)?;
+        indexes.set_item("node_labels_bytes", usage.indexes.node_labels_bytes)?;
+        indexes.set_item("property_index_bytes", usage.indexes.property_index_bytes)?;
+
+        let vec_idxs = pyo3::types::PyList::empty(py);
+        for vi in &usage.indexes.vector_indexes {
+            let d = pyo3::types::PyDict::new(py);
+            d.set_item("name", &vi.name)?;
+            d.set_item("bytes", vi.bytes)?;
+            d.set_item("item_count", vi.item_count)?;
+            vec_idxs.append(d)?;
+        }
+        indexes.set_item("vector_indexes", vec_idxs)?;
+
+        let txt_idxs = pyo3::types::PyList::empty(py);
+        for ti in &usage.indexes.text_indexes {
+            let d = pyo3::types::PyDict::new(py);
+            d.set_item("name", &ti.name)?;
+            d.set_item("bytes", ti.bytes)?;
+            d.set_item("item_count", ti.item_count)?;
+            txt_idxs.append(d)?;
+        }
+        indexes.set_item("text_indexes", txt_idxs)?;
+
+        let mvcc = pyo3::types::PyDict::new(py);
+        mvcc.set_item("total_bytes", usage.mvcc.total_bytes)?;
+        mvcc.set_item(
+            "node_version_chains_bytes",
+            usage.mvcc.node_version_chains_bytes,
+        )?;
+        mvcc.set_item(
+            "edge_version_chains_bytes",
+            usage.mvcc.edge_version_chains_bytes,
+        )?;
+        mvcc.set_item("average_chain_depth", usage.mvcc.average_chain_depth)?;
+        mvcc.set_item("max_chain_depth", usage.mvcc.max_chain_depth)?;
+
+        let caches = pyo3::types::PyDict::new(py);
+        caches.set_item("total_bytes", usage.caches.total_bytes)?;
+        caches.set_item(
+            "parsed_plan_cache_bytes",
+            usage.caches.parsed_plan_cache_bytes,
+        )?;
+        caches.set_item(
+            "optimized_plan_cache_bytes",
+            usage.caches.optimized_plan_cache_bytes,
+        )?;
+        caches.set_item("cached_plan_count", usage.caches.cached_plan_count)?;
+
+        let string_pool = pyo3::types::PyDict::new(py);
+        string_pool.set_item("total_bytes", usage.string_pool.total_bytes)?;
+        string_pool.set_item(
+            "label_registry_bytes",
+            usage.string_pool.label_registry_bytes,
+        )?;
+        string_pool.set_item(
+            "edge_type_registry_bytes",
+            usage.string_pool.edge_type_registry_bytes,
+        )?;
+        string_pool.set_item("label_count", usage.string_pool.label_count)?;
+        string_pool.set_item("edge_type_count", usage.string_pool.edge_type_count)?;
+
+        let buffer_mgr = pyo3::types::PyDict::new(py);
+        buffer_mgr.set_item("budget_bytes", usage.buffer_manager.budget_bytes)?;
+        buffer_mgr.set_item("allocated_bytes", usage.buffer_manager.allocated_bytes)?;
+        buffer_mgr.set_item(
+            "graph_storage_bytes",
+            usage.buffer_manager.graph_storage_bytes,
+        )?;
+        buffer_mgr.set_item(
+            "index_buffers_bytes",
+            usage.buffer_manager.index_buffers_bytes,
+        )?;
+        buffer_mgr.set_item(
+            "execution_buffers_bytes",
+            usage.buffer_manager.execution_buffers_bytes,
+        )?;
+        buffer_mgr.set_item(
+            "spill_staging_bytes",
+            usage.buffer_manager.spill_staging_bytes,
+        )?;
+
+        let dict = pyo3::types::PyDict::new(py);
+        dict.set_item("total_bytes", usage.total_bytes)?;
+        dict.set_item("store", store)?;
+        dict.set_item("indexes", indexes)?;
+        dict.set_item("mvcc", mvcc)?;
+        dict.set_item("caches", caches)?;
+        dict.set_item("string_pool", string_pool)?;
+        dict.set_item("buffer_manager", buffer_mgr)?;
+
+        Ok(dict.into())
+    }
+
     /// Returns schema information (labels, edge types, property keys).
     ///
     /// Returns:

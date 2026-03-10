@@ -11,6 +11,17 @@ use grafeo_common::mvcc::VersionChain;
 use grafeo_common::mvcc::{HotVersionRef, VersionIndex, VersionRef};
 
 impl LpgStore {
+    /// Builds an `Edge` from a record, resolving the type name and loading properties.
+    fn build_edge(&self, id: EdgeId, record: &EdgeRecord) -> Option<Edge> {
+        let edge_type = {
+            let id_to_type = self.id_to_edge_type.read();
+            id_to_type.get(record.type_id as usize)?.clone()
+        };
+        let mut edge = Edge::new(id, record.src, record.dst, edge_type);
+        edge.properties = self.edge_properties.get_all(id).into_iter().collect();
+        Some(edge)
+    }
+
     /// Creates a new edge.
     pub fn create_edge(&self, src: NodeId, dst: NodeId, edge_type: &str) -> EdgeId {
         self.create_edge_versioned(
@@ -129,22 +140,12 @@ impl LpgStore {
         let edges = self.edges.read();
         let chain = edges.get(&id)?;
         let record = chain.visible_at(epoch)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let edge_type = {
-            let id_to_type = self.id_to_edge_type.read();
-            id_to_type.get(record.type_id as usize)?.clone()
-        };
-
-        let mut edge = Edge::new(id, record.src, record.dst, edge_type);
-
-        // Get properties
-        edge.properties = self.edge_properties.get_all(id).into_iter().collect();
-
-        Some(edge)
+        let record = *record;
+        drop(edges);
+        self.build_edge(id, &record)
     }
 
     /// Gets an edge by ID at a specific epoch.
@@ -155,24 +156,12 @@ impl LpgStore {
         let versions = self.edge_versions.read();
         let index = versions.get(&id)?;
         let version_ref = index.visible_at(epoch)?;
-
         let record = self.read_edge_record(&version_ref)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let edge_type = {
-            let id_to_type = self.id_to_edge_type.read();
-            id_to_type.get(record.type_id as usize)?.clone()
-        };
-
-        let mut edge = Edge::new(id, record.src, record.dst, edge_type);
-
-        // Get properties
-        edge.properties = self.edge_properties.get_all(id).into_iter().collect();
-
-        Some(edge)
+        drop(versions);
+        self.build_edge(id, &record)
     }
 
     /// Gets an edge visible to a specific transaction.
@@ -188,22 +177,12 @@ impl LpgStore {
         let edges = self.edges.read();
         let chain = edges.get(&id)?;
         let record = chain.visible_to(epoch, transaction_id)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let edge_type = {
-            let id_to_type = self.id_to_edge_type.read();
-            id_to_type.get(record.type_id as usize)?.clone()
-        };
-
-        let mut edge = Edge::new(id, record.src, record.dst, edge_type);
-
-        // Get properties
-        edge.properties = self.edge_properties.get_all(id).into_iter().collect();
-
-        Some(edge)
+        let record = *record;
+        drop(edges);
+        self.build_edge(id, &record)
     }
 
     /// Gets an edge visible to a specific transaction.
@@ -220,24 +199,12 @@ impl LpgStore {
         let versions = self.edge_versions.read();
         let index = versions.get(&id)?;
         let version_ref = index.visible_to(epoch, transaction_id)?;
-
         let record = self.read_edge_record(&version_ref)?;
-
         if record.is_deleted() {
             return None;
         }
-
-        let edge_type = {
-            let id_to_type = self.id_to_edge_type.read();
-            id_to_type.get(record.type_id as usize)?.clone()
-        };
-
-        let mut edge = Edge::new(id, record.src, record.dst, edge_type);
-
-        // Get properties
-        edge.properties = self.edge_properties.get_all(id).into_iter().collect();
-
-        Some(edge)
+        drop(versions);
+        self.build_edge(id, &record)
     }
 
     /// Reads an EdgeRecord from arena using a VersionRef.

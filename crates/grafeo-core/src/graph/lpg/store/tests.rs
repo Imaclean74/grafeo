@@ -687,8 +687,8 @@ fn test_multiple_labels() {
 }
 
 #[test]
-fn test_default_impl() {
-    let store: LpgStore = Default::default();
+fn test_new_store_is_empty() {
+    let store = LpgStore::new().unwrap();
     assert_eq!(store.node_count(), 0);
     assert_eq!(store.edge_count(), 0);
 }

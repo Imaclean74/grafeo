@@ -104,10 +104,15 @@ pub struct GrafeoDB {
 }
 
 impl GrafeoDB {
-    /// Creates an in-memory database - fast to create, gone when dropped.
+    /// Creates an in-memory database, fast to create, gone when dropped.
     ///
     /// Use this for tests, experiments, or when you don't need persistence.
     /// For data that survives restarts, use [`open()`](Self::open) instead.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal arena allocator cannot be initialized (out of memory).
+    /// Use [`with_config()`](Self::with_config) for a fallible alternative.
     ///
     /// # Examples
     ///
@@ -574,9 +579,14 @@ impl GrafeoDB {
 
     /// Opens a new session for running queries.
     ///
-    /// Sessions are cheap to create - spin up as many as you need. Each
+    /// Sessions are cheap to create: spin up as many as you need. Each
     /// gets its own transaction context, so concurrent sessions won't
     /// block each other on reads.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the database was configured with an external graph store and
+    /// the internal arena allocator cannot be initialized (out of memory).
     ///
     /// # Examples
     ///
@@ -605,7 +615,8 @@ impl GrafeoDB {
         };
 
         if let Some(ref ext_store) = self.external_store {
-            return Session::with_external_store(Arc::clone(ext_store), session_cfg());
+            return Session::with_external_store(Arc::clone(ext_store), session_cfg())
+                .expect("arena allocation for external store session");
         }
 
         #[cfg(feature = "rdf")]

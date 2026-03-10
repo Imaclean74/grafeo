@@ -150,15 +150,18 @@ impl QueryProcessor {
         }
     }
 
-    /// Creates a query processor backed by any GraphStoreMut implementation.
-    #[must_use]
+    /// Creates a query processor backed by any `GraphStoreMut` implementation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the internal arena allocation fails (out of memory).
     pub fn for_graph_store_with_transaction(
         store: Arc<dyn GraphStoreMut>,
         transaction_manager: Arc<TransactionManager>,
-    ) -> Self {
+    ) -> Result<Self> {
         let optimizer = Optimizer::from_graph_store(&*store);
-        Self {
-            lpg_store: Arc::new(LpgStore::new().expect("arena allocation for dummy LpgStore")), // dummy, not used
+        Ok(Self {
+            lpg_store: Arc::new(LpgStore::new()?),
             graph_store: store,
             transaction_manager,
             catalog: Arc::new(Catalog::new()),
@@ -166,7 +169,7 @@ impl QueryProcessor {
             transaction_context: None,
             #[cfg(feature = "rdf")]
             rdf_store: None,
-        }
+        })
     }
 
     /// Creates a new query processor with both LPG and RDF stores.

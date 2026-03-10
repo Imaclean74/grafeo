@@ -249,6 +249,15 @@ impl<T> VersionChain<T> {
     pub fn latest_mut(&mut self) -> Option<&mut T> {
         self.versions.front_mut().map(|v| &mut v.data)
     }
+
+    /// Returns estimated heap memory in bytes for this version chain.
+    ///
+    /// Counts the `VecDeque` capacity overhead. Does not include the
+    /// size of `T` payloads (the caller accounts for those).
+    #[must_use]
+    pub fn heap_memory_bytes(&self) -> usize {
+        self.versions.capacity() * std::mem::size_of::<Version<T>>()
+    }
 }
 
 impl<T> Default for VersionChain<T> {

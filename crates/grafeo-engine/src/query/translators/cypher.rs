@@ -1297,7 +1297,8 @@ impl CypherTranslator {
                     let mut aliases = self.return_aliases.borrow_mut();
                     for ri in &return_items {
                         if let Some(ref alias) = ri.alias {
-                            aliases.insert(alias.clone(), alias.clone());
+                            let a = alias.clone();
+                            aliases.insert(a.clone(), a);
                         }
                     }
                 }

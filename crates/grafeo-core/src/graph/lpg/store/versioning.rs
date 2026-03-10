@@ -1,7 +1,8 @@
 use super::LpgStore;
 use crate::graph::lpg::{EdgeRecord, NodeRecord};
 use grafeo_common::types::{EdgeId, EpochId, NodeId, TransactionId};
-use grafeo_common::utils::hash::{FxHashMap, FxHashSet};
+#[cfg(feature = "tiered-storage")]
+use grafeo_common::utils::hash::FxHashMap;
 use std::sync::atomic::Ordering;
 
 #[cfg(not(feature = "tiered-storage"))]
@@ -340,22 +341,7 @@ impl LpgStore {
         let mut record = NodeRecord::new(id, epoch);
         record.set_label_count(labels.len() as u16);
 
-        // Store labels in node_labels map and label_index
-        let mut node_label_set = FxHashSet::default();
-        for label in labels {
-            let label_id = self.get_or_create_label_id(label);
-            node_label_set.insert(label_id);
-
-            // Update label index
-            let mut index = self.label_index.write();
-            while index.len() <= label_id as usize {
-                index.push(FxHashMap::default());
-            }
-            index[label_id as usize].insert(id, ());
-        }
-
-        // Store node's labels
-        self.node_labels.write().insert(id, node_label_set);
+        self.register_node_labels(id, labels);
 
         // Create version chain with initial version (using SYSTEM tx for recovery)
         let chain = VersionChain::with_initial(record, epoch, TransactionId::SYSTEM);
@@ -384,22 +370,7 @@ impl LpgStore {
         let mut record = NodeRecord::new(id, epoch);
         record.set_label_count(labels.len() as u16);
 
-        // Store labels in node_labels map and label_index
-        let mut node_label_set = FxHashSet::default();
-        for label in labels {
-            let label_id = self.get_or_create_label_id(label);
-            node_label_set.insert(label_id);
-
-            // Update label index
-            let mut index = self.label_index.write();
-            while index.len() <= label_id as usize {
-                index.push(FxHashMap::default());
-            }
-            index[label_id as usize].insert(id, ());
-        }
-
-        // Store node's labels
-        self.node_labels.write().insert(id, node_label_set);
+        self.register_node_labels(id, labels);
 
         // Allocate record in arena and get offset (create epoch if needed)
         let arena = self
