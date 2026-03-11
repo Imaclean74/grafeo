@@ -180,6 +180,42 @@ fn export_import_preserves_multiple_labels() {
     assert_eq!(animals.rows.len(), 1);
 }
 
+// --- Temporal Value types ---
+
+#[test]
+fn export_import_preserves_temporal_values() {
+    use grafeo_common::types::{Date, Duration, Time, Timestamp, ZonedDatetime};
+
+    let db = GrafeoDB::new_in_memory();
+    let id = db.create_node(&["Temporal"]);
+
+    let date = Date::from_ymd(2025, 6, 15).unwrap();
+    let time = Time::from_hms(14, 30, 0).unwrap();
+    let timestamp = Timestamp::from_secs(1_700_000_000);
+    let duration = Duration::new(1, 15, 3_600_000_000_000); // 1 month, 15 days, 1 hour
+    let zoned = ZonedDatetime::from_timestamp_offset(Timestamp::from_secs(1_700_000_000), 3600);
+
+    db.set_node_property(id, "date_val", Value::Date(date));
+    db.set_node_property(id, "time_val", Value::Time(time));
+    db.set_node_property(id, "ts_val", Value::Timestamp(timestamp));
+    db.set_node_property(id, "dur_val", Value::Duration(duration));
+    db.set_node_property(id, "zdt_val", Value::ZonedDatetime(zoned));
+
+    let bytes = db.export_snapshot().unwrap();
+    let restored = GrafeoDB::import_snapshot(&bytes).unwrap();
+
+    let session = restored.session();
+    let result = session
+        .execute("MATCH (t:Temporal) RETURN t.date_val, t.time_val, t.ts_val, t.dur_val, t.zdt_val")
+        .unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0][0], Value::Date(date));
+    assert_eq!(result.rows[0][1], Value::Time(time));
+    assert_eq!(result.rows[0][2], Value::Timestamp(timestamp));
+    assert_eq!(result.rows[0][3], Value::Duration(duration));
+    assert_eq!(result.rows[0][4], Value::ZonedDatetime(zoned));
+}
+
 // --- All scalar Value types ---
 
 #[test]
@@ -683,4 +719,238 @@ fn to_memory_copies_named_graphs() {
         .unwrap();
     let result2 = session2.execute("MATCH (a:Archive) RETURN a.date").unwrap();
     assert_eq!(result2.rows.len(), 1, "copy should still have 1 node");
+}
+
+// =========================================================================
+// RDF Snapshot Tests
+// =========================================================================
+
+#[cfg(all(feature = "sparql", feature = "rdf"))]
+mod rdf_snapshots {
+    use grafeo_common::types::Value;
+    use grafeo_engine::{Config, GrafeoDB, GraphModel};
+
+    fn rdf_db() -> GrafeoDB {
+        GrafeoDB::with_config(Config::in_memory().with_graph_model(GraphModel::Rdf)).unwrap()
+    }
+
+    #[test]
+    fn export_import_preserves_rdf_triples() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                }"#,
+            )
+            .unwrap();
+
+        let bytes = db.export_snapshot().unwrap();
+        let restored = GrafeoDB::import_snapshot(&bytes).unwrap();
+
+        let session2 = restored.session();
+        let result = session2
+            .execute_sparql("SELECT ?name WHERE { ?s <http://ex.org/name> ?name } ORDER BY ?name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+        assert_eq!(result.rows[1][0], Value::String("Gus".into()));
+    }
+
+    #[test]
+    fn export_import_preserves_rdf_named_graphs() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    GRAPH <http://ex.org/g1> {
+                        <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                    }
+                }"#,
+            )
+            .unwrap();
+
+        let bytes = db.export_snapshot().unwrap();
+        let restored = GrafeoDB::import_snapshot(&bytes).unwrap();
+
+        let session2 = restored.session();
+
+        // Default graph
+        let result = session2
+            .execute_sparql("SELECT ?name WHERE { ?s <http://ex.org/name> ?name }")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+
+        // Named graph
+        let result = session2
+            .execute_sparql(
+                r#"SELECT ?name WHERE {
+                    GRAPH <http://ex.org/g1> { ?s <http://ex.org/name> ?name }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], Value::String("Gus".into()));
+    }
+
+    #[test]
+    fn restore_snapshot_includes_rdf_data() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                }"#,
+            )
+            .unwrap();
+
+        let snapshot = db.export_snapshot().unwrap();
+
+        // Add more data
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                }"#,
+            )
+            .unwrap();
+
+        // Restore: should go back to just Alix
+        db.restore_snapshot(&snapshot).unwrap();
+
+        let session2 = db.session();
+        let result = session2
+            .execute_sparql("SELECT ?name WHERE { ?s <http://ex.org/name> ?name }")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1, "restore should revert to snapshot");
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+    }
+
+    #[test]
+    fn to_memory_copies_rdf_data() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    GRAPH <http://ex.org/g1> {
+                        <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                    }
+                }"#,
+            )
+            .unwrap();
+
+        let copy = db.to_memory().unwrap();
+
+        let session2 = copy.session();
+        let result = session2
+            .execute_sparql("SELECT ?name WHERE { ?s <http://ex.org/name> ?name }")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1, "default RDF graph copied");
+        assert_eq!(result.rows[0][0], Value::String("Alix".into()));
+
+        let result = session2
+            .execute_sparql(
+                r#"SELECT ?name WHERE {
+                    GRAPH <http://ex.org/g1> { ?s <http://ex.org/name> ?name }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.rows.len(), 1, "named RDF graph copied");
+        assert_eq!(result.rows[0][0], Value::String("Gus".into()));
+
+        // Independence: mutating original doesn't affect copy
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/mia> <http://ex.org/name> "Mia" .
+                }"#,
+            )
+            .unwrap();
+        let result = session2
+            .execute_sparql("SELECT ?s WHERE { ?s ?p ?o }")
+            .unwrap();
+        assert_eq!(result.rows.len(), 1, "copy should be independent");
+    }
+
+    #[test]
+    fn export_import_preserves_typed_rdf_literals() {
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/age> "30"^^<http://www.w3.org/2001/XMLSchema#integer> .
+                    <http://ex.org/alix> <http://ex.org/greeting> "Bonjour"@fr .
+                }"#,
+            )
+            .unwrap();
+
+        let bytes = db.export_snapshot().unwrap();
+        let restored = GrafeoDB::import_snapshot(&bytes).unwrap();
+
+        let session2 = restored.session();
+        let result = session2
+            .execute_sparql("SELECT ?o WHERE { <http://ex.org/alix> ?p ?o } ORDER BY ?o")
+            .unwrap();
+        assert_eq!(
+            result.rows.len(),
+            2,
+            "typed and lang literals should survive"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot forward-compatibility (T3-04)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn import_unknown_snapshot_version_returns_clear_error() {
+    // Craft a snapshot with version 99 (unknown future version)
+    let snap = TestSnapshot {
+        version: 99,
+        nodes: vec![],
+        edges: vec![],
+    };
+    let bytes = encode_snapshot(&snap);
+    let result = GrafeoDB::import_snapshot(&bytes);
+    match result {
+        Err(e) => {
+            let err = e.to_string();
+            assert!(
+                err.contains("version") || err.contains("unsupported") || err.contains("99"),
+                "error should mention version issue, got: {err}"
+            );
+        }
+        Ok(_) => panic!("importing an unknown snapshot version should error"),
+    }
+}
+
+#[test]
+fn import_truncated_snapshot_returns_error() {
+    let db = GrafeoDB::new_in_memory();
+    db.create_node(&["Test"]);
+    let bytes = db.export_snapshot().unwrap();
+
+    // Truncate to half
+    let truncated = &bytes[..bytes.len() / 2];
+    let result = GrafeoDB::import_snapshot(truncated);
+    assert!(
+        result.is_err(),
+        "importing a truncated snapshot should error"
+    );
+}
+
+#[test]
+fn import_empty_bytes_returns_error() {
+    let result = GrafeoDB::import_snapshot(&[]);
+    assert!(result.is_err(), "importing empty bytes should error");
 }

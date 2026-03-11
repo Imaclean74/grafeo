@@ -105,11 +105,30 @@ pub use unwind::UnwindOperator;
 pub use variable_length_expand::{PathMode as ExecutionPathMode, VariableLengthExpandOperator};
 pub use vector_join::VectorJoinOperator;
 
+use std::sync::Arc;
+
+use grafeo_common::types::{EdgeId, NodeId, TransactionId};
 use thiserror::Error;
 
 use super::DataChunk;
 use super::chunk_state::ChunkState;
 use super::factorized_chunk::FactorizedChunk;
+
+/// Trait for recording write operations during query execution.
+///
+/// This bridges `grafeo-core` mutation operators (which perform writes) with
+/// `grafeo-engine`'s `TransactionManager` (which tracks write sets for conflict
+/// detection). The trait lives in `grafeo-core` to avoid circular dependencies.
+pub trait WriteTracker: Send + Sync {
+    /// Records that a node was written (created, deleted, or modified).
+    fn record_node_write(&self, transaction_id: TransactionId, node_id: NodeId);
+
+    /// Records that an edge was written (created, deleted, or modified).
+    fn record_edge_write(&self, transaction_id: TransactionId, edge_id: EdgeId);
+}
+
+/// Type alias for a shared write tracker.
+pub type SharedWriteTracker = Arc<dyn WriteTracker>;
 
 /// Result of executing an operator.
 pub type OperatorResult = Result<Option<DataChunk>, OperatorError>;

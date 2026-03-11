@@ -803,15 +803,26 @@ fn test_discard_uncommitted_versions() {
     let epoch = store.new_epoch();
     let transaction_id = TransactionId::new(42);
 
-    // Create node with specific tx
+    // Create node with specific tx (uses PENDING epoch, invisible to get_node)
     let node_id = store.create_node_versioned(&["Person"], epoch, transaction_id);
-    assert!(store.get_node(node_id).is_some());
+    // Verify the node exists via versioned lookup (own tx can see its PENDING writes)
+    assert!(
+        store
+            .get_node_versioned(node_id, epoch, transaction_id)
+            .is_some(),
+        "Node should be visible to its own transaction"
+    );
 
     // Discard uncommitted versions for this tx
     store.discard_uncommitted_versions(transaction_id);
 
     // Node should be gone (version chain was removed)
-    assert!(store.get_node(node_id).is_none());
+    assert!(
+        store
+            .get_node_versioned(node_id, epoch, transaction_id)
+            .is_none(),
+        "Node should be gone after discard"
+    );
 }
 
 // === Property Index Tests ===

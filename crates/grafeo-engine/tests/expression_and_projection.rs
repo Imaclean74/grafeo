@@ -16,7 +16,7 @@ use grafeo_engine::GrafeoDB;
 // Fixtures
 // ============================================================================
 
-/// Social network: 3 Person nodes with name/age/city, KNOWS edges between them.
+/// Creates 3 Person nodes (Alix/NYC, Gus/NYC, Harm/London) with 3 KNOWS edges.
 fn create_test_graph() -> GrafeoDB {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
@@ -82,6 +82,7 @@ fn test_case_when_then_else() {
 // EXISTS subquery: covers expression.rs ExistsSubquery, extract_exists_pattern
 // ============================================================================
 
+// GQL EXISTS (Cypher variant: test_cypher_exists_subquery_basic in query_correctness.rs)
 #[test]
 fn test_exists_subquery_in_where() {
     let db = create_test_graph();
@@ -775,6 +776,7 @@ fn test_with_filters_pipeline() {
 // Aggregations: covers gql_translator extract_aggregates_and_groups
 // ============================================================================
 
+// Basic GQL count (cross-language count tests in query_correctness.rs)
 #[test]
 fn test_count_aggregation() {
     let db = create_test_graph();
@@ -1368,4 +1370,159 @@ mod cypher_filter_ops {
         names.sort();
         assert_eq!(names, vec!["Alix", "Gus"]);
     }
+}
+
+// ============================================================================
+// T2-02: GQL AST Feature Tests (string operators, IS NULL/IS NOT NULL, EXPLAIN)
+// ============================================================================
+
+#[test]
+fn test_gql_contains_operator() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute(
+            "MATCH (p:Person) WHERE p.name CONTAINS 'li' \
+             RETURN p.name AS name",
+        )
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("Alix".into()));
+}
+
+#[test]
+fn test_gql_contains_no_match() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute("MATCH (p:Person) WHERE p.name CONTAINS 'xyz' RETURN p.name")
+        .unwrap();
+    assert_eq!(r.rows.len(), 0);
+}
+
+#[test]
+fn test_gql_ends_with_operator() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute(
+            "MATCH (p:Person) WHERE p.name ENDS WITH 'rm' \
+             RETURN p.name AS name",
+        )
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("Harm".into()));
+}
+
+#[test]
+fn test_gql_starts_with_operator() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute(
+            "MATCH (p:Person) WHERE p.name STARTS WITH 'Gu' \
+             RETURN p.name AS name",
+        )
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("Gus".into()));
+}
+
+#[test]
+fn test_gql_string_concat_operator() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute(
+            "MATCH (p:Person) WHERE p.name = 'Alix' \
+             RETURN p.name || ' from ' || p.city AS intro",
+        )
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("Alix from NYC".into()));
+}
+
+#[test]
+fn test_gql_concat_with_non_string() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute(
+            "MATCH (p:Person) WHERE p.name = 'Alix' \
+             RETURN p.name || ' age ' || p.age AS info",
+        )
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    // age is Int64(30), concatenation should coerce to string
+    if let Value::String(s) = &r.rows[0][0] {
+        assert!(s.contains("Alix"), "should contain name: {s}");
+        assert!(s.contains("30"), "should contain age: {s}");
+    } else {
+        panic!("expected string, got {:?}", r.rows[0][0]);
+    }
+}
+
+#[test]
+fn test_gql_is_null_in_where() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    session.create_node_with_props(&["Item"], [("name", Value::String("widget".into()))]);
+    session.create_node_with_props(
+        &["Item"],
+        [
+            ("name", Value::String("gadget".into())),
+            ("color", Value::String("red".into())),
+        ],
+    );
+
+    let r = session
+        .execute("MATCH (i:Item) WHERE i.color IS NULL RETURN i.name AS name")
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("widget".into()));
+}
+
+#[test]
+fn test_gql_is_not_null_in_where() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    session.create_node_with_props(&["Item"], [("name", Value::String("widget".into()))]);
+    session.create_node_with_props(
+        &["Item"],
+        [
+            ("name", Value::String("gadget".into())),
+            ("color", Value::String("red".into())),
+        ],
+    );
+
+    let r = session
+        .execute("MATCH (i:Item) WHERE i.color IS NOT NULL RETURN i.name AS name")
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("gadget".into()));
+}
+
+#[test]
+fn test_gql_explain_returns_plan() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute("EXPLAIN MATCH (p:Person) RETURN p.name")
+        .unwrap();
+    // EXPLAIN should return at least one row with plan information
+    assert!(!r.rows.is_empty(), "EXPLAIN should return plan information");
+}
+
+#[test]
+fn test_gql_profile_returns_metrics() {
+    let db = create_test_graph();
+    let session = db.session();
+    let r = session
+        .execute("PROFILE MATCH (p:Person) RETURN p.name")
+        .unwrap();
+    // PROFILE should return rows with execution metrics
+    assert!(
+        !r.rows.is_empty(),
+        "PROFILE should return execution metrics"
+    );
 }

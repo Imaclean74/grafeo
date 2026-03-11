@@ -127,6 +127,16 @@ pub trait GraphStore: Send + Sync {
     /// Returns all non-deleted node IDs, sorted by ID.
     fn node_ids(&self) -> Vec<NodeId>;
 
+    /// Returns all node IDs including uncommitted/PENDING versions.
+    ///
+    /// Unlike `node_ids()` which pre-filters by current epoch, this method
+    /// returns every node that has a version chain entry. Used by scan operators
+    /// that perform their own MVCC visibility filtering (e.g. with transaction context).
+    fn all_node_ids(&self) -> Vec<NodeId> {
+        // Default: fall back to node_ids() for stores without MVCC
+        self.node_ids()
+    }
+
     /// Returns node IDs with a specific label.
     fn nodes_by_label(&self, label: &str) -> Vec<NodeId>;
 
@@ -140,6 +150,19 @@ pub trait GraphStore: Send + Sync {
 
     /// Returns the type string of an edge.
     fn edge_type(&self, id: EdgeId) -> Option<ArcStr>;
+
+    /// Returns the type string of an edge visible to a specific transaction.
+    ///
+    /// Falls back to epoch-based `edge_type` if not overridden.
+    fn edge_type_versioned(
+        &self,
+        id: EdgeId,
+        epoch: EpochId,
+        transaction_id: TransactionId,
+    ) -> Option<ArcStr> {
+        let _ = (epoch, transaction_id);
+        self.edge_type(id)
+    }
 
     // --- Index introspection ---
 

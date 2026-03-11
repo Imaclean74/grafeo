@@ -761,10 +761,12 @@ pub enum SchemaStatement {
     ShowEdgeTypes,
     /// SHOW GRAPH TYPES: lists all registered graph types.
     ShowGraphTypes,
-    /// SHOW GRAPH TYPE <name>: shows details of a specific graph type.
+    /// SHOW GRAPH TYPE `name`: shows details of a specific graph type.
     ShowGraphType(String),
     /// SHOW CURRENT GRAPH TYPE: shows the graph type bound to the current graph.
     ShowCurrentGraphType,
+    /// SHOW GRAPHS: lists all named graphs in the database.
+    ShowGraphs,
 }
 
 /// A CREATE NODE TYPE statement.

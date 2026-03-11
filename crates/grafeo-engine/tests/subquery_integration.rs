@@ -17,9 +17,7 @@ use grafeo_engine::GrafeoDB;
 // Fixtures
 // ============================================================================
 
-/// Alix(30,Amsterdam) -KNOWS-> Gus(25,Berlin), Harm(35,Paris)
-/// Gus -KNOWS-> Harm
-/// Alix, Gus -WORKS_AT-> TechCorp
+/// Creates 3 Person + 1 Company nodes (Amsterdam/Berlin/Paris), 3 KNOWS + 2 WORKS_AT edges.
 fn social_graph() -> GrafeoDB {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
@@ -57,6 +55,10 @@ fn social_graph() -> GrafeoDB {
     session.create_edge(alix, techcorp, "WORKS_AT");
     session.create_edge(gus, techcorp, "WORKS_AT");
 
+    // Verify setup: 3 Person + 1 Company = 4 nodes, 3 KNOWS + 2 WORKS_AT = 5 edges
+    assert_eq!(db.node_count(), 4, "social_graph: expected 4 nodes");
+    assert_eq!(db.edge_count(), 5, "social_graph: expected 5 edges");
+
     db
 }
 
@@ -87,8 +89,11 @@ fn test_gql_inline_call_subquery() {
             other => panic!("expected string, got {other:?}"),
         })
         .collect();
-    assert!(friends.contains(&"Gus".to_string()));
-    assert!(friends.contains(&"Harm".to_string()));
+    assert_eq!(
+        friends,
+        vec!["Gus", "Harm"],
+        "ORDER BY friend should sort alphabetically"
+    );
 }
 
 #[test]
@@ -126,11 +131,11 @@ mod cypher_subqueries {
             )
             .unwrap();
 
-        // Alix KNOWS Gus and Harm
-        assert!(
-            result.rows.len() >= 2,
-            "Expected at least 2 rows, got {}",
-            result.rows.len()
+        // WITH * scopes n=Alix from the outer MATCH, giving 2 results (Gus, Harm).
+        assert_eq!(
+            result.rows.len(),
+            2,
+            "WITH * should scope outer variable, expected 2 rows"
         );
     }
 

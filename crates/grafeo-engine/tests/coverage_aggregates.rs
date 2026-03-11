@@ -9,6 +9,7 @@
 use grafeo_common::types::Value;
 use grafeo_engine::GrafeoDB;
 
+/// Creates 5 Data nodes (Alix, Gus, Vincent, Jules, Mia) with x/y/score properties.
 fn stats_graph() -> GrafeoDB {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
@@ -267,6 +268,70 @@ fn test_mixed_aggregates_with_group_by() {
 }
 
 // ---------------------------------------------------------------------------
+// ORDER BY alias after aggregation (was: "Undefined variable 'city'")
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_order_by_alias_after_aggregation() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    for (name, city) in [
+        ("Alix", "Berlin"),
+        ("Gus", "Amsterdam"),
+        ("Vincent", "Berlin"),
+        ("Jules", "Amsterdam"),
+        ("Mia", "Paris"),
+    ] {
+        session.create_node_with_props(
+            &["Person"],
+            [
+                ("name", Value::String(name.into())),
+                ("city", Value::String(city.into())),
+            ],
+        );
+    }
+    let r = session
+        .execute("MATCH (p:Person) RETURN p.city AS city, count(p) AS cnt ORDER BY city")
+        .unwrap();
+    assert_eq!(r.rows.len(), 3);
+    // Sorted ascending by city: Amsterdam, Berlin, Paris
+    assert_eq!(r.rows[0][0], Value::String("Amsterdam".into()));
+    assert_eq!(r.rows[1][0], Value::String("Berlin".into()));
+    assert_eq!(r.rows[2][0], Value::String("Paris".into()));
+}
+
+#[test]
+fn test_order_by_aggregate_alias_desc() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    for (name, city) in [
+        ("Alix", "Berlin"),
+        ("Gus", "Amsterdam"),
+        ("Vincent", "Berlin"),
+        ("Jules", "Amsterdam"),
+        ("Mia", "Paris"),
+    ] {
+        session.create_node_with_props(
+            &["Person"],
+            [
+                ("name", Value::String(name.into())),
+                ("city", Value::String(city.into())),
+            ],
+        );
+    }
+    let r = session
+        .execute("MATCH (p:Person) RETURN p.city AS city, count(p) AS cnt ORDER BY cnt DESC")
+        .unwrap();
+    assert_eq!(r.rows.len(), 3);
+    // DESC by cnt: Amsterdam(2) and Berlin(2) first, Paris(1) last
+    assert_eq!(r.rows[0][1], Value::Int64(2));
+    assert_eq!(r.rows[1][1], Value::Int64(2));
+    assert_eq!(r.rows[2][1], Value::Int64(1));
+    // Paris must be last
+    assert_eq!(r.rows[2][0], Value::String("Paris".into()));
+}
+
+// ---------------------------------------------------------------------------
 // Expression coverage: NULLIF
 // ---------------------------------------------------------------------------
 
@@ -286,6 +351,8 @@ fn test_nullif_expression() {
 // ---------------------------------------------------------------------------
 // List predicates via Cypher-compatible syntax
 // ---------------------------------------------------------------------------
+
+// Tests all()/any() in WHERE clause (RETURN variant in gql_spec_compliance.rs)
 
 #[test]
 fn test_list_predicate_all() {
@@ -354,4 +421,96 @@ fn test_count_expression_non_null() {
         .execute("MATCH (i:Item) RETURN count(i.val) AS cnt")
         .unwrap();
     assert_eq!(r.rows[0][0], Value::Int64(2));
+}
+
+// ===========================================================================
+// T2-01: HAVING clause tests
+// ===========================================================================
+
+#[test]
+fn test_having_filters_groups() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    for (name, city) in [
+        ("Alix", "Amsterdam"),
+        ("Gus", "Amsterdam"),
+        ("Vincent", "Berlin"),
+        ("Jules", "Berlin"),
+        ("Mia", "Paris"),
+    ] {
+        session.create_node_with_props(
+            &["Person"],
+            [
+                ("name", Value::String(name.into())),
+                ("city", Value::String(city.into())),
+            ],
+        );
+    }
+    let r = session
+        .execute(
+            "MATCH (p:Person) \
+             RETURN p.city AS city, count(p) AS cnt \
+             ORDER BY city \
+             HAVING cnt > 1",
+        )
+        .unwrap();
+    // Only Amsterdam (2) and Berlin (2) qualify; Paris (1) is filtered out
+    assert_eq!(r.rows.len(), 2, "HAVING should filter groups with cnt <= 1");
+    assert_eq!(r.rows[0][0], Value::String("Amsterdam".into()));
+    assert_eq!(r.rows[0][1], Value::Int64(2));
+    assert_eq!(r.rows[1][0], Value::String("Berlin".into()));
+    assert_eq!(r.rows[1][1], Value::Int64(2));
+}
+
+#[test]
+fn test_having_no_matching_groups() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    for city in ["Amsterdam", "Berlin", "Paris"] {
+        session.create_node_with_props(&["City"], [("name", Value::String(city.into()))]);
+    }
+    let r = session
+        .execute(
+            "MATCH (c:City) \
+             RETURN c.name AS name, count(c) AS cnt \
+             HAVING cnt > 10",
+        )
+        .unwrap();
+    // All groups have cnt=1, none pass HAVING cnt > 10
+    assert_eq!(r.rows.len(), 0, "No groups should pass HAVING cnt > 10");
+}
+
+#[test]
+fn test_having_with_sum_aggregate() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    for (name, dept, salary) in [
+        ("Alix", "Engineering", 90),
+        ("Gus", "Engineering", 80),
+        ("Vincent", "Sales", 50),
+        ("Jules", "Sales", 60),
+        ("Mia", "Marketing", 70),
+    ] {
+        session.create_node_with_props(
+            &["Employee"],
+            [
+                ("name", Value::String(name.into())),
+                ("dept", Value::String(dept.into())),
+                ("salary", Value::Int64(salary)),
+            ],
+        );
+    }
+    let r = session
+        .execute(
+            "MATCH (e:Employee) \
+             RETURN e.dept AS dept, sum(e.salary) AS total \
+             ORDER BY dept \
+             HAVING total > 100",
+        )
+        .unwrap();
+    // Engineering: 170, Sales: 110, Marketing: 70
+    // Only Engineering and Sales qualify
+    assert_eq!(r.rows.len(), 2, "Only depts with total > 100 should appear");
+    assert_eq!(r.rows[0][0], Value::String("Engineering".into()));
+    assert_eq!(r.rows[1][0], Value::String("Sales".into()));
 }

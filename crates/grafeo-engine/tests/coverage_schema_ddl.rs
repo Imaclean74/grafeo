@@ -53,7 +53,11 @@ fn test_drop_nonexistent_node_type_fails() {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
     let result = session.execute("DROP NODE TYPE Nonexistent");
-    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("Nonexistent") || err.contains("not found") || err.contains("does not exist"),
+        "error should name the missing type, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +182,11 @@ fn test_create_duplicate_schema_fails() {
     let session = db.session();
     session.execute("CREATE SCHEMA reporting").unwrap();
     let dup = session.execute("CREATE SCHEMA reporting");
-    assert!(dup.is_err());
+    let err = dup.unwrap_err().to_string();
+    assert!(
+        err.contains("reporting") || err.contains("exists") || err.contains("duplicate"),
+        "error should mention duplicate schema, got: {err}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +238,40 @@ fn test_node_type_with_not_null_property() {
         .unwrap();
     // Verify the type is tracked
     session.execute("DROP NODE TYPE Account").unwrap();
+}
+
+#[test]
+fn test_not_null_constraint_rejects_missing_property() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    session
+        .execute("CREATE NODE TYPE Account (owner STRING NOT NULL, balance INTEGER)")
+        .unwrap();
+    // Insert without the NOT NULL property should fail
+    let result = session.execute("INSERT (:Account {balance: 500})");
+    let err = result.unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("constraint") || msg.contains("NOT NULL") || msg.contains("owner"),
+        "Expected constraint violation error, got: {msg}"
+    );
+}
+
+#[test]
+fn test_not_null_constraint_allows_all_properties_present() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    session
+        .execute("CREATE NODE TYPE Invoice (number INTEGER NOT NULL, total FLOAT NOT NULL)")
+        .unwrap();
+    // Both NOT NULL properties present: should succeed
+    session
+        .execute("INSERT (:Invoice {number: 42, total: 99.95})")
+        .unwrap();
+    let result = session
+        .execute("MATCH (i:Invoice) RETURN i.number, i.total")
+        .unwrap();
+    assert_eq!(result.rows.len(), 1);
 }
 
 // ---------------------------------------------------------------------------

@@ -131,12 +131,36 @@ pub struct Session {
         parking_lot::Mutex<std::collections::HashMap<String, grafeo_common::types::Value>>,
     /// Override epoch for time-travel queries (None = use transaction/current epoch).
     viewing_epoch_override: parking_lot::Mutex<Option<EpochId>>,
-    /// Savepoints within the current transaction: name -> (next_node_id, next_edge_id, undo_log_position) snapshot.
-    savepoints: parking_lot::Mutex<Vec<(String, u64, u64, usize)>>,
+    /// Savepoints within the current transaction.
+    savepoints: parking_lot::Mutex<Vec<SavepointState>>,
     /// Nesting depth for nested transactions (0 = outermost).
     /// Nested `START TRANSACTION` creates an auto-savepoint; nested `COMMIT`
     /// releases it, nested `ROLLBACK` rolls back to it.
     transaction_nesting_depth: parking_lot::Mutex<u32>,
+    /// Named graphs touched during the current transaction (for cross-graph atomicity).
+    /// `None` represents the default graph. Populated at `BEGIN` time and on each
+    /// `USE GRAPH` / `SESSION SET GRAPH` switch within a transaction.
+    touched_graphs: parking_lot::Mutex<Vec<Option<String>>>,
+}
+
+/// Per-graph savepoint snapshot, capturing the store state at the time of the savepoint.
+#[derive(Clone)]
+struct GraphSavepoint {
+    graph_name: Option<String>,
+    next_node_id: u64,
+    next_edge_id: u64,
+    undo_log_position: usize,
+}
+
+/// Savepoint state: name + per-graph snapshots + the graph that was active.
+#[derive(Clone)]
+struct SavepointState {
+    name: String,
+    graph_snapshots: Vec<GraphSavepoint>,
+    /// The graph that was active when the savepoint was created.
+    /// Reserved for future use (e.g., restoring graph context on rollback).
+    #[allow(dead_code)]
+    active_graph: Option<String>,
 }
 
 impl Session {
@@ -175,6 +199,7 @@ impl Session {
             viewing_epoch_override: parking_lot::Mutex::new(None),
             savepoints: parking_lot::Mutex::new(Vec::new()),
             transaction_nesting_depth: parking_lot::Mutex::new(0),
+            touched_graphs: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -242,6 +267,7 @@ impl Session {
             viewing_epoch_override: parking_lot::Mutex::new(None),
             savepoints: parking_lot::Mutex::new(Vec::new()),
             transaction_nesting_depth: parking_lot::Mutex::new(0),
+            touched_graphs: parking_lot::Mutex::new(Vec::new()),
         }
     }
 
@@ -288,6 +314,7 @@ impl Session {
             viewing_epoch_override: parking_lot::Mutex::new(None),
             savepoints: parking_lot::Mutex::new(Vec::new()),
             transaction_nesting_depth: parking_lot::Mutex::new(0),
+            touched_graphs: parking_lot::Mutex::new(Vec::new()),
         })
     }
 
@@ -353,6 +380,35 @@ impl Session {
                 .store
                 .graph(name)
                 .unwrap_or_else(|| Arc::clone(&self.store)),
+        }
+    }
+
+    /// Resolves a graph name to a concrete `LpgStore`.
+    /// `None` and `"default"` resolve to the session's root store.
+    fn resolve_store(&self, graph_name: &Option<String>) -> Arc<LpgStore> {
+        match graph_name {
+            None => Arc::clone(&self.store),
+            Some(name) if name.eq_ignore_ascii_case("default") => Arc::clone(&self.store),
+            Some(name) => self
+                .store
+                .graph(name)
+                .unwrap_or_else(|| Arc::clone(&self.store)),
+        }
+    }
+
+    /// Records the current graph as "touched" if a transaction is active.
+    fn track_graph_touch(&self) {
+        if self.current_transaction.lock().is_some() {
+            let graph = self.current_graph.lock().clone();
+            // Normalize: treat Some("default") as None
+            let normalized = match graph {
+                Some(ref name) if name.eq_ignore_ascii_case("default") => None,
+                other => other,
+            };
+            let mut touched = self.touched_graphs.lock();
+            if !touched.contains(&normalized) {
+                touched.push(normalized);
+            }
         }
     }
 
@@ -542,14 +598,6 @@ impl Session {
                 Ok(QueryResult::empty())
             }
             SessionCommand::UseGraph(name) => {
-                // Cannot switch graphs within an active transaction
-                if self.current_transaction.lock().is_some() {
-                    return Err(Error::Transaction(
-                        grafeo_common::utils::error::TransactionError::InvalidState(
-                            "Cannot switch graphs within an active transaction".to_string(),
-                        ),
-                    ));
-                }
                 // Verify graph exists (default graph is always valid)
                 if !name.eq_ignore_ascii_case("default") && self.store.graph(&name).is_none() {
                     return Err(Error::Query(QueryError::new(
@@ -558,18 +606,14 @@ impl Session {
                     )));
                 }
                 self.use_graph(&name);
+                // Track the new graph if in a transaction
+                self.track_graph_touch();
                 Ok(QueryResult::empty())
             }
             SessionCommand::SessionSetGraph(name) => {
-                // Cannot switch graphs within an active transaction
-                if self.current_transaction.lock().is_some() {
-                    return Err(Error::Transaction(
-                        grafeo_common::utils::error::TransactionError::InvalidState(
-                            "Cannot switch graphs within an active transaction".to_string(),
-                        ),
-                    ));
-                }
                 self.use_graph(&name);
+                // Track the new graph if in a transaction
+                self.track_graph_touch();
                 Ok(QueryResult::empty())
             }
             SessionCommand::SessionSetTimeZone(tz) => {
@@ -1460,6 +1504,9 @@ impl Session {
             SchemaStatement::ShowCurrentGraphType => {
                 return self.execute_show_current_graph_type();
             }
+            SchemaStatement::ShowGraphs => {
+                return self.execute_show_graphs();
+            }
         };
 
         // Invalidate all cached query plans after any successful DDL change.
@@ -1728,6 +1775,19 @@ impl Session {
             .collect();
         Ok(QueryResult {
             columns,
+            column_types: Vec::new(),
+            rows,
+            ..QueryResult::empty()
+        })
+    }
+
+    /// Returns the list of named graphs in the database.
+    fn execute_show_graphs(&self) -> Result<QueryResult> {
+        let mut names = self.store.graph_names();
+        names.sort();
+        let rows: Vec<Vec<Value>> = names.into_iter().map(|n| vec![Value::from(n)]).collect();
+        Ok(QueryResult {
+            columns: vec!["name".to_string()],
             column_types: Vec::new(),
             rows,
             ..QueryResult::empty()
@@ -2398,6 +2458,8 @@ impl Session {
 
         let planner = RdfPlanner::new(Arc::clone(&self.rdf_store))
             .with_transaction_id(*self.current_transaction.lock());
+        #[cfg(feature = "wal")]
+        let planner = planner.with_wal(self.wal.clone());
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         let executor = Executor::with_columns(physical_plan.columns.clone())
@@ -2591,6 +2653,8 @@ impl Session {
         // Convert to physical plan using RDF planner
         let planner = RdfPlanner::new(Arc::clone(&self.rdf_store))
             .with_transaction_id(*self.current_transaction.lock());
+        #[cfg(feature = "wal")]
+        let planner = planner.with_wal(self.wal.clone());
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // Execute the plan
@@ -2625,6 +2689,8 @@ impl Session {
 
         let planner = RdfPlanner::new(Arc::clone(&self.rdf_store))
             .with_transaction_id(*self.current_transaction.lock());
+        #[cfg(feature = "wal")]
+        let planner = planner.with_wal(self.wal.clone());
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         let executor = Executor::with_columns(physical_plan.columns.clone())
@@ -2810,6 +2876,17 @@ impl Session {
         };
         *current = Some(transaction_id);
         *self.read_only_tx.lock() = read_only;
+
+        // Record the initial graph as "touched" for cross-graph atomicity.
+        let graph = self.current_graph.lock().clone();
+        let normalized = match graph {
+            Some(ref name) if name.eq_ignore_ascii_case("default") => None,
+            other => other,
+        };
+        let mut touched = self.touched_graphs.lock();
+        touched.clear();
+        touched.push(normalized);
+
         Ok(())
     }
 
@@ -2845,31 +2922,63 @@ impl Session {
             )
         })?;
 
-        // Commit RDF store pending operations
+        // Validate the transaction first (conflict detection) before committing data.
+        // If this fails, we rollback the data changes instead of making them permanent.
+        let touched = self.touched_graphs.lock().clone();
+        let commit_epoch = match self.transaction_manager.commit(transaction_id) {
+            Ok(epoch) => epoch,
+            Err(e) => {
+                // Conflict detected: rollback the data changes
+                for graph_name in &touched {
+                    let store = self.resolve_store(graph_name);
+                    store.rollback_transaction_properties(transaction_id);
+                }
+                #[cfg(feature = "rdf")]
+                self.rdf_store.rollback_transaction(transaction_id);
+                *self.read_only_tx.lock() = false;
+                self.savepoints.lock().clear();
+                self.touched_graphs.lock().clear();
+                return Err(e);
+            }
+        };
+
+        // Finalize PENDING epochs: make uncommitted versions visible at the commit epoch.
+        for graph_name in &touched {
+            let store = self.resolve_store(graph_name);
+            store.finalize_version_epochs(transaction_id, commit_epoch);
+        }
+
+        // Commit succeeded: discard undo logs (make changes permanent)
         #[cfg(feature = "rdf")]
         self.rdf_store.commit_transaction(transaction_id);
 
-        // Discard property undo log: changes are committed, no rollback possible
-        let active = self.active_lpg_store();
-        active.commit_transaction_properties(transaction_id);
+        for graph_name in &touched {
+            let store = self.resolve_store(graph_name);
+            store.commit_transaction_properties(transaction_id);
+        }
 
-        self.transaction_manager.commit(transaction_id)?;
+        // Sync epoch for all touched graphs so that convenience lookups
+        // (edge_type, get_edge, get_node) can see versions at the latest epoch.
+        let current_epoch = self.transaction_manager.current_epoch();
+        for graph_name in &touched {
+            let store = self.resolve_store(graph_name);
+            store.sync_epoch(current_epoch);
+        }
 
-        // Sync the LpgStore epoch with the TxManager so that
-        // convenience lookups (edge_type, get_edge, get_node) that use
-        // store.current_epoch() can see versions created at the latest epoch.
-        active.sync_epoch(self.transaction_manager.current_epoch());
-
-        // Reset read-only flag and clear savepoints
+        // Reset read-only flag, clear savepoints and touched graphs
         *self.read_only_tx.lock() = false;
         self.savepoints.lock().clear();
+        self.touched_graphs.lock().clear();
 
         // Auto-GC: periodically prune old MVCC versions
         if self.gc_interval > 0 {
             let count = self.commit_counter.fetch_add(1, Ordering::Relaxed) + 1;
             if count.is_multiple_of(self.gc_interval) {
                 let min_epoch = self.transaction_manager.min_active_epoch();
-                active.gc_versions(min_epoch);
+                for graph_name in &touched {
+                    let store = self.resolve_store(graph_name);
+                    store.gc_versions(min_epoch);
+                }
                 self.transaction_manager.gc();
             }
         }
@@ -2928,16 +3037,20 @@ impl Session {
         // Reset read-only flag
         *self.read_only_tx.lock() = false;
 
-        // Discard uncommitted versions in the LPG store
-        self.active_lpg_store()
-            .discard_uncommitted_versions(transaction_id);
+        // Discard uncommitted versions in ALL touched LPG stores (cross-graph atomicity).
+        let touched = self.touched_graphs.lock().clone();
+        for graph_name in &touched {
+            let store = self.resolve_store(graph_name);
+            store.discard_uncommitted_versions(transaction_id);
+        }
 
         // Discard pending operations in the RDF store
         #[cfg(feature = "rdf")]
         self.rdf_store.rollback_transaction(transaction_id);
 
-        // Clear savepoints
+        // Clear savepoints and touched graphs
         self.savepoints.lock().clear();
+        self.touched_graphs.lock().clear();
 
         // Mark transaction as aborted in the manager
         self.transaction_manager.abort(transaction_id)
@@ -2961,13 +3074,26 @@ impl Session {
             )
         })?;
 
-        let active = self.active_lpg_store();
-        let next_node = active.peek_next_node_id();
-        let next_edge = active.peek_next_edge_id();
-        let undo_position = active.property_undo_log_position(tx_id);
-        self.savepoints
-            .lock()
-            .push((name.to_string(), next_node, next_edge, undo_position));
+        // Capture state for every graph touched so far.
+        let touched = self.touched_graphs.lock().clone();
+        let graph_snapshots: Vec<GraphSavepoint> = touched
+            .iter()
+            .map(|graph_name| {
+                let store = self.resolve_store(graph_name);
+                GraphSavepoint {
+                    graph_name: graph_name.clone(),
+                    next_node_id: store.peek_next_node_id(),
+                    next_edge_id: store.peek_next_edge_id(),
+                    undo_log_position: store.property_undo_log_position(tx_id),
+                }
+            })
+            .collect();
+
+        self.savepoints.lock().push(SavepointState {
+            name: name.to_string(),
+            graph_snapshots,
+            active_graph: self.current_graph.lock().clone(),
+        });
         Ok(())
     }
 
@@ -2993,7 +3119,7 @@ impl Session {
         // Find the savepoint by name (search from the end for nested savepoints)
         let pos = savepoints
             .iter()
-            .rposition(|(n, _, _, _)| n == name)
+            .rposition(|sp| sp.name == name)
             .ok_or_else(|| {
                 grafeo_common::utils::error::Error::Transaction(
                     grafeo_common::utils::error::TransactionError::InvalidState(format!(
@@ -3002,25 +3128,57 @@ impl Session {
                 )
             })?;
 
-        let (_, sp_next_node, sp_next_edge, sp_undo_position) = savepoints[pos].clone();
+        let sp_state = savepoints[pos].clone();
 
         // Remove this savepoint and all later ones
         savepoints.truncate(pos);
         drop(savepoints);
 
-        // Replay property/label undo entries recorded after the savepoint
-        let active = self.active_lpg_store();
-        active.rollback_transaction_properties_to(transaction_id, sp_undo_position);
+        // Roll back each graph that was captured in the savepoint.
+        for gs in &sp_state.graph_snapshots {
+            let store = self.resolve_store(&gs.graph_name);
 
-        // Discard all nodes with ID >= sp_next_node and edges with ID >= sp_next_edge
-        let current_next_node = active.peek_next_node_id();
-        let current_next_edge = active.peek_next_edge_id();
+            // Replay property/label undo entries recorded after the savepoint
+            store.rollback_transaction_properties_to(transaction_id, gs.undo_log_position);
 
-        let node_ids: Vec<NodeId> = (sp_next_node..current_next_node).map(NodeId::new).collect();
-        let edge_ids: Vec<EdgeId> = (sp_next_edge..current_next_edge).map(EdgeId::new).collect();
+            // Discard entities created after the savepoint
+            let current_next_node = store.peek_next_node_id();
+            let current_next_edge = store.peek_next_edge_id();
 
-        if !node_ids.is_empty() || !edge_ids.is_empty() {
-            active.discard_entities_by_id(transaction_id, &node_ids, &edge_ids);
+            let node_ids: Vec<NodeId> = (gs.next_node_id..current_next_node)
+                .map(NodeId::new)
+                .collect();
+            let edge_ids: Vec<EdgeId> = (gs.next_edge_id..current_next_edge)
+                .map(EdgeId::new)
+                .collect();
+
+            if !node_ids.is_empty() || !edge_ids.is_empty() {
+                store.discard_entities_by_id(transaction_id, &node_ids, &edge_ids);
+            }
+        }
+
+        // Also roll back any graphs that were touched AFTER the savepoint
+        // but not captured in it. These need full discard since the savepoint
+        // didn't include them.
+        let touched = self.touched_graphs.lock().clone();
+        for graph_name in &touched {
+            let already_captured = sp_state
+                .graph_snapshots
+                .iter()
+                .any(|gs| gs.graph_name == *graph_name);
+            if !already_captured {
+                let store = self.resolve_store(graph_name);
+                store.discard_uncommitted_versions(transaction_id);
+            }
+        }
+
+        // Restore touched_graphs to only the graphs that were known at savepoint time.
+        let mut touched = self.touched_graphs.lock();
+        touched.clear();
+        for gs in &sp_state.graph_snapshots {
+            if !touched.contains(&gs.graph_name) {
+                touched.push(gs.graph_name.clone());
+            }
         }
 
         Ok(())
@@ -3043,7 +3201,7 @@ impl Session {
         let mut savepoints = self.savepoints.lock();
         let pos = savepoints
             .iter()
-            .rposition(|(n, _, _, _)| n == name)
+            .rposition(|sp| sp.name == name)
             .ok_or_else(|| {
                 grafeo_common::utils::error::Error::Transaction(
                     grafeo_common::utils::error::TransactionError::InvalidState(format!(
@@ -3548,6 +3706,16 @@ impl Session {
     }
 }
 
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Auto-rollback any active transaction to prevent leaked MVCC state,
+        // dangling write locks, and uncommitted versions lingering in the store.
+        if self.in_transaction() {
+            let _ = self.rollback_inner();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::database::GrafeoDB;
@@ -3633,8 +3801,20 @@ mod tests {
             .create_node_versioned(&["Person"], epoch, transaction_id);
         assert!(node_in_tx.is_valid());
 
-        // Should see 2 nodes at this point
-        assert_eq!(db.node_count(), 2, "Should have 2 nodes during transaction");
+        // Uncommitted nodes use EpochId::PENDING, so they are invisible to
+        // non-versioned lookups like node_count(). Verify the node is visible
+        // only through the owning transaction.
+        assert_eq!(
+            db.node_count(),
+            1,
+            "PENDING nodes should be invisible to non-versioned node_count()"
+        );
+        assert!(
+            db.store()
+                .get_node_versioned(node_in_tx, epoch, transaction_id)
+                .is_some(),
+            "Transaction node should be visible to its own transaction"
+        );
 
         // Rollback the transaction
         session.rollback().unwrap();
@@ -3679,13 +3859,26 @@ mod tests {
         // Start a transaction and create a node through the session
         let mut session = db.session();
         session.begin_transaction().unwrap();
+        let transaction_id = session.current_transaction.lock().unwrap();
 
         // Create a node through session.create_node() - should be versioned with tx
         let node_in_tx = session.create_node(&["Person"]);
         assert!(node_in_tx.is_valid());
 
-        // Should see 2 nodes at this point
-        assert_eq!(db.node_count(), 2, "Should have 2 nodes during transaction");
+        // Uncommitted nodes use EpochId::PENDING, so they are invisible to
+        // non-versioned lookups. Verify the node is visible only to its own tx.
+        assert_eq!(
+            db.node_count(),
+            1,
+            "PENDING nodes should be invisible to non-versioned node_count()"
+        );
+        let epoch = db.store().current_epoch();
+        assert!(
+            db.store()
+                .get_node_versioned(node_in_tx, epoch, transaction_id)
+                .is_some(),
+            "Transaction node should be visible to its own transaction"
+        );
 
         // Rollback the transaction
         session.rollback().unwrap();
@@ -3712,13 +3905,26 @@ mod tests {
         // Start a transaction and create a node with properties
         let mut session = db.session();
         session.begin_transaction().unwrap();
+        let transaction_id = session.current_transaction.lock().unwrap();
 
         let node_in_tx =
             session.create_node_with_props(&["Person"], [("name", Value::String("Alix".into()))]);
         assert!(node_in_tx.is_valid());
 
-        // Should see 2 nodes
-        assert_eq!(db.node_count(), 2, "Should have 2 nodes during transaction");
+        // Uncommitted nodes use EpochId::PENDING, so they are invisible to
+        // non-versioned lookups. Verify the node is visible only to its own tx.
+        assert_eq!(
+            db.node_count(),
+            1,
+            "PENDING nodes should be invisible to non-versioned node_count()"
+        );
+        let epoch = db.store().current_epoch();
+        assert!(
+            db.store()
+                .get_node_versioned(node_in_tx, epoch, transaction_id)
+                .is_some(),
+            "Transaction node should be visible to its own transaction"
+        );
 
         // Rollback the transaction
         session.rollback().unwrap();
@@ -4367,14 +4573,19 @@ mod tests {
             Arc::new(grafeo_core::graph::lpg::LpgStore::new().unwrap()) as Arc<dyn GraphStoreMut>;
         let db = GrafeoDB::with_store(store, config).unwrap();
 
-        let session = db.session();
+        let mut session = db.session();
 
-        // Create data through a query (goes through the external graph_store)
+        // Use an explicit transaction so that INSERT and MATCH share the same
+        // transaction context. With PENDING epochs, uncommitted versions are
+        // only visible to the owning transaction.
+        session.begin_transaction().unwrap();
         session.execute("INSERT (:Test {name: 'hello'})").unwrap();
 
-        // Verify we can query through it
+        // Verify we can query through it within the same transaction
         let result = session.execute("MATCH (n:Test) RETURN n.name").unwrap();
         assert_eq!(result.row_count(), 1);
+
+        session.commit().unwrap();
     }
 
     // ==================== Session Command Tests ====================

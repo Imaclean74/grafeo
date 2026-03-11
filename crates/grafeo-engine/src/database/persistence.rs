@@ -20,13 +20,19 @@ struct Snapshot {
     edges: Vec<SnapshotEdge>,
 }
 
-/// Binary snapshot format v2 (with named graphs).
+/// Binary snapshot format v2 (with named graphs and optional RDF data).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SnapshotV2 {
     version: u8,
     nodes: Vec<SnapshotNode>,
     edges: Vec<SnapshotEdge>,
     named_graphs: Vec<NamedGraphSnapshot>,
+    /// RDF triples in the default graph.
+    #[serde(default)]
+    rdf_triples: Vec<SnapshotTriple>,
+    /// RDF named graph data.
+    #[serde(default)]
+    rdf_named_graphs: Vec<RdfNamedGraphSnapshot>,
 }
 
 /// A named graph partition within a v2 snapshot.
@@ -35,6 +41,21 @@ struct NamedGraphSnapshot {
     name: String,
     nodes: Vec<SnapshotNode>,
     edges: Vec<SnapshotEdge>,
+}
+
+/// An RDF triple in snapshot format (N-Triples encoded terms).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SnapshotTriple {
+    subject: String,
+    predicate: String,
+    object: String,
+}
+
+/// An RDF named graph in snapshot format.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct RdfNamedGraphSnapshot {
+    name: String,
+    triples: Vec<SnapshotTriple>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -142,6 +163,35 @@ fn validate_snapshot_data(nodes: &[SnapshotNode], edges: &[SnapshotEdge]) -> Res
         }
     }
     Ok(())
+}
+
+/// Collects all triples from an RDF store into snapshot format.
+#[cfg(feature = "rdf")]
+fn collect_rdf_triples(store: &grafeo_core::graph::rdf::RdfStore) -> Vec<SnapshotTriple> {
+    store
+        .triples()
+        .into_iter()
+        .map(|t| SnapshotTriple {
+            subject: t.subject().to_string(),
+            predicate: t.predicate().to_string(),
+            object: t.object().to_string(),
+        })
+        .collect()
+}
+
+/// Populates an RDF store from snapshot triples.
+#[cfg(feature = "rdf")]
+fn populate_rdf_store(store: &grafeo_core::graph::rdf::RdfStore, triples: &[SnapshotTriple]) {
+    use grafeo_core::graph::rdf::{Term, Triple};
+    for triple in triples {
+        if let (Some(s), Some(p), Some(o)) = (
+            Term::from_ntriples(&triple.subject),
+            Term::from_ntriples(&triple.predicate),
+            Term::from_ntriples(&triple.object),
+        ) {
+            store.insert(Triple::new(s, p, o));
+        }
+    }
 }
 
 impl super::GrafeoDB {
@@ -284,6 +334,37 @@ impl super::GrafeoDB {
             target.log_wal(&WalRecord::SwitchGraph { name: None })?;
         }
 
+        // Copy RDF data with WAL logging
+        #[cfg(feature = "rdf")]
+        {
+            for triple in self.rdf_store.triples() {
+                let record = WalRecord::InsertRdfTriple {
+                    subject: triple.subject().to_string(),
+                    predicate: triple.predicate().to_string(),
+                    object: triple.object().to_string(),
+                    graph: None,
+                };
+                target.rdf_store.insert((*triple).clone());
+                target.log_wal(&record)?;
+            }
+            for name in self.rdf_store.graph_names() {
+                target.log_wal(&WalRecord::CreateRdfGraph { name: name.clone() })?;
+                if let Some(src_graph) = self.rdf_store.graph(&name) {
+                    let dst_graph = target.rdf_store.graph_or_create(&name);
+                    for triple in src_graph.triples() {
+                        let record = WalRecord::InsertRdfTriple {
+                            subject: triple.subject().to_string(),
+                            predicate: triple.predicate().to_string(),
+                            object: triple.object().to_string(),
+                            graph: Some(name.clone()),
+                        };
+                        dst_graph.insert((*triple).clone());
+                        target.log_wal(&record)?;
+                    }
+                }
+            }
+        }
+
         // Checkpoint and close the target database
         target.close()?;
 
@@ -354,6 +435,22 @@ impl super::GrafeoDB {
             }
         }
 
+        // Copy RDF data
+        #[cfg(feature = "rdf")]
+        {
+            for triple in self.rdf_store.triples() {
+                target.rdf_store.insert((*triple).clone());
+            }
+            for name in self.rdf_store.graph_names() {
+                if let Some(src_graph) = self.rdf_store.graph(&name) {
+                    let dst_graph = target.rdf_store.graph_or_create(&name);
+                    for triple in src_graph.triples() {
+                        dst_graph.insert((*triple).clone());
+                    }
+                }
+            }
+        }
+
         Ok(target)
     }
 
@@ -412,11 +509,36 @@ impl super::GrafeoDB {
             })
             .collect();
 
+        // Collect RDF triples
+        #[cfg(feature = "rdf")]
+        let rdf_triples = collect_rdf_triples(&self.rdf_store);
+        #[cfg(not(feature = "rdf"))]
+        let rdf_triples = Vec::new();
+
+        #[cfg(feature = "rdf")]
+        let rdf_named_graphs: Vec<RdfNamedGraphSnapshot> = self
+            .rdf_store
+            .graph_names()
+            .into_iter()
+            .filter_map(|name| {
+                self.rdf_store
+                    .graph(&name)
+                    .map(|graph| RdfNamedGraphSnapshot {
+                        name,
+                        triples: collect_rdf_triples(&graph),
+                    })
+            })
+            .collect();
+        #[cfg(not(feature = "rdf"))]
+        let rdf_named_graphs = Vec::new();
+
         let snapshot = SnapshotV2 {
             version: 2,
             nodes,
             edges,
             named_graphs,
+            rdf_triples,
+            rdf_named_graphs,
         };
 
         let config = bincode::config::standard();
@@ -488,6 +610,16 @@ impl super::GrafeoDB {
                 .map_err(|e| Error::Internal(e.to_string()))?;
             if let Some(graph_store) = db.store.graph(&ng.name) {
                 populate_store_from_snapshot(&graph_store, ng.nodes, ng.edges)?;
+            }
+        }
+
+        // Restore RDF triples
+        #[cfg(feature = "rdf")]
+        {
+            populate_rdf_store(&db.rdf_store, &snapshot.rdf_triples);
+            for rng in &snapshot.rdf_named_graphs {
+                let graph = db.rdf_store.graph_or_create(&rng.name);
+                populate_rdf_store(&graph, &rng.triples);
             }
         }
 
@@ -572,6 +704,21 @@ impl super::GrafeoDB {
                 .map_err(|e| Error::Internal(e.to_string()))?;
             if let Some(graph_store) = self.store.graph(&ng.name) {
                 populate_store_from_snapshot(&graph_store, ng.nodes, ng.edges)?;
+            }
+        }
+
+        // Restore RDF data
+        #[cfg(feature = "rdf")]
+        {
+            // Clear existing RDF data
+            self.rdf_store.clear();
+            for name in self.rdf_store.graph_names() {
+                self.rdf_store.drop_graph(&name);
+            }
+            populate_rdf_store(&self.rdf_store, &snapshot.rdf_triples);
+            for rng in &snapshot.rdf_named_graphs {
+                let graph = self.rdf_store.graph_or_create(&rng.name);
+                populate_rdf_store(&graph, &rng.triples);
             }
         }
 

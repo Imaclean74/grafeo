@@ -271,7 +271,8 @@ impl<'a> Parser<'a> {
             | TokenKind::Optional
             | TokenKind::Unwind
             | TokenKind::Merge
-            | TokenKind::For => self.parse_query().map(Statement::Query),
+            | TokenKind::For
+            | TokenKind::Return => self.parse_query().map(Statement::Query),
             TokenKind::Insert => self
                 .parse_insert()
                 .map(|s| Statement::DataModification(DataModificationStatement::Insert(s))),
@@ -3118,6 +3119,35 @@ impl<'a> Parser<'a> {
                         index: Box::new(index),
                     };
                 }
+                // n:Label label-check syntax (compact form of IS LABELED).
+                // Multiple labels (n:Person:Actor) are ANDead together.
+                TokenKind::Colon => {
+                    let base = expr;
+                    let mut combined: Option<Expression> = None;
+                    while self.current.kind == TokenKind::Colon {
+                        self.advance();
+                        if !self.is_label_or_type_name() {
+                            return Err(self.error("Expected label name after ':'"));
+                        }
+                        let label = self.get_identifier_name();
+                        self.advance();
+                        let check = Expression::FunctionCall {
+                            name: "hasLabel".to_string(),
+                            args: vec![base.clone(), Expression::Literal(Literal::String(label))],
+                            distinct: false,
+                        };
+                        combined = Some(match combined {
+                            None => check,
+                            Some(prev) => Expression::Binary {
+                                left: Box::new(prev),
+                                op: BinaryOp::And,
+                                right: Box::new(check),
+                            },
+                        });
+                    }
+                    expr = combined
+                        .ok_or_else(|| self.error("Expected at least one label after ':'"))?;
+                }
                 _ => break,
             }
         }
@@ -5421,7 +5451,7 @@ impl<'a> Parser<'a> {
             && self.current.kind != TokenKind::Index
         {
             return Err(self.error(
-                "Expected CONSTRAINTS, INDEXES, NODE TYPES, EDGE TYPES, GRAPH TYPES, or GRAPH TYPE <name> after SHOW",
+                "Expected CONSTRAINTS, INDEXES, NODE TYPES, EDGE TYPES, GRAPHS, GRAPH TYPES, or GRAPH TYPE <name> after SHOW",
             ));
         }
 
@@ -5468,6 +5498,10 @@ impl<'a> Parser<'a> {
                         self.advance();
                         Ok(SchemaStatement::ShowIndexes)
                     }
+                    "GRAPHS" => {
+                        self.advance();
+                        Ok(SchemaStatement::ShowGraphs)
+                    }
                     "GRAPH" => {
                         self.advance();
                         // SHOW GRAPH TYPES or SHOW GRAPH TYPE <name>
@@ -5491,7 +5525,7 @@ impl<'a> Parser<'a> {
                         }
                     }
                     _ => Err(self.error(
-                        "Expected CONSTRAINTS, INDEXES, NODE TYPES, EDGE TYPES, GRAPH TYPES, or GRAPH TYPE <name> after SHOW",
+                        "Expected CONSTRAINTS, INDEXES, NODE TYPES, EDGE TYPES, GRAPHS, GRAPH TYPES, or GRAPH TYPE <name> after SHOW",
                     )),
                 }
             }
@@ -6098,29 +6132,79 @@ mod tests {
     #[test]
     fn test_parse_match_with_label() {
         let mut parser = Parser::new("MATCH (n:Person) RETURN n");
-        let result = parser.parse();
-        assert!(result.is_ok());
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            assert_eq!(query.match_clauses.len(), 1);
+            if let Pattern::Node(node) = &query.match_clauses[0].patterns[0].pattern {
+                assert_eq!(node.variable, Some("n".to_string()));
+                assert_eq!(node.labels, vec!["Person".to_string()]);
+            } else {
+                panic!("Expected node pattern");
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
     }
 
     #[test]
     fn test_parse_match_with_where() {
         let mut parser = Parser::new("MATCH (n:Person) WHERE n.age > 30 RETURN n");
-        let result = parser.parse();
-        assert!(result.is_ok());
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            assert!(
+                query.where_clause.is_some(),
+                "WHERE clause should be parsed"
+            );
+            let where_clause = query.where_clause.as_ref().unwrap();
+            if let Expression::Binary { op, .. } = &where_clause.expression {
+                assert_eq!(*op, BinaryOp::Gt);
+            } else {
+                panic!("Expected binary expression in WHERE clause");
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
     }
 
     #[test]
     fn test_parse_path_pattern() {
         let mut parser = Parser::new("MATCH (a)-[:KNOWS]->(b) RETURN a, b");
-        let result = parser.parse();
-        assert!(result.is_ok());
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            if let Pattern::Path(path) = &query.match_clauses[0].patterns[0].pattern {
+                assert_eq!(path.source.variable, Some("a".to_string()));
+                assert_eq!(path.edges.len(), 1);
+                assert_eq!(path.edges[0].types, vec!["KNOWS".to_string()]);
+                assert_eq!(
+                    path.edges[0].direction,
+                    EdgeDirection::Outgoing,
+                    "Arrow should point outward"
+                );
+                assert_eq!(path.edges[0].target.variable, Some("b".to_string()));
+            } else {
+                panic!("Expected path pattern");
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
     }
 
     #[test]
     fn test_parse_insert() {
         let mut parser = Parser::new("INSERT (n:Person {name: 'Alix'})");
-        let result = parser.parse();
-        assert!(result.is_ok());
+        let result = parser.parse().unwrap();
+        if let Statement::DataModification(DataModificationStatement::Insert(insert)) = result {
+            assert_eq!(insert.patterns.len(), 1);
+            if let Pattern::Node(node) = &insert.patterns[0] {
+                assert_eq!(node.labels, vec!["Person".to_string()]);
+                assert_eq!(node.properties.len(), 1);
+                assert_eq!(node.properties[0].0, "name");
+            } else {
+                panic!("Expected node pattern");
+            }
+        } else {
+            panic!("Expected Insert statement");
+        }
     }
 
     #[test]
@@ -8988,6 +9072,17 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_show_graphs() {
+        let mut parser = Parser::new("SHOW GRAPHS");
+        let result = parser.parse();
+        assert!(result.is_ok(), "SHOW GRAPHS should parse: {result:?}");
+        assert!(matches!(
+            result.unwrap(),
+            Statement::Schema(SchemaStatement::ShowGraphs)
+        ));
+    }
+
+    #[test]
     fn test_parse_show_graph_type_named() {
         let mut parser = Parser::new("SHOW GRAPH TYPE social");
         let result = parser.parse();
@@ -9134,5 +9229,159 @@ mod tests {
         let mut parser = Parser::new("LOAD DATA FROM 'data.xml' FORMAT XML AS row RETURN row");
         let result = parser.parse();
         assert!(result.is_err(), "Should fail with unknown format XML");
+    }
+
+    // --- T2-11: GQL keyword case-insensitivity ---
+
+    #[test]
+    fn test_parse_lowercase_keywords() {
+        // Lowercase GQL keywords should parse identically to uppercase
+        let upper = Parser::new("MATCH (n:Person) WHERE n.age > 30 RETURN n.name")
+            .parse()
+            .unwrap();
+        let lower = Parser::new("match (n:Person) where n.age > 30 return n.name")
+            .parse()
+            .unwrap();
+
+        // Both should be Query statements with the same structure
+        let (Statement::Query(q_upper), Statement::Query(q_lower)) = (&upper, &lower) else {
+            panic!("Expected Query statements");
+        };
+        assert_eq!(q_upper.match_clauses.len(), q_lower.match_clauses.len());
+        assert!(q_upper.where_clause.is_some());
+        assert!(q_lower.where_clause.is_some());
+        assert_eq!(
+            q_upper.return_clause.items.len(),
+            q_lower.return_clause.items.len()
+        );
+    }
+
+    #[test]
+    fn test_parse_mixed_case_keywords() {
+        let result = Parser::new("Match (n:Person) Return n").parse();
+        assert!(
+            result.is_ok(),
+            "Mixed-case keywords should parse: {result:?}"
+        );
+    }
+
+    // --- T2-12: Temporal literal parsing ---
+
+    #[test]
+    fn test_parse_date_literal() {
+        let mut parser = Parser::new("RETURN DATE '2024-01-15'");
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            if let Expression::Literal(Literal::Date(s)) = &query.return_clause.items[0].expression
+            {
+                assert_eq!(s, "2024-01-15");
+            } else {
+                panic!(
+                    "Expected Date literal, got: {:?}",
+                    query.return_clause.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_time_literal() {
+        let mut parser = Parser::new("RETURN TIME '10:30:00'");
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            if let Expression::Literal(Literal::Time(s)) = &query.return_clause.items[0].expression
+            {
+                assert_eq!(s, "10:30:00");
+            } else {
+                panic!(
+                    "Expected Time literal, got: {:?}",
+                    query.return_clause.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_duration_literal() {
+        let mut parser = Parser::new("RETURN DURATION 'P1Y2M'");
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            if let Expression::Literal(Literal::Duration(s)) =
+                &query.return_clause.items[0].expression
+            {
+                assert_eq!(s, "P1Y2M");
+            } else {
+                panic!(
+                    "Expected Duration literal, got: {:?}",
+                    query.return_clause.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_datetime_literal() {
+        let mut parser = Parser::new("RETURN DATETIME '2024-01-15T14:30:00'");
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            if let Expression::Literal(Literal::Datetime(s)) =
+                &query.return_clause.items[0].expression
+            {
+                assert_eq!(s, "2024-01-15T14:30:00");
+            } else {
+                panic!(
+                    "Expected Datetime literal, got: {:?}",
+                    query.return_clause.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_zoned_datetime_literal() {
+        let mut parser = Parser::new("RETURN ZONED DATETIME '2024-01-15T14:30:00+05:30'");
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            if let Expression::Literal(Literal::ZonedDatetime(s)) =
+                &query.return_clause.items[0].expression
+            {
+                assert_eq!(s, "2024-01-15T14:30:00+05:30");
+            } else {
+                panic!(
+                    "Expected ZonedDatetime literal, got: {:?}",
+                    query.return_clause.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
+    }
+
+    #[test]
+    fn test_parse_zoned_time_literal() {
+        let mut parser = Parser::new("RETURN ZONED TIME '14:30:00+01:00'");
+        let result = parser.parse().unwrap();
+        if let Statement::Query(query) = result {
+            if let Expression::Literal(Literal::ZonedTime(s)) =
+                &query.return_clause.items[0].expression
+            {
+                assert_eq!(s, "14:30:00+01:00");
+            } else {
+                panic!(
+                    "Expected ZonedTime literal, got: {:?}",
+                    query.return_clause.items[0].expression
+                );
+            }
+        } else {
+            panic!("Expected Query statement");
+        }
     }
 }

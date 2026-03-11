@@ -65,6 +65,10 @@ fn social_network() -> GrafeoDB {
     session.create_edge(gus, techcorp, "WORKS_AT");
     session.create_edge(dave, techcorp, "WORKS_AT");
 
+    // Verify setup: 4 Person + 1 Company = 5 nodes, 3 KNOWS + 3 WORKS_AT = 6 edges
+    assert_eq!(db.node_count(), 5, "social_network: expected 5 nodes");
+    assert_eq!(db.edge_count(), 6, "social_network: expected 6 edges");
+
     db
 }
 
@@ -100,8 +104,8 @@ mod gql_set_ops {
                  MATCH (n:Person) WHERE n.age > 24 RETURN n.name",
             )
             .unwrap();
-        // Gus (25) and Dave (28) match both sides
-        assert!(result.row_count() >= 4);
+        // Left (age<30): Gus(25), Dave(28) = 2; Right (age>24): Gus, Dave, Alix, Harm = 4
+        assert_eq!(result.row_count(), 6);
     }
 
     #[test]
@@ -157,8 +161,8 @@ mod gql_set_ops {
                  MATCH (n:Person) WHERE n.age <= 30 RETURN n.name",
             )
             .unwrap();
-        // Intersection: age 25-30 (Gus, Alix, Dave)
-        assert!(result.row_count() >= 2);
+        // Intersection of age>=25 and age<=30: Gus(25), Dave(28), Alix(30)
+        assert_eq!(result.row_count(), 3);
     }
 
     #[test]
@@ -210,6 +214,7 @@ mod gql_predicates {
         assert_eq!(result.row_count(), 4, "All persons have age property");
     }
 
+    /// GQL NULLIF: returns NULL when both arguments are equal.
     #[test]
     fn nullif_returns_null_when_equal() {
         let db = social_network();
@@ -220,6 +225,7 @@ mod gql_predicates {
         assert_eq!(result.rows[0][0], Value::Null);
     }
 
+    /// GQL NULLIF: returns the first argument when they differ.
     #[test]
     fn nullif_returns_value_when_different() {
         let db = social_network();
@@ -303,9 +309,11 @@ mod gql_predicates {
             &db,
             "MATCH (n:Person) WHERE (n.age > 30) XOR (n.name = 'Gus') RETURN n.name ORDER BY n.name",
         );
-        assert!(names.contains(&"Gus".to_string()));
-        assert!(names.contains(&"Harm".to_string()));
-        assert!(!names.contains(&"Alix".to_string())); // age=30, not >30, not Gus
+        assert_eq!(
+            names,
+            vec!["Gus", "Harm"],
+            "ORDER BY n.name should produce alphabetical order"
+        );
     }
 }
 
@@ -350,9 +358,12 @@ mod gql_statements {
                 _ => None,
             })
             .collect();
-        assert!(names.contains(&"Alix".to_string())); // age 30
-        assert!(names.contains(&"Harm".to_string())); // age 35
-        assert!(!names.contains(&"Gus".to_string())); // age 25
+        // ORDER BY n.name: Alix (age 30) before Harm (age 35), Gus (age 25) excluded
+        assert_eq!(
+            names,
+            vec!["Alix", "Harm"],
+            "ORDER BY n.name should produce alphabetical order"
+        );
     }
 
     #[test]
@@ -366,7 +377,7 @@ mod gql_statements {
             )
             .unwrap();
         // since>=2020: Alix->Gus (2020), Gus->Harm (2021)
-        assert!(result.row_count() >= 2);
+        assert_eq!(result.row_count(), 2);
     }
 
     #[test]
@@ -377,7 +388,8 @@ mod gql_statements {
         let result = session
             .execute("MATCH (a:Person)-[:KNOWS{1}]->(b:Person) RETURN a.name, b.name")
             .unwrap();
-        assert!(result.row_count() >= 3, "Should find direct connections");
+        // Exactly 3 direct KNOWS edges: Alix->Gus, Alix->Harm, Gus->Harm
+        assert_eq!(result.row_count(), 3, "Should find direct connections");
     }
 
     #[test]
@@ -390,8 +402,8 @@ mod gql_statements {
                 "MATCH (a:Person)-[:KNOWS{1,2}]->(b:Person) WHERE a.name = 'Alix' RETURN b.name",
             )
             .unwrap();
-        // Alix->Gus (1), Alix->Harm (1), Alix->Gus->Harm (2)
-        assert!(result.row_count() >= 2);
+        // 1-hop: Gus, Harm; 2-hop: Gus->Harm = Harm again
+        assert_eq!(result.row_count(), 3);
     }
 
     #[test]
@@ -402,7 +414,8 @@ mod gql_statements {
         let result = session
             .execute("MATCH (a:Person)-[e:KNOWS {since: 2020}]->(b:Person) RETURN a.name, b.name")
             .unwrap();
-        assert!(result.row_count() >= 1);
+        // Only Alix->Gus has since=2020
+        assert_eq!(result.row_count(), 1);
     }
 
     #[test]
@@ -415,7 +428,8 @@ mod gql_statements {
                 "MATCH DIFFERENT EDGES (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name",
             )
             .unwrap();
-        assert!(result.row_count() >= 3);
+        // 1-hop: (Alix,Gus), (Alix,Harm), (Gus,Harm); 2-hop: (Alix,Harm via Gus)
+        assert_eq!(result.row_count(), 4);
     }
 
     #[test]
@@ -426,7 +440,8 @@ mod gql_statements {
         let result = session
             .execute("MATCH REPEATABLE ELEMENTS (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name")
             .unwrap();
-        assert!(result.row_count() >= 3);
+        // No cycles in KNOWS, so same as TRAIL: 3 one-hop + 1 two-hop
+        assert_eq!(result.row_count(), 4);
     }
 
     #[test]
@@ -472,7 +487,8 @@ mod gql_statements {
                  RETURN c.name, count(n) AS cnt GROUP BY c.name",
             )
             .unwrap();
-        assert!(result.row_count() >= 1);
+        // Only one company (TechCorp) has WORKS_AT edges
+        assert_eq!(result.row_count(), 1);
     }
 
     #[test]
@@ -483,7 +499,8 @@ mod gql_statements {
         let result = session
             .execute("MATCH (n:Person) FILTER n.age > 28 RETURN n.name ORDER BY n.name")
             .unwrap();
-        assert!(result.row_count() >= 2); // Alix (30), Harm (35)
+        // age > 28: Alix(30), Harm(35)
+        assert_eq!(result.row_count(), 2);
     }
 
     #[test]
@@ -721,8 +738,8 @@ mod gql_path_features {
                  RETURN a.name, b.name",
             )
             .unwrap();
-        // Alix->Harm is 1 hop (direct), should find it
-        assert!(result.row_count() >= 1);
+        // Alix->Harm is 1 hop (direct), the single shortest path
+        assert_eq!(result.row_count(), 1);
     }
 
     #[test]
@@ -736,7 +753,8 @@ mod gql_path_features {
                  RETURN a.name, b.name",
             )
             .unwrap();
-        assert!(result.row_count() >= 1);
+        // Only one shortest path: Alix->Harm (1 hop, direct)
+        assert_eq!(result.row_count(), 1);
     }
 
     #[test]
@@ -746,7 +764,8 @@ mod gql_path_features {
         let result = session
             .execute("MATCH WALK (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name")
             .unwrap();
-        assert!(result.row_count() >= 3);
+        // No cycles in KNOWS: 3 one-hop + 1 two-hop = 4
+        assert_eq!(result.row_count(), 4);
     }
 
     #[test]
@@ -756,7 +775,8 @@ mod gql_path_features {
         let result = session
             .execute("MATCH TRAIL (a:Person)-[:KNOWS*1..2]->(b:Person) RETURN a.name, b.name")
             .unwrap();
-        assert!(result.row_count() >= 3);
+        // No cycles in KNOWS: 3 one-hop + 1 two-hop = 4
+        assert_eq!(result.row_count(), 4);
     }
 }
 
@@ -831,7 +851,8 @@ mod cypher_features {
                  ORDER BY p.name",
             )
             .unwrap();
-        assert!(result.row_count() >= 3);
+        // One row per Person: Alix, Dave, Gus, Harm
+        assert_eq!(result.row_count(), 4);
     }
 
     #[test]
@@ -1099,7 +1120,8 @@ mod cypher_features {
                  RETURN p.name ORDER BY p.name",
             )
             .unwrap();
-        assert!(result.row_count() >= 3); // Alix, Gus, Dave work at TechCorp
+        // Alix, Dave, Gus all WORKS_AT TechCorp
+        assert_eq!(result.row_count(), 3);
     }
 
     #[test]
@@ -1113,7 +1135,8 @@ mod cypher_features {
                  RETURN p.name ORDER BY p.name",
             )
             .unwrap();
-        assert!(result.row_count() >= 3); // same as the explicit MATCH version
+        // Same as explicit MATCH version: Alix, Dave, Gus
+        assert_eq!(result.row_count(), 3);
     }
 
     #[test]
@@ -1168,7 +1191,8 @@ mod cypher_features {
                  RETURN p.name, cnt ORDER BY p.name",
             )
             .unwrap();
-        assert!(result.row_count() >= 2);
+        // One row per Person: Alix, Dave, Gus, Harm
+        assert_eq!(result.row_count(), 4);
     }
 
     #[test]
@@ -1183,7 +1207,7 @@ mod cypher_features {
             .unwrap();
         assert_eq!(result.row_count(), 1);
         match &result.rows[0][1] {
-            Value::List(items) => assert!(items.len() >= 2, "Alix knows Gus and Harm"),
+            Value::List(items) => assert_eq!(items.len(), 2, "Alix knows exactly Gus and Harm"),
             other => panic!("Expected list of friends, got {other:?}"),
         }
     }
@@ -2116,7 +2140,7 @@ mod sparql_features {
                 }"#,
             )
             .unwrap();
-        assert!(result.row_count() >= 3, "One-or-more should find b, c, d");
+        assert_eq!(result.row_count(), 3, "One-or-more should find b, c, d");
     }
 
     #[test]
@@ -2139,7 +2163,12 @@ mod sparql_features {
                 }"#,
             )
             .unwrap();
-        assert!(result.row_count() >= 3, "Zero-or-more should find a, b, c");
+        // Zero-or-more from fixed subject: 0-hop (a), 1-hop (b), 2-hop (c) = 3 results
+        assert_eq!(
+            result.row_count(),
+            3,
+            "Zero-or-more from a with chain a->b->c"
+        );
     }
 
     #[test]

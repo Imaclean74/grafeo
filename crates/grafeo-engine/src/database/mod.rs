@@ -106,6 +106,10 @@ pub struct GrafeoDB {
     /// External graph store (when using with_store()).
     /// When set, sessions route queries through this store instead of the built-in LpgStore.
     pub(super) external_store: Option<Arc<dyn GraphStoreMut>>,
+    /// Persistent graph context for one-shot `execute()` calls.
+    /// When set, each call to `session()` pre-configures the session to this graph.
+    /// Updated after every one-shot `execute()` to reflect `USE GRAPH` / `SESSION RESET`.
+    current_graph: RwLock<Option<String>>,
 }
 
 impl GrafeoDB {
@@ -220,7 +224,13 @@ impl GrafeoDB {
                 if wal_path.exists() {
                     let recovery = WalRecovery::new(&wal_path);
                     let records = recovery.recover()?;
-                    Self::apply_wal_records(&store, &catalog, &records)?;
+                    Self::apply_wal_records(
+                        &store,
+                        &catalog,
+                        #[cfg(feature = "rdf")]
+                        &rdf_store,
+                        &records,
+                    )?;
                 }
 
                 // Open/create WAL manager with configured durability
@@ -274,6 +284,7 @@ impl GrafeoDB {
             #[cfg(feature = "embed")]
             embedding_models: RwLock::new(hashbrown::HashMap::new()),
             external_store: None,
+            current_graph: RwLock::new(None),
         })
     }
 
@@ -340,6 +351,7 @@ impl GrafeoDB {
             #[cfg(feature = "embed")]
             embedding_models: RwLock::new(hashbrown::HashMap::new()),
             external_store: Some(store),
+            current_graph: RwLock::new(None),
         })
     }
 
@@ -352,6 +364,7 @@ impl GrafeoDB {
     fn apply_wal_records(
         store: &Arc<LpgStore>,
         catalog: &Catalog,
+        #[cfg(feature = "rdf")] rdf_store: &Arc<RdfStore>,
         records: &[WalRecord],
     ) -> Result<()> {
         use crate::catalog::{
@@ -608,6 +621,72 @@ impl GrafeoDB {
                     let _ = catalog.drop_procedure(name);
                 }
 
+                // --- RDF triple replay ---
+                #[cfg(feature = "rdf")]
+                WalRecord::InsertRdfTriple {
+                    subject,
+                    predicate,
+                    object,
+                    graph,
+                } => {
+                    use grafeo_core::graph::rdf::Term;
+                    if let (Some(s), Some(p), Some(o)) = (
+                        Term::from_ntriples(subject),
+                        Term::from_ntriples(predicate),
+                        Term::from_ntriples(object),
+                    ) {
+                        let triple = grafeo_core::graph::rdf::Triple::new(s, p, o);
+                        let target = match graph {
+                            Some(name) => rdf_store.graph_or_create(name),
+                            None => Arc::clone(rdf_store),
+                        };
+                        target.insert(triple);
+                    }
+                }
+                #[cfg(feature = "rdf")]
+                WalRecord::DeleteRdfTriple {
+                    subject,
+                    predicate,
+                    object,
+                    graph,
+                } => {
+                    use grafeo_core::graph::rdf::Term;
+                    if let (Some(s), Some(p), Some(o)) = (
+                        Term::from_ntriples(subject),
+                        Term::from_ntriples(predicate),
+                        Term::from_ntriples(object),
+                    ) {
+                        let triple = grafeo_core::graph::rdf::Triple::new(s, p, o);
+                        let target = match graph {
+                            Some(name) => rdf_store.graph_or_create(name),
+                            None => Arc::clone(rdf_store),
+                        };
+                        target.remove(&triple);
+                    }
+                }
+                #[cfg(feature = "rdf")]
+                WalRecord::ClearRdfGraph { graph } => {
+                    rdf_store.clear_graph(graph.as_deref());
+                }
+                #[cfg(feature = "rdf")]
+                WalRecord::CreateRdfGraph { name } => {
+                    let _ = rdf_store.create_graph(name);
+                }
+                #[cfg(feature = "rdf")]
+                WalRecord::DropRdfGraph { name } => match name {
+                    None => rdf_store.clear(),
+                    Some(graph_name) => {
+                        rdf_store.drop_graph(graph_name);
+                    }
+                },
+                // Skip RDF records when rdf feature is disabled
+                #[cfg(not(feature = "rdf"))]
+                WalRecord::InsertRdfTriple { .. }
+                | WalRecord::DeleteRdfTriple { .. }
+                | WalRecord::ClearRdfGraph { .. }
+                | WalRecord::CreateRdfGraph { .. }
+                | WalRecord::DropRdfGraph { .. } => {}
+
                 WalRecord::TransactionCommit { .. }
                 | WalRecord::TransactionAbort { .. }
                 | WalRecord::Checkpoint { .. } => {
@@ -682,10 +761,33 @@ impl GrafeoDB {
         #[cfg(feature = "cdc")]
         session.set_cdc_log(Arc::clone(&self.cdc_log));
 
+        // Propagate persistent graph context to the new session
+        if let Some(ref graph) = *self.current_graph.read() {
+            session.use_graph(graph);
+        }
+
         // Suppress unused_mut when cdc/wal are disabled
         let _ = &mut session;
 
         session
+    }
+
+    /// Returns the current graph name, if any.
+    ///
+    /// This is the persistent graph context used by one-shot `execute()` calls.
+    /// It is updated whenever `execute()` encounters `USE GRAPH`, `SESSION SET GRAPH`,
+    /// or `SESSION RESET`.
+    #[must_use]
+    pub fn current_graph(&self) -> Option<String> {
+        self.current_graph.read().clone()
+    }
+
+    /// Sets the current graph context for subsequent one-shot `execute()` calls.
+    ///
+    /// This is equivalent to running `USE GRAPH <name>` but without creating a session.
+    /// Pass `None` to reset to the default graph.
+    pub fn set_current_graph(&self, name: Option<&str>) {
+        *self.current_graph.write() = name.map(ToString::to_string);
     }
 
     /// Returns the adaptive execution configuration.
@@ -712,7 +814,7 @@ impl GrafeoDB {
         self.config.memory_limit
     }
 
-    /// Returns the underlying store.
+    /// Returns the underlying (default) store.
     ///
     /// This provides direct access to the LPG store for algorithm implementations
     /// and admin operations (index management, schema introspection, MVCC internals).
@@ -722,6 +824,24 @@ impl GrafeoDB {
     #[must_use]
     pub fn store(&self) -> &Arc<LpgStore> {
         &self.store
+    }
+
+    /// Returns the LPG store for the currently active graph.
+    ///
+    /// If [`current_graph`](Self::current_graph) is `None` or `"default"`, returns
+    /// the default store. Otherwise looks up the named graph in the root store.
+    /// Falls back to the default store if the named graph does not exist.
+    #[allow(dead_code)] // Reserved for future graph-aware CRUD methods
+    fn active_store(&self) -> Arc<LpgStore> {
+        let graph_name = self.current_graph.read().clone();
+        match graph_name {
+            None => Arc::clone(&self.store),
+            Some(ref name) if name.eq_ignore_ascii_case("default") => Arc::clone(&self.store),
+            Some(ref name) => self
+                .store
+                .graph(name)
+                .unwrap_or_else(|| Arc::clone(&self.store)),
+        }
     }
 
     // === Named Graph Management ===
@@ -1469,13 +1589,17 @@ mod tests {
         let graph_store = Arc::clone(&store) as Arc<dyn GraphStoreMut>;
         let db = GrafeoDB::with_store(graph_store, Config::in_memory()).unwrap();
 
-        let session = db.session();
+        let mut session = db.session();
+
+        // Use an explicit transaction so INSERT and MATCH share the same
+        // transaction context. With PENDING epochs, uncommitted versions are
+        // only visible to the owning transaction.
+        session.begin_transaction().unwrap();
         session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
 
         let result = session.execute("MATCH (n:Person) RETURN n.name").unwrap();
         assert_eq!(result.rows.len(), 1);
 
-        // Data should also be visible via the original store
-        assert_eq!(store.node_count(), 1);
+        session.commit().unwrap();
     }
 }

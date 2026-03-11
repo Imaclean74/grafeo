@@ -12,7 +12,7 @@ use grafeo_common::types::{
     EdgeId, EpochId, LogicalType, NodeId, PropertyKey, TransactionId, Value,
 };
 
-use super::{Operator, OperatorError, OperatorResult};
+use super::{Operator, OperatorError, OperatorResult, SharedWriteTracker};
 use crate::execution::chunk::DataChunkBuilder;
 use crate::graph::{GraphStore, GraphStoreMut};
 
@@ -120,6 +120,8 @@ pub struct CreateNodeOperator {
     transaction_id: Option<TransactionId>,
     /// Optional constraint validator for schema enforcement.
     validator: Option<Arc<dyn ConstraintValidator>>,
+    /// Optional write tracker for conflict detection.
+    write_tracker: Option<SharedWriteTracker>,
 }
 
 /// Source for a property value.
@@ -207,6 +209,7 @@ impl CreateNodeOperator {
             viewing_epoch: None,
             transaction_id: None,
             validator: None,
+            write_tracker: None,
         }
     }
 
@@ -224,6 +227,12 @@ impl CreateNodeOperator {
     /// Sets the constraint validator for schema enforcement.
     pub fn with_validator(mut self, validator: Arc<dyn ConstraintValidator>) -> Self {
         self.validator = Some(validator);
+        self
+    }
+
+    /// Sets the write tracker for conflict detection.
+    pub fn with_write_tracker(mut self, tracker: SharedWriteTracker) -> Self {
+        self.write_tracker = Some(tracker);
         self
     }
 }
@@ -293,6 +302,11 @@ impl Operator for CreateNodeOperator {
                     let label_refs: Vec<&str> = self.labels.iter().map(String::as_str).collect();
                     let node_id = self.store.create_node_versioned(&label_refs, epoch, tx);
 
+                    // Record write for conflict detection
+                    if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                        tracker.record_node_write(tid, node_id);
+                    }
+
                     // Validate and set properties
                     self.validate_and_set_properties(node_id, &mut resolved_props)?;
 
@@ -345,6 +359,11 @@ impl Operator for CreateNodeOperator {
             let label_refs: Vec<&str> = self.labels.iter().map(String::as_str).collect();
             let node_id = self.store.create_node_versioned(&label_refs, epoch, tx);
 
+            // Record write for conflict detection
+            if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                tracker.record_node_write(tid, node_id);
+            }
+
             // Validate and set properties
             self.validate_and_set_properties(node_id, &mut resolved_props)?;
 
@@ -395,6 +414,8 @@ pub struct CreateEdgeOperator {
     transaction_id: Option<TransactionId>,
     /// Optional constraint validator for schema enforcement.
     validator: Option<Arc<dyn ConstraintValidator>>,
+    /// Optional write tracker for conflict detection.
+    write_tracker: Option<SharedWriteTracker>,
 }
 
 impl CreateEdgeOperator {
@@ -424,6 +445,7 @@ impl CreateEdgeOperator {
             viewing_epoch: None,
             transaction_id: None,
             validator: None,
+            write_tracker: None,
         }
     }
 
@@ -453,6 +475,12 @@ impl CreateEdgeOperator {
     /// Sets the constraint validator for schema enforcement.
     pub fn with_validator(mut self, validator: Arc<dyn ConstraintValidator>) -> Self {
         self.validator = Some(validator);
+        self
+    }
+
+    /// Sets the write tracker for conflict detection.
+    pub fn with_write_tracker(mut self, tracker: SharedWriteTracker) -> Self {
+        self.write_tracker = Some(tracker);
         self
     }
 }
@@ -556,6 +584,11 @@ impl Operator for CreateEdgeOperator {
                     tx,
                 );
 
+                // Record write for conflict detection
+                if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                    tracker.record_edge_write(tid, edge_id);
+                }
+
                 // Set properties
                 for (name, value) in resolved_props {
                     self.store.set_edge_property(edge_id, &name, value);
@@ -614,6 +647,8 @@ pub struct DeleteNodeOperator {
     viewing_epoch: Option<EpochId>,
     /// Transaction ID for MVCC versioning.
     transaction_id: Option<TransactionId>,
+    /// Optional write tracker for conflict detection.
+    write_tracker: Option<SharedWriteTracker>,
 }
 
 impl DeleteNodeOperator {
@@ -633,6 +668,7 @@ impl DeleteNodeOperator {
             detach,
             viewing_epoch: None,
             transaction_id: None,
+            write_tracker: None,
         }
     }
 
@@ -644,6 +680,12 @@ impl DeleteNodeOperator {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Sets the write tracker for conflict detection.
+    pub fn with_write_tracker(mut self, tracker: SharedWriteTracker) -> Self {
+        self.write_tracker = Some(tracker);
         self
     }
 }
@@ -679,8 +721,22 @@ impl Operator for DeleteNodeOperator {
                 };
 
                 if self.detach {
-                    // Delete all connected edges first
-                    self.store.delete_node_edges(node_id);
+                    // Delete all connected edges first, using versioned deletion
+                    // so rollback can restore them
+                    let outgoing = self
+                        .store
+                        .edges_from(node_id, crate::graph::Direction::Outgoing);
+                    let incoming = self
+                        .store
+                        .edges_from(node_id, crate::graph::Direction::Incoming);
+                    for (_, edge_id) in outgoing.into_iter().chain(incoming) {
+                        self.store.delete_edge_versioned(edge_id, epoch, tx);
+                        if let (Some(tracker), Some(tid)) =
+                            (&self.write_tracker, self.transaction_id)
+                        {
+                            tracker.record_edge_write(tid, edge_id);
+                        }
+                    }
                 } else {
                     // NODETACH: check that node has no connected edges
                     let degree = self.store.out_degree(node_id) + self.store.in_degree(node_id);
@@ -694,6 +750,11 @@ impl Operator for DeleteNodeOperator {
 
                 // Delete the node with MVCC versioning
                 self.store.delete_node_versioned(node_id, epoch, tx);
+
+                // Record write for conflict detection
+                if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                    tracker.record_node_write(tid, node_id);
+                }
 
                 // Pass through all input columns so downstream RETURN can
                 // reference the variable (e.g., count(n) after DELETE n).
@@ -739,6 +800,8 @@ pub struct DeleteEdgeOperator {
     viewing_epoch: Option<EpochId>,
     /// Transaction ID for MVCC versioning.
     transaction_id: Option<TransactionId>,
+    /// Optional write tracker for conflict detection.
+    write_tracker: Option<SharedWriteTracker>,
 }
 
 impl DeleteEdgeOperator {
@@ -756,6 +819,7 @@ impl DeleteEdgeOperator {
             output_schema,
             viewing_epoch: None,
             transaction_id: None,
+            write_tracker: None,
         }
     }
 
@@ -767,6 +831,12 @@ impl DeleteEdgeOperator {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Sets the write tracker for conflict detection.
+    pub fn with_write_tracker(mut self, tracker: SharedWriteTracker) -> Self {
+        self.write_tracker = Some(tracker);
         self
     }
 }
@@ -803,6 +873,11 @@ impl Operator for DeleteEdgeOperator {
 
                 // Delete the edge with MVCC versioning
                 self.store.delete_edge_versioned(edge_id, epoch, tx);
+
+                // Record write for conflict detection
+                if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                    tracker.record_edge_write(tid, edge_id);
+                }
 
                 // Pass through all input columns
                 for col_idx in 0..chunk.column_count() {
@@ -849,6 +924,8 @@ pub struct AddLabelOperator {
     viewing_epoch: Option<EpochId>,
     /// Transaction ID for undo log tracking.
     transaction_id: Option<TransactionId>,
+    /// Optional write tracker for conflict detection.
+    write_tracker: Option<SharedWriteTracker>,
 }
 
 impl AddLabelOperator {
@@ -868,6 +945,7 @@ impl AddLabelOperator {
             output_schema,
             viewing_epoch: None,
             transaction_id: None,
+            write_tracker: None,
         }
     }
 
@@ -879,6 +957,12 @@ impl AddLabelOperator {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Sets the write tracker for conflict detection.
+    pub fn with_write_tracker(mut self, tracker: SharedWriteTracker) -> Self {
+        self.write_tracker = Some(tracker);
         self
     }
 }
@@ -905,6 +989,11 @@ impl Operator for AddLabelOperator {
                         });
                     }
                 };
+
+                // Record write for conflict detection
+                if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                    tracker.record_node_write(tid, node_id);
+                }
 
                 // Add all labels
                 for label in &self.labels {
@@ -956,6 +1045,8 @@ pub struct RemoveLabelOperator {
     viewing_epoch: Option<EpochId>,
     /// Transaction ID for undo log tracking.
     transaction_id: Option<TransactionId>,
+    /// Optional write tracker for conflict detection.
+    write_tracker: Option<SharedWriteTracker>,
 }
 
 impl RemoveLabelOperator {
@@ -975,6 +1066,7 @@ impl RemoveLabelOperator {
             output_schema,
             viewing_epoch: None,
             transaction_id: None,
+            write_tracker: None,
         }
     }
 
@@ -986,6 +1078,12 @@ impl RemoveLabelOperator {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Sets the write tracker for conflict detection.
+    pub fn with_write_tracker(mut self, tracker: SharedWriteTracker) -> Self {
+        self.write_tracker = Some(tracker);
         self
     }
 }
@@ -1012,6 +1110,11 @@ impl Operator for RemoveLabelOperator {
                         });
                     }
                 };
+
+                // Record write for conflict detection
+                if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                    tracker.record_node_write(tid, node_id);
+                }
 
                 // Remove all labels
                 for label in &self.labels {
@@ -1076,6 +1179,8 @@ pub struct SetPropertyOperator {
     viewing_epoch: Option<EpochId>,
     /// Transaction ID for undo log tracking.
     transaction_id: Option<TransactionId>,
+    /// Optional write tracker for conflict detection.
+    write_tracker: Option<SharedWriteTracker>,
 }
 
 impl SetPropertyOperator {
@@ -1100,6 +1205,7 @@ impl SetPropertyOperator {
             edge_type_name: None,
             viewing_epoch: None,
             transaction_id: None,
+            write_tracker: None,
         }
     }
 
@@ -1124,6 +1230,7 @@ impl SetPropertyOperator {
             edge_type_name: None,
             viewing_epoch: None,
             transaction_id: None,
+            write_tracker: None,
         }
     }
 
@@ -1164,6 +1271,12 @@ impl SetPropertyOperator {
         self.transaction_id = transaction_id;
         self
     }
+
+    /// Sets the write tracker for conflict detection.
+    pub fn with_write_tracker(mut self, tracker: SharedWriteTracker) -> Self {
+        self.write_tracker = Some(tracker);
+        self
+    }
 }
 
 impl Operator for SetPropertyOperator {
@@ -1192,6 +1305,15 @@ impl Operator for SetPropertyOperator {
                         });
                     }
                 };
+
+                // Record write for conflict detection
+                if let (Some(tracker), Some(tid)) = (&self.write_tracker, self.transaction_id) {
+                    if self.is_edge {
+                        tracker.record_edge_write(tid, EdgeId(entity_id));
+                    } else {
+                        tracker.record_node_write(tid, NodeId(entity_id));
+                    }
+                }
 
                 // Resolve all property values
                 let resolved_props: Vec<(String, Value)> = self

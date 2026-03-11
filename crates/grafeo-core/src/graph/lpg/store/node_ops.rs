@@ -77,7 +77,14 @@ impl LpgStore {
 
         self.register_node_labels(id, labels);
 
-        let chain = VersionChain::with_initial(record, epoch, transaction_id);
+        // Uncommitted transactional versions use PENDING epoch so they are
+        // invisible to other sessions until the transaction commits.
+        let version_epoch = if transaction_id == TransactionId::SYSTEM {
+            epoch
+        } else {
+            EpochId::PENDING
+        };
+        let chain = VersionChain::with_initial(record, version_epoch, transaction_id);
         self.nodes.write().insert(id, chain);
         self.live_node_count.fetch_add(1, Ordering::Relaxed);
         id
@@ -109,8 +116,16 @@ impl LpgStore {
             .alloc_value_with_offset(record)
             .expect("arena allocation failed for node record");
 
+        // Uncommitted transactional versions use PENDING epoch so they are
+        // invisible to other sessions until the transaction commits.
+        let version_epoch = if transaction_id == TransactionId::SYSTEM {
+            epoch
+        } else {
+            EpochId::PENDING
+        };
+
         // Create HotVersionRef pointing to arena data
-        let hot_ref = HotVersionRef::new(epoch, offset, transaction_id);
+        let hot_ref = HotVersionRef::new(version_epoch, offset, transaction_id);
 
         // Create or update version index
         let mut versions = self.node_versions.write();
@@ -356,7 +371,7 @@ impl LpgStore {
             }
 
             // Mark the version chain as deleted at this epoch
-            chain.mark_deleted(epoch);
+            chain.mark_deleted(epoch, TransactionId::SYSTEM);
 
             // Remove from label index using node_labels map
             let mut index = self.label_index.write();
@@ -407,7 +422,7 @@ impl LpgStore {
             }
 
             // Mark as deleted in version index
-            index.mark_deleted(epoch);
+            index.mark_deleted(epoch, TransactionId::SYSTEM);
 
             // Remove from label index using node_labels map
             let mut label_index = self.label_index.write();
@@ -431,6 +446,174 @@ impl LpgStore {
             self.node_properties.remove_all(id);
 
             self.live_node_count.fetch_sub(1, Ordering::Relaxed);
+
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Deletes a node within a transaction, capturing undo information for rollback.
+    ///
+    /// Unlike `delete_node_at_epoch`, this method:
+    /// 1. Captures labels and properties before deletion (for undo log)
+    /// 2. Marks the version with `deleted_by` = transaction_id (for rollback)
+    /// 3. Pushes a `NodeDeleted` undo entry so rollback can restore the node
+    #[cfg(not(feature = "tiered-storage"))]
+    pub(crate) fn delete_node_transactional(
+        &self,
+        id: NodeId,
+        epoch: EpochId,
+        transaction_id: TransactionId,
+    ) -> bool {
+        let mut nodes = self.nodes.write();
+        if let Some(chain) = nodes.get_mut(&id) {
+            if let Some(record) = chain.visible_at(epoch) {
+                if record.is_deleted() {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            // Mark deleted with transaction tracking
+            chain.mark_deleted(epoch, transaction_id);
+
+            // Capture labels for undo log
+            let id_to_label = self.id_to_label.read();
+            let node_labels_map = self.node_labels.read();
+            let label_names: Vec<String> = node_labels_map
+                .get(&id)
+                .map(|label_ids| {
+                    label_ids
+                        .iter()
+                        .filter_map(|&lid| id_to_label.get(lid as usize).map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            drop(id_to_label);
+            drop(node_labels_map);
+
+            // Capture properties for undo log
+            drop(nodes);
+            let properties: Vec<(PropertyKey, Value)> =
+                self.node_properties.get_all(id).into_iter().collect();
+
+            // Remove from label index (will be restored on rollback)
+            let mut index = self.label_index.write();
+            let mut node_labels_w = self.node_labels.write();
+            if let Some(label_ids) = node_labels_w.remove(&id) {
+                for label_id in label_ids {
+                    if let Some(set) = index.get_mut(label_id as usize) {
+                        set.remove(&id);
+                    }
+                }
+            }
+            drop(index);
+            drop(node_labels_w);
+
+            // Remove from text indexes
+            #[cfg(feature = "text-index")]
+            self.remove_from_all_text_indexes(id);
+
+            // Remove properties (will be restored on rollback)
+            self.node_properties.remove_all(id);
+            self.live_node_count.fetch_sub(1, Ordering::Relaxed);
+
+            // Record undo entry for rollback
+            self.property_undo_log
+                .write()
+                .entry(transaction_id)
+                .or_default()
+                .push(super::PropertyUndoEntry::NodeDeleted {
+                    node_id: id,
+                    labels: label_names,
+                    properties,
+                });
+
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Deletes a node within a transaction, capturing undo information for rollback.
+    /// (Tiered storage version)
+    #[cfg(feature = "tiered-storage")]
+    pub(crate) fn delete_node_transactional(
+        &self,
+        id: NodeId,
+        epoch: EpochId,
+        transaction_id: TransactionId,
+    ) -> bool {
+        let mut versions = self.node_versions.write();
+        if let Some(index) = versions.get_mut(&id) {
+            if let Some(version_ref) = index.visible_at(epoch) {
+                if let Some(record) = self.read_node_record(&version_ref) {
+                    if record.is_deleted() {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+
+            // Mark deleted with transaction tracking
+            index.mark_deleted(epoch, transaction_id);
+
+            // Capture labels for undo log
+            let id_to_label = self.id_to_label.read();
+            let node_labels_map = self.node_labels.read();
+            let label_names: Vec<String> = node_labels_map
+                .get(&id)
+                .map(|label_ids| {
+                    label_ids
+                        .iter()
+                        .filter_map(|&lid| id_to_label.get(lid as usize).map(|s| s.to_string()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            drop(id_to_label);
+            drop(node_labels_map);
+
+            // Capture properties for undo log
+            drop(versions);
+            let properties: Vec<(PropertyKey, Value)> =
+                self.node_properties.get_all(id).into_iter().collect();
+
+            // Remove from label index
+            let mut label_index = self.label_index.write();
+            let mut node_labels_w = self.node_labels.write();
+            if let Some(label_ids) = node_labels_w.remove(&id) {
+                for label_id in label_ids {
+                    if let Some(set) = label_index.get_mut(label_id as usize) {
+                        set.remove(&id);
+                    }
+                }
+            }
+            drop(label_index);
+            drop(node_labels_w);
+
+            // Remove from text indexes
+            #[cfg(feature = "text-index")]
+            self.remove_from_all_text_indexes(id);
+
+            // Remove properties
+            self.node_properties.remove_all(id);
+            self.live_node_count.fetch_sub(1, Ordering::Relaxed);
+
+            // Record undo entry for rollback
+            self.property_undo_log
+                .write()
+                .entry(transaction_id)
+                .or_default()
+                .push(super::PropertyUndoEntry::NodeDeleted {
+                    node_id: id,
+                    labels: label_names,
+                    properties,
+                });
 
             true
         } else {
@@ -746,6 +929,29 @@ impl LpgStore {
                 })
             })
             .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Returns all node IDs including uncommitted/PENDING versions.
+    ///
+    /// Unlike `node_ids()` which pre-filters by current epoch, this returns
+    /// every node that has a version chain entry. Used by scan operators that
+    /// perform their own MVCC visibility filtering with transaction context.
+    #[must_use]
+    #[cfg(not(feature = "tiered-storage"))]
+    pub fn all_node_ids(&self) -> Vec<NodeId> {
+        let mut ids: Vec<NodeId> = self.nodes.read().keys().copied().collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// Returns all node IDs including uncommitted/PENDING versions.
+    /// (Tiered storage version)
+    #[must_use]
+    #[cfg(feature = "tiered-storage")]
+    pub fn all_node_ids(&self) -> Vec<NodeId> {
+        let mut ids: Vec<NodeId> = self.node_versions.read().keys().copied().collect();
         ids.sort_unstable();
         ids
     }

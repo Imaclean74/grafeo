@@ -155,6 +155,50 @@ impl LpgStore {
         self.needs_stats_recompute.store(true, Ordering::Relaxed);
     }
 
+    /// Finalizes PENDING epochs for all versions created by a transaction.
+    ///
+    /// Called at commit time: updates `created_epoch` from `EpochId::PENDING`
+    /// to the real `commit_epoch`, making the versions visible to other sessions.
+    /// Also advances the store's epoch so non-transactional reads can see the
+    /// newly committed versions.
+    #[cfg(not(feature = "tiered-storage"))]
+    #[doc(hidden)]
+    pub fn finalize_version_epochs(&self, transaction_id: TransactionId, commit_epoch: EpochId) {
+        {
+            let mut nodes = self.nodes.write();
+            for chain in nodes.values_mut() {
+                chain.finalize_epochs(transaction_id, commit_epoch);
+            }
+        }
+        {
+            let mut edges = self.edges.write();
+            for chain in edges.values_mut() {
+                chain.finalize_epochs(transaction_id, commit_epoch);
+            }
+        }
+        self.sync_epoch(commit_epoch);
+    }
+
+    /// Finalizes PENDING epochs for all versions created by a transaction.
+    /// (Tiered storage version, also syncs the store epoch.)
+    #[cfg(feature = "tiered-storage")]
+    #[doc(hidden)]
+    pub fn finalize_version_epochs(&self, transaction_id: TransactionId, commit_epoch: EpochId) {
+        {
+            let mut versions = self.node_versions.write();
+            for index in versions.values_mut() {
+                index.finalize_epochs(transaction_id, commit_epoch);
+            }
+        }
+        {
+            let mut versions = self.edge_versions.write();
+            for index in versions.values_mut() {
+                index.finalize_epochs(transaction_id, commit_epoch);
+            }
+        }
+        self.sync_epoch(commit_epoch);
+    }
+
     /// Garbage collects old versions that are no longer visible to any transaction.
     ///
     /// Versions older than `min_epoch` are pruned from version chains, keeping
@@ -294,6 +338,7 @@ impl LpgStore {
                         length,
                         created_by: hot_ref.created_by,
                         deleted_epoch: hot_ref.deleted_epoch,
+                        deleted_by: hot_ref.deleted_by,
                     };
                     index.freeze_epoch(epoch, std::iter::once(cold_ref));
                 }
@@ -312,6 +357,7 @@ impl LpgStore {
                         length,
                         created_by: hot_ref.created_by,
                         deleted_epoch: hot_ref.deleted_epoch,
+                        deleted_by: hot_ref.deleted_by,
                     };
                     index.freeze_epoch(epoch, std::iter::once(cold_ref));
                 }

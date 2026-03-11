@@ -179,6 +179,10 @@ impl GraphStore for WalGraphStore {
         self.inner.node_ids()
     }
 
+    fn all_node_ids(&self) -> Vec<NodeId> {
+        self.inner.all_node_ids()
+    }
+
     fn nodes_by_label(&self, label: &str) -> Vec<NodeId> {
         self.inner.nodes_by_label(label)
     }

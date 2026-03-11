@@ -90,6 +90,28 @@ pub enum PropertyUndoEntry {
         /// The label string that was removed.
         label: String,
     },
+    /// A node was deleted (for rollback restoration).
+    NodeDeleted {
+        /// The node that was deleted.
+        node_id: NodeId,
+        /// The labels the node had before deletion.
+        labels: Vec<String>,
+        /// The properties the node had before deletion.
+        properties: Vec<(PropertyKey, Value)>,
+    },
+    /// An edge was deleted (for rollback restoration).
+    EdgeDeleted {
+        /// The edge that was deleted.
+        edge_id: EdgeId,
+        /// The source node.
+        src: NodeId,
+        /// The destination node.
+        dst: NodeId,
+        /// The edge type name.
+        edge_type: String,
+        /// The properties the edge had before deletion.
+        properties: Vec<(PropertyKey, Value)>,
+    },
 }
 
 /// Compares two values for ordering (used for range checks).
@@ -97,6 +119,8 @@ pub(super) fn compare_values_for_range(a: &Value, b: &Value) -> Option<CmpOrderi
     match (a, b) {
         (Value::Int64(a), Value::Int64(b)) => Some(a.cmp(b)),
         (Value::Float64(a), Value::Float64(b)) => a.partial_cmp(b),
+        (Value::Int64(a), Value::Float64(b)) => (*a as f64).partial_cmp(b),
+        (Value::Float64(a), Value::Int64(b)) => a.partial_cmp(&(*b as f64)),
         (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
         (Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
         (Value::Timestamp(a), Value::Timestamp(b)) => Some(a.cmp(b)),

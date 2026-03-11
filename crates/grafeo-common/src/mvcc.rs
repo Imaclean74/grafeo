@@ -21,6 +21,9 @@ pub struct VersionInfo {
     pub deleted_epoch: Option<EpochId>,
     /// The transaction that created this version.
     pub created_by: TransactionId,
+    /// The transaction that deleted this version (if any).
+    /// Used for rollback: only the deleting transaction's rollback can undelete.
+    pub deleted_by: Option<TransactionId>,
 }
 
 impl VersionInfo {
@@ -31,12 +34,27 @@ impl VersionInfo {
             created_epoch,
             deleted_epoch: None,
             created_by,
+            deleted_by: None,
         }
     }
 
-    /// Marks this version as deleted.
-    pub fn mark_deleted(&mut self, epoch: EpochId) {
+    /// Marks this version as deleted by a specific transaction.
+    pub fn mark_deleted(&mut self, epoch: EpochId, deleted_by: TransactionId) {
         self.deleted_epoch = Some(epoch);
+        self.deleted_by = Some(deleted_by);
+    }
+
+    /// Unmarks deletion if deleted by the given transaction. Returns `true` if undeleted.
+    ///
+    /// Used during rollback to restore versions deleted within the rolled-back transaction.
+    pub fn unmark_deleted_by(&mut self, transaction_id: TransactionId) -> bool {
+        if self.deleted_by == Some(transaction_id) {
+            self.deleted_epoch = None;
+            self.deleted_by = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// Checks if this version is visible at the given epoch.
@@ -60,13 +78,18 @@ impl VersionInfo {
     /// Checks if this version is visible to a specific transaction.
     ///
     /// A version is visible to a transaction if:
-    /// 1. It was created by the same transaction, OR
+    /// 1. It was created by the same transaction and not deleted by self, OR
     /// 2. It was created in an epoch before the transaction's start epoch
-    ///    and not deleted before that epoch
+    ///    and not deleted before that epoch, and not deleted by this transaction
     #[inline]
     #[must_use]
     pub fn is_visible_to(&self, viewing_epoch: EpochId, viewing_tx: TransactionId) -> bool {
-        // Own modifications are always visible
+        // If this version was deleted by the viewing transaction, it is not visible
+        if self.deleted_by == Some(viewing_tx) {
+            return false;
+        }
+
+        // Own modifications are always visible (if not deleted)
         if self.created_by == viewing_tx {
             return self.deleted_epoch.is_none();
         }
@@ -157,17 +180,31 @@ impl<T> VersionChain<T> {
             .map(|v| &v.data)
     }
 
-    /// Marks the current visible version as deleted.
+    /// Marks the current visible version as deleted by a specific transaction.
     ///
     /// Returns `true` if a version was marked, `false` if no visible version exists.
-    pub fn mark_deleted(&mut self, delete_epoch: EpochId) -> bool {
+    pub fn mark_deleted(&mut self, delete_epoch: EpochId, deleted_by: TransactionId) -> bool {
         for version in &mut self.versions {
             if version.info.deleted_epoch.is_none() {
-                version.info.mark_deleted(delete_epoch);
+                version.info.mark_deleted(delete_epoch, deleted_by);
                 return true;
             }
         }
         false
+    }
+
+    /// Unmarks deletion for versions deleted by the given transaction.
+    ///
+    /// Returns `true` if any version was undeleted. Used during rollback to
+    /// restore versions that were deleted within the rolled-back transaction.
+    pub fn unmark_deleted_by(&mut self, tx: TransactionId) -> bool {
+        let mut any_undeleted = false;
+        for version in &mut self.versions {
+            if version.info.unmark_deleted_by(tx) {
+                any_undeleted = true;
+            }
+        }
+        any_undeleted
     }
 
     /// Checks if any version was modified by the given transaction.
@@ -176,11 +213,31 @@ impl<T> VersionChain<T> {
         self.versions.iter().any(|v| v.info.created_by == tx)
     }
 
+    /// Checks if any version was deleted by the given transaction.
+    #[must_use]
+    pub fn deleted_by(&self, tx: TransactionId) -> bool {
+        self.versions.iter().any(|v| v.info.deleted_by == Some(tx))
+    }
+
     /// Removes all versions created by the given transaction.
     ///
     /// Used for rollback to discard uncommitted changes.
     pub fn remove_versions_by(&mut self, tx: TransactionId) {
         self.versions.retain(|v| v.info.created_by != tx);
+    }
+
+    /// Finalizes PENDING epochs for versions created by the given transaction.
+    ///
+    /// Called at commit time to make uncommitted versions visible at the
+    /// real commit epoch instead of `EpochId::PENDING`.
+    pub fn finalize_epochs(&mut self, transaction_id: TransactionId, commit_epoch: EpochId) {
+        for version in &mut self.versions {
+            if version.info.created_by == transaction_id
+                && version.info.created_epoch == EpochId::PENDING
+            {
+                version.info.created_epoch = commit_epoch;
+            }
+        }
     }
 
     /// Checks if there's a concurrent modification conflict.
@@ -381,6 +438,8 @@ pub struct HotVersionRef {
     pub created_by: TransactionId,
     /// Epoch when this version was deleted (NONE if still alive).
     pub deleted_epoch: OptionalEpochId,
+    /// Transaction that deleted this version (for rollback support).
+    pub deleted_by: Option<TransactionId>,
 }
 
 #[cfg(feature = "tiered-storage")]
@@ -393,6 +452,24 @@ impl HotVersionRef {
             arena_offset,
             created_by,
             deleted_epoch: OptionalEpochId::NONE,
+            deleted_by: None,
+        }
+    }
+
+    /// Marks this version as deleted by a specific transaction.
+    pub fn mark_deleted(&mut self, epoch: EpochId, deleted_by: TransactionId) {
+        self.deleted_epoch = OptionalEpochId::some(epoch);
+        self.deleted_by = Some(deleted_by);
+    }
+
+    /// Unmarks deletion if deleted by the given transaction. Returns `true` if undeleted.
+    pub fn unmark_deleted_by(&mut self, transaction_id: TransactionId) -> bool {
+        if self.deleted_by == Some(transaction_id) {
+            self.deleted_epoch = OptionalEpochId::NONE;
+            self.deleted_by = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -415,7 +492,11 @@ impl HotVersionRef {
     #[inline]
     #[must_use]
     pub fn is_visible_to(&self, viewing_epoch: EpochId, viewing_tx: TransactionId) -> bool {
-        // Own modifications are always visible (if not deleted by self)
+        // If deleted by the viewing transaction, not visible
+        if self.deleted_by == Some(viewing_tx) {
+            return false;
+        }
+        // Own modifications are always visible (if not deleted)
         if self.created_by == viewing_tx {
             return self.deleted_epoch.is_none();
         }
@@ -449,6 +530,8 @@ pub struct ColdVersionRef {
     pub created_by: TransactionId,
     /// Epoch when this version was deleted.
     pub deleted_epoch: OptionalEpochId,
+    /// Transaction that deleted this version (for rollback support).
+    pub deleted_by: Option<TransactionId>,
 }
 
 #[cfg(feature = "tiered-storage")]
@@ -470,6 +553,10 @@ impl ColdVersionRef {
     #[inline]
     #[must_use]
     pub fn is_visible_to(&self, viewing_epoch: EpochId, viewing_tx: TransactionId) -> bool {
+        // If deleted by the viewing transaction, not visible
+        if self.deleted_by == Some(viewing_tx) {
+            return false;
+        }
         if self.created_by == viewing_tx {
             return self.deleted_epoch.is_none();
         }
@@ -650,14 +737,14 @@ impl VersionIndex {
         None
     }
 
-    /// Marks the currently visible version as deleted at the given epoch.
+    /// Marks the currently visible version as deleted by a specific transaction.
     ///
     /// Returns `true` if a version was marked, `false` if no visible version exists.
-    pub fn mark_deleted(&mut self, delete_epoch: EpochId) -> bool {
+    pub fn mark_deleted(&mut self, delete_epoch: EpochId, deleted_by: TransactionId) -> bool {
         // Find the first non-deleted hot version and mark it
         for v in &mut self.hot {
             if v.deleted_epoch.is_none() {
-                v.deleted_epoch = OptionalEpochId::some(delete_epoch);
+                v.mark_deleted(delete_epoch, deleted_by);
                 return true;
             }
         }
@@ -665,10 +752,31 @@ impl VersionIndex {
         for v in &mut self.cold {
             if v.deleted_epoch.is_none() {
                 v.deleted_epoch = OptionalEpochId::some(delete_epoch);
+                v.deleted_by = Some(deleted_by);
                 return true;
             }
         }
         false
+    }
+
+    /// Unmarks deletion for versions deleted by the given transaction.
+    ///
+    /// Returns `true` if any version was undeleted. Used during rollback.
+    pub fn unmark_deleted_by(&mut self, tx: TransactionId) -> bool {
+        let mut any_undeleted = false;
+        for v in &mut self.hot {
+            if v.unmark_deleted_by(tx) {
+                any_undeleted = true;
+            }
+        }
+        for v in &mut self.cold {
+            if v.deleted_by == Some(tx) {
+                v.deleted_epoch = OptionalEpochId::NONE;
+                v.deleted_by = None;
+                any_undeleted = true;
+            }
+        }
+        any_undeleted
     }
 
     /// Checks if any version was created by the given transaction.
@@ -677,10 +785,30 @@ impl VersionIndex {
         self.hot.iter().any(|v| v.created_by == tx) || self.cold.iter().any(|v| v.created_by == tx)
     }
 
+    /// Checks if any version was deleted by the given transaction.
+    #[must_use]
+    pub fn deleted_by(&self, tx: TransactionId) -> bool {
+        self.hot.iter().any(|v| v.deleted_by == Some(tx))
+            || self.cold.iter().any(|v| v.deleted_by == Some(tx))
+    }
+
     /// Removes all versions created by the given transaction (for rollback).
     pub fn remove_versions_by(&mut self, tx: TransactionId) {
         self.hot.retain(|v| v.created_by != tx);
         self.cold.retain(|v| v.created_by != tx);
+        self.recalculate_latest_epoch();
+    }
+
+    /// Finalizes PENDING epochs for hot versions created by the given transaction.
+    ///
+    /// Called at commit time to make uncommitted versions visible at the
+    /// real commit epoch instead of `EpochId::PENDING`.
+    pub fn finalize_epochs(&mut self, transaction_id: TransactionId, commit_epoch: EpochId) {
+        for v in &mut self.hot {
+            if v.created_by == transaction_id && v.epoch == EpochId::PENDING {
+                v.epoch = commit_epoch;
+            }
+        }
         self.recalculate_latest_epoch();
     }
 
@@ -860,7 +988,7 @@ mod tests {
     #[test]
     fn test_deleted_version_visibility() {
         let mut v = VersionInfo::new(EpochId::new(5), TransactionId::new(1));
-        v.mark_deleted(EpochId::new(10));
+        v.mark_deleted(EpochId::new(10), TransactionId::new(99));
 
         // Visible between creation and deletion
         assert!(v.is_visible_at(EpochId::new(5)));
@@ -920,8 +1048,8 @@ mod tests {
     fn test_version_chain_deletion() {
         let mut chain = VersionChain::with_initial("v1", EpochId::new(1), TransactionId::new(1));
 
-        // Mark as deleted at epoch 5
-        assert!(chain.mark_deleted(EpochId::new(5)));
+        // Mark as deleted at epoch 5 by transaction 99 (system)
+        assert!(chain.mark_deleted(EpochId::new(5), TransactionId::new(99)));
 
         // Should see v1 before deletion, nothing after
         assert_eq!(chain.visible_at(EpochId::new(4)), Some(&"v1"));
@@ -1023,7 +1151,7 @@ mod tiered_storage_tests {
         let mut index = VersionIndex::with_initial(hot);
 
         // Mark as deleted at epoch 5
-        assert!(index.mark_deleted(EpochId::new(5)));
+        assert!(index.mark_deleted(EpochId::new(5), TransactionId::new(99)));
 
         // Should see version before deletion, nothing after
         assert!(index.visible_at(EpochId::new(4)).is_some());
@@ -1174,6 +1302,7 @@ mod tiered_storage_tests {
             length: 32,
             created_by: TransactionId::new(1),
             deleted_epoch: OptionalEpochId::NONE,
+            deleted_by: None,
         };
         index.freeze_epoch(EpochId::new(1), std::iter::once(cold_ref));
 

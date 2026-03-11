@@ -15,9 +15,7 @@ use grafeo_engine::GrafeoDB;
 // Fixtures
 // ============================================================================
 
-/// Social network: Alix(30,NYC), Gus(25,NYC), Harm(35,London)
-/// Alix-KNOWS->Gus, Alix-KNOWS->Harm, Gus-KNOWS->Harm
-/// Alix-WORKS_AT->TechCorp, Gus-WORKS_AT->TechCorp
+/// Creates 3 Person + 1 Company nodes, 3 KNOWS + 2 WORKS_AT edges.
 fn create_social_network() -> GrafeoDB {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();

@@ -2356,6 +2356,30 @@ impl PyTransaction {
         self.execute_language_impl("gql", query, params)
     }
 
+    /// Execute a Cypher query within this transaction.
+    #[cfg(feature = "cypher")]
+    #[pyo3(signature = (query, params=None))]
+    fn execute_cypher(
+        &self,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+        _py: Python<'_>,
+    ) -> PyResult<PyQueryResult> {
+        self.execute_language_impl("cypher", query, params)
+    }
+
+    /// Execute a SQL/PGQ query (SQL:2023 GRAPH_TABLE) within this transaction.
+    #[cfg(feature = "sql-pgq")]
+    #[pyo3(signature = (query, params=None))]
+    fn execute_sql(
+        &self,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+        _py: Python<'_>,
+    ) -> PyResult<PyQueryResult> {
+        self.execute_language_impl("sql-pgq", query, params)
+    }
+
     /// Execute a Gremlin query within this transaction.
     ///
     /// All queries executed through this method see the same snapshot

@@ -286,3 +286,84 @@ fn test_ndjson_alias() {
         .unwrap();
     assert_eq!(r.rows.len(), 2);
 }
+
+// ---------------------------------------------------------------------------
+// Malformed CSV input (T3-08)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_csv_fewer_columns_than_header() {
+    // Row has fewer columns than header: should still parse (missing columns become empty)
+    let csv = "name,score,grade\nAlix,95\nGus,88,A";
+    let path = temp_file("fewer_cols.csv", csv);
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    let r = session
+        .execute(&format!(
+            "LOAD DATA FROM '{path}' FORMAT CSV WITH HEADERS AS row RETURN row"
+        ))
+        .unwrap();
+    assert_eq!(r.rows.len(), 2, "both rows should be returned");
+}
+
+#[test]
+fn test_csv_more_columns_than_header() {
+    // Row has more columns than header: extra columns should be handled gracefully
+    let csv = "name,score\nAlix,95,extra_value\nGus,88";
+    let path = temp_file("more_cols.csv", csv);
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    let r = session
+        .execute(&format!(
+            "LOAD DATA FROM '{path}' FORMAT CSV WITH HEADERS AS row RETURN row"
+        ))
+        .unwrap();
+    assert_eq!(r.rows.len(), 2, "both rows should be returned");
+}
+
+#[test]
+fn test_csv_empty_file() {
+    let csv = "";
+    let path = temp_file("empty.csv", csv);
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    let r = session
+        .execute(&format!(
+            "LOAD DATA FROM '{path}' FORMAT CSV WITH HEADERS AS row RETURN row"
+        ))
+        .unwrap();
+    assert_eq!(r.rows.len(), 0, "empty CSV should return no rows");
+}
+
+#[test]
+#[cfg(feature = "jsonl-import")]
+fn test_jsonl_invalid_json_line() {
+    let jsonl = "{\"name\":\"Alix\"}\n{invalid json}\n{\"name\":\"Gus\"}";
+    let path = temp_file("invalid.jsonl", jsonl);
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    let r = session.execute(&format!(
+        "LOAD DATA FROM '{path}' FORMAT JSONL AS row RETURN row.name AS name"
+    ));
+    // Invalid JSON line should cause an error
+    assert!(r.is_err(), "invalid JSON line should produce an error");
+    let err = r.unwrap_err().to_string();
+    assert!(
+        err.contains("JSON") || err.contains("parse"),
+        "error should mention JSON parsing, got: {err}"
+    );
+}
+
+#[test]
+fn test_csv_only_newlines() {
+    let csv = "\n\n\n";
+    let path = temp_file("only_newlines.csv", csv);
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    let r = session
+        .execute(&format!(
+            "LOAD DATA FROM '{path}' FORMAT CSV WITH HEADERS AS row RETURN row"
+        ))
+        .unwrap();
+    assert_eq!(r.rows.len(), 0, "newlines-only CSV should return no rows");
+}

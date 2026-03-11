@@ -47,7 +47,11 @@ fn test_memory_usage_with_data() {
     assert!(usage.store.nodes_bytes > 0, "nodes_bytes should be > 0");
     assert!(usage.store.edges_bytes > 0, "edges_bytes should be > 0");
     assert!(usage.store.node_properties_bytes > 0);
-    assert!(usage.store.edge_properties_bytes == 0 || usage.store.total_bytes > 0);
+    // Edges have no explicit properties, so edge_properties_bytes should be 0
+    assert_eq!(
+        usage.store.edge_properties_bytes, 0,
+        "no edge properties were set"
+    );
     assert!(usage.store.property_column_count > 0);
 
     // Indexes should report non-zero (adjacency, labels)
@@ -88,12 +92,17 @@ fn test_memory_usage_after_mutations() {
     txn2.commit().unwrap();
 
     let after = db.memory_usage();
-    // MVCC overhead should increase with version chains
+    // After mutations, total bytes should be at least the same (in-place updates may not grow)
     assert!(
-        after.mvcc.total_bytes >= before.mvcc.total_bytes,
-        "mvcc bytes should grow: before={}, after={}",
-        before.mvcc.total_bytes,
-        after.mvcc.total_bytes
+        after.total_bytes >= before.total_bytes,
+        "total bytes should not shrink after mutations: before={}, after={}",
+        before.total_bytes,
+        after.total_bytes
+    );
+    // The store should still report property bytes (properties still exist)
+    assert!(
+        after.store.node_properties_bytes > 0,
+        "node properties should still be tracked after mutations"
     );
 }
 

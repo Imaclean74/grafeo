@@ -50,17 +50,24 @@ impl GqlTranslator {
                     alias: item.alias.clone(),
                 });
             } else {
-                // Non-aggregate expression: group-by key
+                // Non-aggregate expression: group-by key.
+                // The Aggregate operator names its output columns using
+                // expression_to_string, so the post-Return must reference
+                // those column names (not the raw property expression).
                 let expr = self.translate_expression(&item.expression)?;
                 group_by.push(expr.clone());
+                let col_name = crate::query::planner::common::expression_to_string(&expr);
                 post_return_items.push(ReturnItem {
-                    expression: expr,
+                    expression: LogicalExpression::Variable(col_name),
                     alias: item.alias.clone(),
                 });
             }
         }
 
-        if needs_post_return {
+        // Always produce a post-Return when any item has an alias, so that
+        // output column names reflect the aliases and are visible to ORDER BY.
+        let has_aliases = items.iter().any(|item| item.alias.is_some());
+        if needs_post_return || has_aliases {
             Ok((aggregates, group_by, Some(post_return_items)))
         } else {
             Ok((aggregates, group_by, None))

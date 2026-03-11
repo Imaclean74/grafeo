@@ -137,40 +137,141 @@ fn two_named_graphs_are_independent() {
     assert_eq!(result.row_count(), 0, "default should have 0 nodes");
 }
 
-// ── Transaction guards ───────────────────────────────────────────
+// ── Cross-graph transactions ─────────────────────────────────────
 
 #[test]
-fn cannot_switch_graph_in_active_transaction() {
+fn cross_graph_commit_persists_both_graphs() {
     let db = db();
     let session = db.session();
 
-    session.execute("CREATE GRAPH analytics").unwrap();
+    session.execute("CREATE GRAPH alpha").unwrap();
+    session.execute("CREATE GRAPH beta").unwrap();
+
     session.execute("START TRANSACTION").unwrap();
 
-    let result = session.execute("USE GRAPH analytics");
-    assert!(
-        result.is_err(),
-        "Should not be able to switch graphs within an active transaction"
-    );
+    // Insert into default graph
+    session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
 
-    session.execute("ROLLBACK").unwrap();
+    // Switch to alpha and insert
+    session.execute("USE GRAPH alpha").unwrap();
+    session.execute("INSERT (:Event {type: 'login'})").unwrap();
+
+    // Switch to beta and insert
+    session.execute("USE GRAPH beta").unwrap();
+    session
+        .execute("INSERT (:Animal {species: 'Cat'})")
+        .unwrap();
+
+    session.execute("COMMIT").unwrap();
+
+    // Verify all three graphs have their data
+    session.execute("USE GRAPH default").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 1, "default should have 1 node");
+
+    session.execute("USE GRAPH alpha").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 1, "alpha should have 1 node");
+
+    session.execute("USE GRAPH beta").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 1, "beta should have 1 node");
 }
 
 #[test]
-fn cannot_session_set_graph_in_active_transaction() {
+fn cross_graph_rollback_discards_all_graphs() {
+    let db = db();
+    let session = db.session();
+
+    session.execute("CREATE GRAPH alpha").unwrap();
+
+    session.execute("START TRANSACTION").unwrap();
+
+    // Insert into default
+    session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
+
+    // Switch and insert into alpha
+    session.execute("USE GRAPH alpha").unwrap();
+    session.execute("INSERT (:Event {type: 'login'})").unwrap();
+
+    session.execute("ROLLBACK").unwrap();
+
+    // Both graphs should be empty
+    session.execute("USE GRAPH default").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(
+        result.row_count(),
+        0,
+        "default should be empty after rollback"
+    );
+
+    session.execute("USE GRAPH alpha").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(
+        result.row_count(),
+        0,
+        "alpha should be empty after rollback"
+    );
+}
+
+#[test]
+fn session_set_graph_works_in_transaction() {
     let db = db();
     let session = db.session();
 
     session.execute("CREATE GRAPH analytics").unwrap();
     session.execute("START TRANSACTION").unwrap();
 
-    let result = session.execute("SESSION SET GRAPH analytics");
-    assert!(
-        result.is_err(),
-        "SESSION SET GRAPH should fail within an active transaction"
-    );
+    // SESSION SET GRAPH should work within a transaction now
+    session.execute("SESSION SET GRAPH analytics").unwrap();
+    session.execute("INSERT (:Event {type: 'click'})").unwrap();
+    session.execute("COMMIT").unwrap();
 
-    session.execute("ROLLBACK").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 1, "analytics should have 1 node");
+}
+
+#[test]
+fn cross_graph_savepoint_rollback() {
+    let db = db();
+    let session = db.session();
+
+    session.execute("CREATE GRAPH alpha").unwrap();
+
+    session.execute("START TRANSACTION").unwrap();
+
+    // Insert into default
+    session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
+
+    // Create savepoint while on default graph
+    session.execute("SAVEPOINT sp1").unwrap();
+
+    // Switch to alpha and insert
+    session.execute("USE GRAPH alpha").unwrap();
+    session.execute("INSERT (:Event {type: 'login'})").unwrap();
+
+    // Also insert more into default
+    session.execute("USE GRAPH default").unwrap();
+    session.execute("INSERT (:Person {name: 'Gus'})").unwrap();
+
+    // Rollback to savepoint: should discard alpha's Event and default's Gus
+    session.execute("ROLLBACK TO SAVEPOINT sp1").unwrap();
+
+    session.execute("COMMIT").unwrap();
+
+    // Default should only have Alix (from before savepoint)
+    session.execute("USE GRAPH default").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 1, "default should have 1 node (Alix)");
+
+    // Alpha should be empty (its insert was after savepoint)
+    session.execute("USE GRAPH alpha").unwrap();
+    let result = session.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(
+        result.row_count(),
+        0,
+        "alpha should be empty after savepoint rollback"
+    );
 }
 
 // ── Drop active graph ────────────────────────────────────────────
@@ -307,4 +408,197 @@ fn edges_are_isolated_between_graphs() {
     session.execute("USE GRAPH default").unwrap();
     let result = session.execute("MATCH ()-[r]->() RETURN type(r)").unwrap();
     assert_eq!(result.row_count(), 1, "default graph should have 1 edge");
+}
+
+// ── SHOW GRAPHS ─────────────────────────────────────────────────
+
+#[test]
+fn show_graphs_empty() {
+    let db = db();
+    let session = db.session();
+    let result = session.execute("SHOW GRAPHS").unwrap();
+    assert_eq!(result.columns, vec!["name"]);
+    assert_eq!(result.row_count(), 0, "no named graphs initially");
+}
+
+#[test]
+fn show_graphs_lists_created_graphs() {
+    use grafeo_common::types::Value;
+
+    let db = db();
+    let session = db.session();
+    session.execute("CREATE GRAPH beta").unwrap();
+    session.execute("CREATE GRAPH alpha").unwrap();
+
+    let result = session.execute("SHOW GRAPHS").unwrap();
+    assert_eq!(result.columns, vec!["name"]);
+    assert_eq!(result.row_count(), 2);
+    // Results should be sorted alphabetically
+    assert_eq!(result.rows[0][0], Value::String("alpha".into()));
+    assert_eq!(result.rows[1][0], Value::String("beta".into()));
+}
+
+#[test]
+fn show_graphs_reflects_drop() {
+    let db = db();
+    let session = db.session();
+    session.execute("CREATE GRAPH temp").unwrap();
+    assert_eq!(session.execute("SHOW GRAPHS").unwrap().row_count(), 1);
+
+    session.execute("DROP GRAPH temp").unwrap();
+    assert_eq!(session.execute("SHOW GRAPHS").unwrap().row_count(), 0);
+}
+
+// ── GrafeoDB-level graph context persistence ────────────────────
+
+#[test]
+fn db_execute_use_graph_persists_across_calls() {
+    let db = db();
+    db.execute("CREATE GRAPH analytics").unwrap();
+    db.execute("INSERT (:Person {name: 'Alix'})").unwrap(); // default graph
+    db.execute("USE GRAPH analytics").unwrap();
+    db.execute("INSERT (:Event {type: 'click'})").unwrap(); // analytics graph
+
+    let result = db.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(
+        result.row_count(),
+        1,
+        "Named graph should have 1 node (Event)"
+    );
+
+    // Switch back to default
+    db.execute("USE GRAPH default").unwrap();
+    let result = db.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(
+        result.row_count(),
+        1,
+        "Default graph should have 1 node (Person)"
+    );
+}
+
+#[test]
+fn db_execute_session_set_graph_persists() {
+    let db = db();
+    db.execute("CREATE GRAPH mydb").unwrap();
+    db.execute("SESSION SET GRAPH mydb").unwrap();
+    db.execute("INSERT (:Person {name: 'Gus'})").unwrap();
+
+    let result = db.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 1);
+
+    db.execute("SESSION SET GRAPH default").unwrap();
+    let result = db.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 0, "Default graph should be empty");
+}
+
+#[test]
+fn db_execute_session_reset_returns_to_default() {
+    let db = db();
+    db.execute("INSERT (:Person {name: 'Alix'})").unwrap();
+    db.execute("CREATE GRAPH other").unwrap();
+    db.execute("USE GRAPH other").unwrap();
+    db.execute("SESSION RESET").unwrap();
+
+    let result = db.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(
+        result.row_count(),
+        1,
+        "Should see default graph data after SESSION RESET"
+    );
+}
+
+#[test]
+fn db_current_graph_api() {
+    let db = db();
+    assert_eq!(db.current_graph(), None);
+
+    db.execute("CREATE GRAPH mydb").unwrap();
+    db.execute("USE GRAPH mydb").unwrap();
+    assert_eq!(db.current_graph(), Some("mydb".to_string()));
+
+    db.set_current_graph(None);
+    assert_eq!(db.current_graph(), None);
+
+    db.set_current_graph(Some("mydb"));
+    assert_eq!(db.current_graph(), Some("mydb".to_string()));
+}
+
+#[test]
+fn db_execute_two_named_graphs_independent() {
+    let db = db();
+    db.execute("CREATE GRAPH alpha").unwrap();
+    db.execute("CREATE GRAPH beta").unwrap();
+
+    db.execute("USE GRAPH alpha").unwrap();
+    db.execute("INSERT (:Person {name: 'Alix'})").unwrap();
+    db.execute("INSERT (:Person {name: 'Gus'})").unwrap();
+
+    db.execute("USE GRAPH beta").unwrap();
+    db.execute("INSERT (:Animal {species: 'Cat'})").unwrap();
+
+    let result = db.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 1, "beta should have 1 node");
+
+    db.execute("USE GRAPH alpha").unwrap();
+    let result = db.execute("MATCH (n) RETURN n").unwrap();
+    assert_eq!(result.row_count(), 2, "alpha should have 2 nodes");
+}
+
+#[test]
+fn db_execute_language_respects_graph_context() {
+    let db = db();
+    db.execute("CREATE GRAPH mydb").unwrap();
+    db.execute("USE GRAPH mydb").unwrap();
+    db.execute("INSERT (:Widget {name: 'Gadget'})").unwrap();
+
+    // execute_language should also see the graph context
+    let result = db
+        .execute_language("MATCH (n:Widget) RETURN n", "gql", None)
+        .unwrap();
+    assert_eq!(
+        result.row_count(),
+        1,
+        "execute_language should respect graph context"
+    );
+
+    // Default should be empty
+    db.execute("USE GRAPH default").unwrap();
+    let result = db
+        .execute_language("MATCH (n) RETURN n", "gql", None)
+        .unwrap();
+    assert_eq!(result.row_count(), 0);
+}
+
+// ── Concurrent named graph isolation (T3-19) ────────────────────
+
+#[test]
+fn concurrent_sessions_on_different_graphs() {
+    let db = db();
+    db.execute("CREATE GRAPH alpha").unwrap();
+    db.execute("CREATE GRAPH beta").unwrap();
+
+    let s1 = db.session();
+    let s2 = db.session();
+
+    s1.execute("USE GRAPH alpha").unwrap();
+    s2.execute("USE GRAPH beta").unwrap();
+
+    s1.execute("INSERT (:Item {name: 'widget'})").unwrap();
+    s2.execute("INSERT (:Item {name: 'gadget'})").unwrap();
+
+    let r1 = s1.execute("MATCH (i:Item) RETURN i.name").unwrap();
+    let r2 = s2.execute("MATCH (i:Item) RETURN i.name").unwrap();
+
+    assert_eq!(r1.rows.len(), 1, "alpha should have 1 item");
+    assert_eq!(r2.rows.len(), 1, "beta should have 1 item");
+
+    // Cross-check: each graph has its own data
+    assert_eq!(
+        r1.rows[0][0],
+        grafeo_common::types::Value::String("widget".into())
+    );
+    assert_eq!(
+        r2.rows[0][0],
+        grafeo_common::types::Value::String("gadget".into())
+    );
 }

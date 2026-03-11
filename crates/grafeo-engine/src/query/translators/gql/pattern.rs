@@ -359,6 +359,13 @@ impl GqlTranslator {
             input: input.map(Box::new),
         });
 
+        // Add hasLabel filters for additional colon-syntax labels (AND semantics).
+        // First label is used in NodeScan for scan-time filtering; remaining
+        // labels are checked via post-scan Filter.
+        if node.labels.len() > 1 {
+            plan = Self::add_extra_label_filters(plan, &variable, &node.labels[1..]);
+        }
+
         // Add label expression filter for complex IS expressions
         if let Some(ref label_expr) = node.label_expression {
             // Only add filter for non-simple expressions (simple Label already used in NodeScan)
@@ -429,6 +436,29 @@ impl GqlTranslator {
         }
     }
 
+    /// Wraps a plan with AND-combined `hasLabel` filters for extra labels beyond the
+    /// first (which is already used in `NodeScan` for scan-time filtering).
+    fn add_extra_label_filters(
+        mut plan: LogicalOperator,
+        variable: &str,
+        extra_labels: &[String],
+    ) -> LogicalOperator {
+        for label in extra_labels {
+            plan = wrap_filter(
+                plan,
+                LogicalExpression::FunctionCall {
+                    name: "hasLabel".into(),
+                    args: vec![
+                        LogicalExpression::Variable(variable.to_string()),
+                        LogicalExpression::Literal(Value::String(label.clone().into())),
+                    ],
+                    distinct: false,
+                },
+            );
+        }
+        plan
+    }
+
     /// Builds a predicate expression for property filters like {name: 'Alix', age: 30}.
     pub(super) fn build_property_predicate(
         &self,
@@ -475,6 +505,11 @@ impl GqlTranslator {
             label: source_label,
             input: input.map(Box::new),
         });
+
+        // Add hasLabel filters for additional source labels (AND semantics)
+        if path.source.labels.len() > 1 {
+            plan = Self::add_extra_label_filters(plan, &source_var, &path.source.labels[1..]);
+        }
 
         // Add filter for source node properties (e.g., {id: 'a'})
         if !path.source.properties.is_empty() {
@@ -594,18 +629,20 @@ impl GqlTranslator {
                 let predicate = Self::translate_label_expression(&target_var, label_expr);
                 plan = wrap_filter(plan, predicate);
             } else if !edge.target.labels.is_empty() {
-                let label = edge.target.labels[0].clone();
-                plan = wrap_filter(
-                    plan,
-                    LogicalExpression::FunctionCall {
-                        name: "hasLabel".into(),
-                        args: vec![
-                            LogicalExpression::Variable(target_var.clone()),
-                            LogicalExpression::Literal(Value::from(label)),
-                        ],
-                        distinct: false,
-                    },
-                );
+                // Filter for ALL target labels (AND semantics per ISO GQL)
+                for target_label in &edge.target.labels {
+                    plan = wrap_filter(
+                        plan,
+                        LogicalExpression::FunctionCall {
+                            name: "hasLabel".into(),
+                            args: vec![
+                                LogicalExpression::Variable(target_var.clone()),
+                                LogicalExpression::Literal(Value::from(target_label.clone())),
+                            ],
+                            distinct: false,
+                        },
+                    );
+                }
             }
 
             // Add element WHERE clause for target node

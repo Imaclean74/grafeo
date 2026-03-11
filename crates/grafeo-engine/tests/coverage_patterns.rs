@@ -9,6 +9,7 @@
 use grafeo_common::types::Value;
 use grafeo_engine::GrafeoDB;
 
+/// Creates a chain graph: 5 nodes (A-E), 4 LINK edges, 1 SHORTCUT edge.
 fn chain_graph() -> GrafeoDB {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
@@ -25,6 +26,14 @@ fn chain_graph() -> GrafeoDB {
     session.create_edge(nc, and, "LINK");
     session.create_edge(and, ne, "LINK");
     session.create_edge(na, nc, "SHORTCUT");
+
+    // Verify setup data
+    assert_eq!(db.node_count(), 5, "chain_graph: expected 5 nodes");
+    assert_eq!(
+        db.edge_count(),
+        5,
+        "chain_graph: expected 5 edges (4 LINK + 1 SHORTCUT)"
+    );
 
     db
 }
@@ -43,7 +52,7 @@ fn test_variable_length_1_to_3() {
              RETURN b.name AS name ORDER BY name",
         )
         .unwrap();
-    assert!(r.rows.len() >= 3);
+    assert_eq!(r.rows.len(), 3, "1..3 hops from A via LINK: B, C, D");
     let names: Vec<&str> = r
         .rows
         .iter()
@@ -52,9 +61,11 @@ fn test_variable_length_1_to_3() {
             _ => None,
         })
         .collect();
-    assert!(names.contains(&"B"));
-    assert!(names.contains(&"C"));
-    assert!(names.contains(&"D"));
+    assert_eq!(
+        names,
+        vec!["B", "C", "D"],
+        "ORDER BY name should sort alphabetically"
+    );
 }
 
 #[test]
@@ -81,7 +92,11 @@ fn test_variable_length_unbounded() {
              RETURN b.name AS name ORDER BY name",
         )
         .unwrap();
-    assert!(r.rows.len() >= 4);
+    assert_eq!(
+        r.rows.len(),
+        4,
+        "Unbounded hops from A via LINK: B, C, D, E"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -89,16 +104,67 @@ fn test_variable_length_unbounded() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_multi_label_match() {
+fn test_multi_label_match_and_semantics() {
     let db = chain_graph();
     let s = db.session();
-    // :Node:Special matches nodes with either label (union semantics).
-    // Node E has both labels, so match on :Special (unique to E) to verify multi-label nodes work.
+    // :Node:Special should match only nodes with BOTH labels (AND semantics per ISO GQL).
+    // Only node E has both "Node" and "Special" labels.
     let r = s
-        .execute("MATCH (n:Special) RETURN n.name AS name")
+        .execute("MATCH (n:Node:Special) RETURN n.name AS name")
         .unwrap();
     assert_eq!(r.rows.len(), 1);
     assert_eq!(r.rows[0][0], Value::String("E".into()));
+}
+
+#[test]
+fn test_multi_label_no_match_when_missing_label() {
+    let db = chain_graph();
+    let s = db.session();
+    // No node has both "Special" and "Nonexistent", should return 0 rows.
+    let r = s
+        .execute("MATCH (n:Special:Nonexistent) RETURN n.name AS name")
+        .unwrap();
+    assert_eq!(r.rows.len(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Label predicate in WHERE clause: WHERE n:Label
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_where_label_predicate() {
+    let db = chain_graph();
+    let s = db.session();
+    // WHERE n:Special filters to only nodes with the Special label
+    let r = s
+        .execute("MATCH (n) WHERE n:Special RETURN n.name AS name")
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("E".into()));
+}
+
+#[test]
+fn test_where_label_predicate_multi() {
+    let db = chain_graph();
+    let s = db.session();
+    // WHERE n:Node:Special checks both labels (AND semantics)
+    let r = s
+        .execute("MATCH (n) WHERE n:Node:Special RETURN n.name AS name")
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("E".into()));
+}
+
+#[test]
+fn test_where_label_predicate_with_and() {
+    let db = chain_graph();
+    let s = db.session();
+    // Combine label predicate with property filter
+    let r = s
+        .execute("MATCH (n) WHERE n:Node AND n.name = 'A' RETURN n.name AS name")
+        .unwrap();
+    assert_eq!(r.rows.len(), 1);
+    assert_eq!(r.rows[0][0], Value::String("A".into()));
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +178,7 @@ fn test_undirected_edge() {
     let r = s
         .execute("MATCH (a:Node {name: 'B'})-[:LINK]-(b:Node) RETURN b.name AS name ORDER BY name")
         .unwrap();
-    assert!(r.rows.len() >= 2);
+    assert_eq!(r.rows.len(), 2, "Undirected LINK from B: A and C");
 }
 
 // ---------------------------------------------------------------------------

@@ -598,6 +598,18 @@ impl ChunkedAdjacency {
         }
     }
 
+    /// Restores a previously deleted edge (removes it from the deleted set).
+    ///
+    /// Used during transaction rollback to undo a soft-delete.
+    pub fn unmark_deleted(&self, src: NodeId, edge_id: EdgeId) {
+        let mut lists = self.lists.write();
+        if let Some(list) = lists.get_mut(&src)
+            && list.deleted.remove(&edge_id)
+        {
+            self.deleted_count.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
     /// Returns all neighbors of a node.
     ///
     /// Note: This allocates a Vec to collect neighbors while the internal lock

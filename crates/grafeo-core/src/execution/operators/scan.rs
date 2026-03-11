@@ -79,9 +79,13 @@ impl ScanOperator {
             return;
         }
 
-        // Get nodes, using versioned method if tx context is set
+        // Get nodes. When we have transaction context, use all_node_ids()
+        // to include uncommitted/PENDING versions (nodes_by_label already
+        // returns unfiltered IDs from the label index, but node_ids()
+        // pre-filters by epoch which excludes PENDING nodes).
         let all_ids = match &self.label {
             Some(label) => self.store.nodes_by_label(label),
+            None if self.viewing_epoch.is_some() => self.store.all_node_ids(),
             None => self.store.node_ids(),
         };
 
@@ -215,16 +219,15 @@ mod tests {
     fn test_scan_with_mvcc_context() {
         let store: Arc<dyn GraphStoreMut> = Arc::new(LpgStore::new().unwrap());
 
-        // Create nodes at epoch 1
+        // Create nodes at epoch 1 (using SYSTEM tx so they get real epochs,
+        // not PENDING; this test is about epoch-based time-travel scanning).
         let epoch1 = EpochId::new(1);
-        let tx1 = TransactionId::new(1);
-        store.create_node_versioned(&["Person"], epoch1, tx1);
-        store.create_node_versioned(&["Person"], epoch1, tx1);
+        store.create_node_versioned(&["Person"], epoch1, TransactionId::SYSTEM);
+        store.create_node_versioned(&["Person"], epoch1, TransactionId::SYSTEM);
 
         // Create a node at epoch 5
         let epoch5 = EpochId::new(5);
-        let tx2 = TransactionId::new(2);
-        store.create_node_versioned(&["Person"], epoch5, tx2);
+        store.create_node_versioned(&["Person"], epoch5, TransactionId::SYSTEM);
 
         // Scan at epoch 3 should see only the first 2 nodes (created at epoch 1)
         let mut scan = ScanOperator::with_label(store.clone() as Arc<dyn GraphStore>, "Person")

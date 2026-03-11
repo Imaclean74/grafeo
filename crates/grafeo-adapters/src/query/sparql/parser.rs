@@ -2547,4 +2547,37 @@ mod tests {
             panic!("expected SELECT query");
         }
     }
+
+    // --- Error tests ---
+
+    #[test]
+    fn test_parse_empty_input_fails() {
+        let result = parse("");
+        assert!(result.is_err(), "Empty input should fail");
+    }
+
+    #[test]
+    fn test_parse_truncated_query_fails() {
+        let result = parse("SELECT ?x WHERE");
+        assert!(result.is_err(), "Truncated query should fail");
+    }
+
+    #[test]
+    fn test_parse_unclosed_brace_fails() {
+        let result = parse("SELECT ?x WHERE { ?x ?y ?z");
+        assert!(result.is_err(), "Unclosed brace should fail");
+    }
+
+    #[test]
+    fn test_parse_missing_variable_marker_fails() {
+        // Variables must start with ? or $
+        let result = parse("SELECT x WHERE { x y z }");
+        assert!(result.is_err(), "Missing variable marker should fail");
+    }
+
+    #[test]
+    fn test_parse_invalid_keyword_fails() {
+        let result = parse("SELECTX ?x WHERE { ?x ?y ?z }");
+        assert!(result.is_err(), "Invalid keyword should fail");
+    }
 }

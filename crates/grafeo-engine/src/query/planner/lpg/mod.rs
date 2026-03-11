@@ -97,6 +97,8 @@ pub struct Planner {
     profiling: std::cell::Cell<bool>,
     /// Profile entries collected during planning (post-order).
     profile_entries: std::cell::RefCell<Vec<crate::query::profile::ProfileEntry>>,
+    /// Optional write tracker for recording writes during mutations.
+    write_tracker: Option<grafeo_core::execution::operators::SharedWriteTracker>,
 }
 
 impl Planner {
@@ -122,6 +124,7 @@ impl Planner {
             group_list_variables: std::cell::RefCell::new(std::collections::HashSet::new()),
             profiling: std::cell::Cell::new(false),
             profile_entries: std::cell::RefCell::new(Vec::new()),
+            write_tracker: None,
         }
     }
 
@@ -133,6 +136,18 @@ impl Planner {
         transaction_id: Option<TransactionId>,
         viewing_epoch: EpochId,
     ) -> Self {
+        use crate::transaction::TransactionWriteTracker;
+
+        // Create write tracker when there's an active transaction
+        let write_tracker: Option<grafeo_core::execution::operators::SharedWriteTracker> =
+            if transaction_id.is_some() {
+                Some(Arc::new(TransactionWriteTracker::new(Arc::clone(
+                    &transaction_manager,
+                ))))
+            } else {
+                None
+            };
+
         Self {
             store,
             transaction_manager: Some(transaction_manager),
@@ -148,6 +163,7 @@ impl Planner {
             group_list_variables: std::cell::RefCell::new(std::collections::HashSet::new()),
             profiling: std::cell::Cell::new(false),
             profile_entries: std::cell::RefCell::new(Vec::new()),
+            write_tracker,
         }
     }
 
@@ -536,7 +552,7 @@ impl Planner {
             LogicalOperator::CallProcedure(_) => Err(Error::Internal(
                 "CALL procedures require the 'algos' feature".to_string(),
             )),
-            LogicalOperator::ParameterScan(param_scan) => {
+            LogicalOperator::ParameterScan(_param_scan) => {
                 let state = self
                     .correlated_param_state
                     .borrow()
@@ -546,7 +562,9 @@ impl Planner {
                             "ParameterScan without correlated Apply context".to_string(),
                         )
                     })?;
-                let columns = param_scan.columns.clone();
+                // Use the actual column names from the ParameterState (which may
+                // have been expanded from "*" to real variable names in plan_apply)
+                let columns = state.columns.clone();
                 let operator: Box<dyn Operator> = Box::new(ParameterScanOperator::new(state));
                 Ok((operator, columns))
             }

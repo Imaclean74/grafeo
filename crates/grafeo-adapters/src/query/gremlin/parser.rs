@@ -1585,4 +1585,36 @@ mod tests {
         assert!(matches!(&stmt.steps[0], Step::Property(_)));
         assert!(matches!(&stmt.steps[1], Step::As(_)));
     }
+
+    // --- Error tests ---
+
+    #[test]
+    fn test_parse_empty_input_fails() {
+        let result = Parser::new("").parse();
+        assert!(result.is_err(), "Empty input should fail");
+    }
+
+    #[test]
+    fn test_parse_missing_g_prefix_fails() {
+        let result = Parser::new("V()").parse();
+        assert!(result.is_err(), "Missing 'g.' prefix should fail");
+    }
+
+    #[test]
+    fn test_parse_unclosed_paren_fails() {
+        let result = Parser::new("g.V(").parse();
+        assert!(result.is_err(), "Unclosed parenthesis should fail");
+    }
+
+    #[test]
+    fn test_parse_invalid_step_name_fails() {
+        let result = Parser::new("g.V().notAStep()").parse();
+        assert!(result.is_err(), "Unknown step name should fail");
+    }
+
+    #[test]
+    fn test_parse_garbage_input_fails() {
+        let result = Parser::new("@#$%^&*").parse();
+        assert!(result.is_err(), "Garbage input should fail");
+    }
 }
