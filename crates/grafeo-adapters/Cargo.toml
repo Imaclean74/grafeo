@@ -56,11 +56,12 @@ graphql = []                  # GraphQL parser (spec-compliant)
 sql-pgq = ["gql"]             # SQL/PGQ parser (SQL:2023 GRAPH_TABLE)
 rdf = ["grafeo-core/rdf"]    # RDF graph model support
 wal = ["memmap2", "crc32fast", "tokio", "crossbeam"]  # Write-ahead log storage (requires filesystem)
+grafeo-file = ["wal"]  # Single-file .grafeo format with sidecar WAL
 parallel = ["rayon", "grafeo-core/parallel"]  # Parallel algorithms (rayon)
 algos = []  # Graph algorithm plugin (SSSP, PageRank, centrality, community detection, etc.)
 # Convenience groups
 languages = ["gql", "cypher", "sparql", "gremlin", "graphql", "sql-pgq"]  # All query language parsers
-full = ["languages", "rdf", "wal", "parallel", "algos"]
+full = ["languages", "rdf", "wal", "grafeo-file", "parallel", "algos"]
 
 # Testing utilities (zero overhead when disabled)
 testing-crash-injection = ["grafeo-core/testing-crash-injection"]  # Crash injection for recovery testing

@@ -563,6 +563,18 @@ impl Session {
         use grafeo_adapters::query::gql::ast::{SessionCommand, TransactionIsolationLevel};
         use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind};
 
+        // Block DDL in read-only transactions (ISO/IEC 39075 Section 8)
+        if *self.read_only_tx.lock() {
+            match &cmd {
+                SessionCommand::CreateGraph { .. } | SessionCommand::DropGraph { .. } => {
+                    return Err(Error::Transaction(
+                        grafeo_common::utils::error::TransactionError::ReadOnly,
+                    ));
+                }
+                _ => {} // Session state + transaction control allowed
+            }
+        }
+
         match cmd {
             SessionCommand::CreateGraph {
                 name,

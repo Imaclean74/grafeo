@@ -3039,17 +3039,21 @@ impl ExpressionPredicate {
     ) -> Option<Value> {
         if let Some(test_expr) = operand {
             // Simple CASE: CASE expr WHEN val1 THEN res1 ...
-            let test_val = self.eval_expr(test_expr, chunk, row)?;
+            // Use unwrap_or(Null) so a NULL test expression falls through to ELSE
+            // rather than short-circuiting the entire CASE (NULL != anything).
+            let test_val = self.eval_expr(test_expr, chunk, row).unwrap_or(Value::Null);
             for (when_expr, then_expr) in when_clauses {
-                let when_val = self.eval_expr(when_expr, chunk, row)?;
+                let when_val = self.eval_expr(when_expr, chunk, row).unwrap_or(Value::Null);
                 if Self::values_equal(&test_val, &when_val) {
                     return self.eval_expr(then_expr, chunk, row);
                 }
             }
         } else {
             // Searched CASE: CASE WHEN cond1 THEN res1 ...
+            // Use unwrap_or(Null) so a NULL/UNKNOWN condition falls through
+            // to the next WHEN or ELSE (three-valued logic: only TRUE matches).
             for (when_expr, then_expr) in when_clauses {
-                let when_val = self.eval_expr(when_expr, chunk, row)?;
+                let when_val = self.eval_expr(when_expr, chunk, row).unwrap_or(Value::Null);
                 if when_val.as_bool() == Some(true) {
                     return self.eval_expr(then_expr, chunk, row);
                 }

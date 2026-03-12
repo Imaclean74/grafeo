@@ -89,7 +89,6 @@ mod read_only {
     }
 
     #[test]
-    #[ignore = "DDL via session commands bypasses read_only_tx check"]
     fn read_only_blocks_ddl() {
         let db = db();
         let session = db.session();

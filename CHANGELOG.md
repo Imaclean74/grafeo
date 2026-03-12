@@ -8,8 +8,15 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 - **Introspection functions**: `RETURN CURRENT_SCHEMA`, `RETURN CURRENT_GRAPH`, `RETURN info()`, `RETURN schema()` for querying session state and database metadata from within GQL
 
+### Testing
+
+- **Seam tests for spec compliance** (139 new tests): systematic coverage of feature boundaries and negative paths targeting ISO/IEC 39075 sections 4.7.3, 7.1, 7.2, 8, 13, 16, 20.9, and 21; covers session state independence, transaction enforcement, DML edge cases, pattern matching boundaries, aggregate NULL semantics, CASE expressions, type coercion, and cross-graph isolation; uncovered 3 spec deviations (DDL in READ ONLY transactions, SUM on empty sets, CASE ELSE with NULL comparisons)
+
 ### Fixed
 
+- **DDL in READ ONLY transactions** (ISO/IEC 39075 Section 8): `CREATE GRAPH` and `DROP GRAPH` are now correctly blocked inside `START TRANSACTION READ ONLY`; previously they bypassed the read-only check because they were dispatched as session commands rather than schema commands
+- **SUM on empty set returns NULL** (ISO/IEC 39075 Section 20.9): `SUM()` over zero rows now returns `NULL` instead of `0`, matching the behavior of `AVG`, `MIN`, and `MAX` on empty sets
+- **CASE WHEN with NULL conditions** (ISO/IEC 39075 Section 21): `CASE WHEN` expressions where the condition evaluates to NULL (e.g. comparing a missing property) now correctly fall through to `ELSE` instead of returning NULL for the entire expression
 - **`SESSION SET SCHEMA` / `SESSION SET GRAPH` separation** (ISO/IEC 39075 Section 7.1): session schema and session graph are now independent fields per the GQL standard; `SESSION SET SCHEMA` sets the session schema (validating against registered schemas), `SESSION SET GRAPH` sets the session graph (resolved within the current schema), and `SESSION RESET` supports independent targets (`SESSION RESET SCHEMA`, `SESSION RESET GRAPH`, `SESSION RESET TIME ZONE`, `SESSION RESET PARAMETERS`) per Section 7.2; graphs created within a schema are stored with schema-scoped keys for cross-schema isolation; added `SHOW SCHEMAS` command and `DROP SCHEMA` now enforces "schema must be empty" per Section 12.3
 - **`COUNT(*)` parsing** (ISO/IEC 39075 Section 20.9): `COUNT(*)` is now correctly parsed as a zero-argument aggregate counting all rows, rather than failing on the `*` token
 

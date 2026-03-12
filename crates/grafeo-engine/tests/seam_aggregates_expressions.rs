@@ -309,7 +309,6 @@ mod case_expressions {
     }
 
     #[test]
-    #[ignore = "CASE WHEN with NULL property comparison returns NULL instead of falling through to ELSE"]
     fn case_else_default() {
         let db = db();
         let session = db.session();

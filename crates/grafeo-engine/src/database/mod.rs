@@ -29,6 +29,8 @@ use std::sync::atomic::AtomicUsize;
 
 use parking_lot::RwLock;
 
+#[cfg(feature = "grafeo-file")]
+use grafeo_adapters::storage::file::GrafeoFileManager;
 #[cfg(feature = "wal")]
 use grafeo_adapters::storage::wal::{
     DurabilityMode as WalDurabilityMode, LpgWal, WalConfig, WalRecord, WalRecovery,
@@ -103,6 +105,9 @@ pub struct GrafeoDB {
     #[cfg(feature = "embed")]
     pub(super) embedding_models:
         RwLock<hashbrown::HashMap<String, Arc<dyn crate::embedding::EmbeddingModel>>>,
+    /// Single-file database manager (when using `.grafeo` format).
+    #[cfg(feature = "grafeo-file")]
+    pub(super) file_manager: Option<Arc<GrafeoFileManager>>,
     /// External graph store (when using with_store()).
     /// When set, sessions route queries through this store instead of the built-in LpgStore.
     pub(super) external_store: Option<Arc<dyn GraphStoreMut>>,
@@ -211,17 +216,88 @@ impl GrafeoDB {
         // Create catalog early so WAL replay can restore schema definitions
         let catalog = Arc::new(Catalog::new());
 
-        // Initialize WAL if persistence is enabled
+        // --- Single-file format (.grafeo) ---
+        #[cfg(feature = "grafeo-file")]
+        let file_manager: Option<Arc<GrafeoFileManager>> = if config.wal_enabled {
+            if let Some(ref db_path) = config.path {
+                if Self::should_use_single_file(db_path, config.storage_format) {
+                    let fm = if db_path.exists() && db_path.is_file() {
+                        GrafeoFileManager::open(db_path)?
+                    } else if !db_path.exists() {
+                        GrafeoFileManager::create(db_path)?
+                    } else {
+                        // Path exists but is not a file (directory, etc.)
+                        return Err(grafeo_common::utils::error::Error::Internal(format!(
+                            "path exists but is not a file: {}",
+                            db_path.display()
+                        )));
+                    };
+
+                    // Load snapshot data from the file
+                    let snapshot_data = fm.read_snapshot()?;
+                    if !snapshot_data.is_empty() {
+                        Self::apply_snapshot_data(
+                            &store,
+                            &catalog,
+                            #[cfg(feature = "rdf")]
+                            &rdf_store,
+                            &snapshot_data,
+                        )?;
+                    }
+
+                    // Recover sidecar WAL if present
+                    if fm.has_sidecar_wal() {
+                        let recovery = WalRecovery::new(fm.sidecar_wal_path());
+                        let records = recovery.recover()?;
+                        Self::apply_wal_records(
+                            &store,
+                            &catalog,
+                            #[cfg(feature = "rdf")]
+                            &rdf_store,
+                            &records,
+                        )?;
+                    }
+
+                    Some(Arc::new(fm))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Determine whether to use the WAL directory path (legacy) or sidecar
         #[cfg(feature = "wal")]
         let wal = if config.wal_enabled {
             if let Some(ref db_path) = config.path {
-                // Create database directory if it doesn't exist
-                std::fs::create_dir_all(db_path)?;
+                // When using single-file format, the WAL is a sidecar directory
+                #[cfg(feature = "grafeo-file")]
+                let wal_path = if let Some(ref fm) = file_manager {
+                    let p = fm.sidecar_wal_path();
+                    std::fs::create_dir_all(&p)?;
+                    p
+                } else {
+                    // Legacy: WAL inside the database directory
+                    std::fs::create_dir_all(db_path)?;
+                    db_path.join("wal")
+                };
 
-                let wal_path = db_path.join("wal");
+                #[cfg(not(feature = "grafeo-file"))]
+                let wal_path = {
+                    std::fs::create_dir_all(db_path)?;
+                    db_path.join("wal")
+                };
 
-                // Check if WAL exists and recover if needed
-                if wal_path.exists() {
+                // For legacy WAL directory format, check if WAL exists and recover
+                #[cfg(feature = "grafeo-file")]
+                let is_single_file = file_manager.is_some();
+                #[cfg(not(feature = "grafeo-file"))]
+                let is_single_file = false;
+
+                if !is_single_file && wal_path.exists() {
                     let recovery = WalRecovery::new(&wal_path);
                     let records = recovery.recover()?;
                     Self::apply_wal_records(
@@ -283,6 +359,8 @@ impl GrafeoDB {
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
             #[cfg(feature = "embed")]
             embedding_models: RwLock::new(hashbrown::HashMap::new()),
+            #[cfg(feature = "grafeo-file")]
+            file_manager,
             external_store: None,
             current_graph: RwLock::new(None),
         })
@@ -350,6 +428,8 @@ impl GrafeoDB {
             cdc_log: Arc::new(crate::cdc::CdcLog::new()),
             #[cfg(feature = "embed")]
             embedding_models: RwLock::new(hashbrown::HashMap::new()),
+            #[cfg(feature = "grafeo-file")]
+            file_manager: None,
             external_store: Some(store),
             current_graph: RwLock::new(None),
         })
@@ -699,6 +779,55 @@ impl GrafeoDB {
     }
 
     // =========================================================================
+    // Single-file format helpers
+    // =========================================================================
+
+    /// Returns `true` if the given path should use single-file format.
+    #[cfg(feature = "grafeo-file")]
+    fn should_use_single_file(
+        path: &std::path::Path,
+        configured: crate::config::StorageFormat,
+    ) -> bool {
+        use crate::config::StorageFormat;
+        match configured {
+            StorageFormat::SingleFile => true,
+            StorageFormat::WalDirectory => false,
+            StorageFormat::Auto => {
+                // Existing file: check magic bytes
+                if path.is_file() {
+                    if let Ok(mut f) = std::fs::File::open(path) {
+                        use std::io::Read;
+                        let mut magic = [0u8; 4];
+                        if f.read_exact(&mut magic).is_ok()
+                            && magic == grafeo_adapters::storage::file::MAGIC
+                        {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                // Existing directory: legacy format
+                if path.is_dir() {
+                    return false;
+                }
+                // New path: check extension
+                path.extension().is_some_and(|ext| ext == "grafeo")
+            }
+        }
+    }
+
+    /// Applies snapshot data (from a `.grafeo` file) to restore the store.
+    #[cfg(feature = "grafeo-file")]
+    fn apply_snapshot_data(
+        store: &Arc<LpgStore>,
+        _catalog: &crate::catalog::Catalog,
+        #[cfg(feature = "rdf")] _rdf_store: &Arc<RdfStore>,
+        data: &[u8],
+    ) -> Result<()> {
+        persistence::load_snapshot_into_store(store, data)
+    }
+
+    // =========================================================================
     // Session & Configuration
     // =========================================================================
 
@@ -933,9 +1062,28 @@ impl GrafeoDB {
             return Ok(());
         }
 
-        // Commit and checkpoint WAL
+        // For single-file format: checkpoint to .grafeo file, then clean up sidecar WAL.
+        // We must do this BEFORE the WAL close path because checkpoint_to_file
+        // removes the sidecar WAL directory.
+        #[cfg(feature = "grafeo-file")]
+        let is_single_file = self.file_manager.is_some();
+        #[cfg(not(feature = "grafeo-file"))]
+        let is_single_file = false;
+
+        #[cfg(feature = "grafeo-file")]
+        if let Some(ref fm) = self.file_manager {
+            // Flush WAL first so all records are on disk before we snapshot
+            #[cfg(feature = "wal")]
+            if let Some(ref wal) = self.wal {
+                wal.sync()?;
+            }
+            self.checkpoint_to_file(fm)?;
+            fm.remove_sidecar_wal()?;
+        }
+
+        // Commit and checkpoint WAL (legacy directory format only)
         #[cfg(feature = "wal")]
-        if let Some(ref wal) = self.wal {
+        if !is_single_file && let Some(ref wal) = self.wal {
             let epoch = self.store.current_epoch();
 
             // Use the last assigned transaction ID, or create a checkpoint-only tx
@@ -975,6 +1123,39 @@ impl GrafeoDB {
             wal.log(record)?;
         }
         Ok(())
+    }
+
+    /// Writes the current database snapshot to the `.grafeo` file.
+    ///
+    /// Does NOT remove the sidecar WAL: callers that want to clean up
+    /// the sidecar (e.g. `close()`) should call `fm.remove_sidecar_wal()`
+    /// separately after this returns.
+    #[cfg(feature = "grafeo-file")]
+    fn checkpoint_to_file(&self, fm: &GrafeoFileManager) -> Result<()> {
+        let snapshot_data = self.export_snapshot()?;
+        let epoch = self.store.current_epoch();
+        let transaction_id = self
+            .transaction_manager
+            .last_assigned_transaction_id()
+            .map_or(0, |t| t.0);
+        let node_count = self.store.node_count() as u64;
+        let edge_count = self.store.edge_count() as u64;
+
+        fm.write_snapshot(
+            &snapshot_data,
+            epoch.0,
+            transaction_id,
+            node_count,
+            edge_count,
+        )?;
+        Ok(())
+    }
+
+    /// Returns the file manager if using single-file format.
+    #[cfg(feature = "grafeo-file")]
+    #[must_use]
+    pub fn file_manager(&self) -> Option<&Arc<GrafeoFileManager>> {
+        self.file_manager.as_ref()
     }
 }
 

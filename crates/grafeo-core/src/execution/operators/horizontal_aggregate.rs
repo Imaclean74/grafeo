@@ -403,13 +403,12 @@ mod tests {
 
         let result = op.next().unwrap().unwrap();
         assert_eq!(result.row_count(), 1);
-        // Empty list sum should finalize to 0 (SumInt initial state)
+        // Empty list sum should finalize to NULL (ISO/IEC 39075 Section 20.9)
         let agg_val = result.column(1).unwrap().get_value(0);
-        match agg_val {
-            Some(Value::Int64(0)) => {}
-            Some(Value::Float64(v)) if v.abs() < 0.001 => {}
-            other => panic!("Expected 0, got {other:?}"),
-        }
+        assert!(
+            matches!(agg_val, Some(Value::Null)),
+            "Expected Null, got {agg_val:?}"
+        );
     }
 
     #[test]

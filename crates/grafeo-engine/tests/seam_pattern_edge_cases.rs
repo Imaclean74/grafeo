@@ -63,7 +63,6 @@ mod empty_result_aggregation {
     }
 
     #[test]
-    #[ignore = "SUM on empty set returns Int64(0) instead of NULL per ISO/IEC 39075 Section 20.9"]
     fn sum_on_empty_returns_null() {
         let db = db();
         let session = db.session();

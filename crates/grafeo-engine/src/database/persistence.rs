@@ -194,6 +194,65 @@ fn populate_rdf_store(store: &grafeo_core::graph::rdf::RdfStore, triples: &[Snap
     }
 }
 
+// =========================================================================
+// Snapshot deserialization helpers (used by single-file format)
+// =========================================================================
+
+/// Decodes snapshot bytes (v2 or v1) and populates a store.
+///
+/// Tries v2 first, falls back to v1. Returns an error if neither format works.
+#[cfg(feature = "grafeo-file")]
+pub(super) fn load_snapshot_into_store(
+    store: &std::sync::Arc<grafeo_core::graph::lpg::LpgStore>,
+    data: &[u8],
+) -> grafeo_common::utils::error::Result<()> {
+    use grafeo_common::utils::error::Error;
+
+    let config = bincode::config::standard();
+    if let Ok((snapshot, _)) = bincode::serde::decode_from_slice::<SnapshotV2, _>(data, config) {
+        populate_store_from_snapshot_ref(store, &snapshot.nodes, &snapshot.edges)?;
+        for graph in &snapshot.named_graphs {
+            store
+                .create_graph(&graph.name)
+                .map_err(|e| Error::Internal(e.to_string()))?;
+            if let Some(graph_store) = store.graph(&graph.name) {
+                populate_store_from_snapshot_ref(&graph_store, &graph.nodes, &graph.edges)?;
+            }
+        }
+        Ok(())
+    } else if let Ok((snapshot, _)) = bincode::serde::decode_from_slice::<Snapshot, _>(data, config)
+    {
+        populate_store_from_snapshot_ref(store, &snapshot.nodes, &snapshot.edges)
+    } else {
+        Err(Error::Serialization(
+            "failed to decode snapshot data from .grafeo file".into(),
+        ))
+    }
+}
+
+/// Populates a store from snapshot refs (borrowed, for single-file loading).
+#[cfg(feature = "grafeo-file")]
+fn populate_store_from_snapshot_ref(
+    store: &grafeo_core::graph::lpg::LpgStore,
+    nodes: &[SnapshotNode],
+    edges: &[SnapshotEdge],
+) -> grafeo_common::utils::error::Result<()> {
+    for node in nodes {
+        let label_refs: Vec<&str> = node.labels.iter().map(|s| s.as_str()).collect();
+        store.create_node_with_id(node.id, &label_refs)?;
+        for (key, value) in &node.properties {
+            store.set_node_property(node.id, key, value.clone());
+        }
+    }
+    for edge in edges {
+        store.create_edge_with_id(edge.id, edge.src, edge.dst, &edge.edge_type)?;
+        for (key, value) in &edge.properties {
+            store.set_edge_property(edge.id, key, value.clone());
+        }
+    }
+    Ok(())
+}
+
 impl super::GrafeoDB {
     // =========================================================================
     // ADMIN API: Persistence Control
@@ -201,6 +260,8 @@ impl super::GrafeoDB {
 
     /// Saves the database to a file path.
     ///
+    /// - If the path ends in `.grafeo`: creates a single-file database
+    /// - Otherwise: creates a WAL directory-backed database at the path
     /// - If in-memory: creates a new persistent database at path
     /// - If file-backed: creates a copy at the new path
     ///
@@ -214,6 +275,12 @@ impl super::GrafeoDB {
     #[cfg(feature = "wal")]
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
+
+        // Single-file format: export snapshot directly to a .grafeo file
+        #[cfg(feature = "grafeo-file")]
+        if path.extension().is_some_and(|ext| ext == "grafeo") {
+            return self.save_as_grafeo_file(path);
+        }
 
         // Create target database with WAL enabled
         let target_config = Config::persistent(path);
@@ -376,6 +443,31 @@ impl super::GrafeoDB {
     /// Returns a new database that is completely independent, including
     /// all named graph data.
     /// Useful for:
+    /// Saves the database to a single `.grafeo` file.
+    #[cfg(feature = "grafeo-file")]
+    fn save_as_grafeo_file(&self, path: &Path) -> Result<()> {
+        use grafeo_adapters::storage::file::GrafeoFileManager;
+
+        let snapshot_data = self.export_snapshot()?;
+        let epoch = self.store.current_epoch();
+        let transaction_id = self
+            .transaction_manager
+            .last_assigned_transaction_id()
+            .map_or(0, |t| t.0);
+        let node_count = self.store.node_count() as u64;
+        let edge_count = self.store.edge_count() as u64;
+
+        let fm = GrafeoFileManager::create(path)?;
+        fm.write_snapshot(
+            &snapshot_data,
+            epoch.0,
+            transaction_id,
+            node_count,
+            edge_count,
+        )?;
+        Ok(())
+    }
+
     /// - Testing modifications without affecting the original
     /// - Faster operations when persistence isn't needed
     ///

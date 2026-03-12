@@ -1,0 +1,12 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.nupkg
+TestResults/
+
+# Native libraries (built from grafeo-c, not checked in)
+grafeo_c.dll
+libgrafeo_c.so
+libgrafeo_c.dylib
