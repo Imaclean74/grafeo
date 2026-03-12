@@ -4,8 +4,11 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.21] - 2026-03-12
 
+C# and Dart bindings, single file database implementation completed and test hardening
+
 ### Added
 
+- **Single-file `.grafeo` database format**: new persistence format stores the entire database in a single file with a sidecar WAL directory during operation (DuckDB-style). Features dual-header crash safety with CRC32 checksums, automatic format detection by file extension, and seamless WAL checkpoint merging. Enable with the `grafeo-file` feature flag (included in `storage` and `full` profiles). Use `GrafeoDB::open("mydb.grafeo")` or `db.save("mydb.grafeo")` to create single-file databases.
 - **Introspection functions**: `RETURN CURRENT_SCHEMA`, `RETURN CURRENT_GRAPH`, `RETURN info()`, `RETURN schema()` for querying session state and database metadata from within GQL
 
 ### Testing
@@ -22,6 +25,8 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.20] - 2026-03-11
 
+Small release bringing new methods to WASM and added SESSION SET validation
+
 ### Added
 
 - **WASM `memoryUsage()` and `importRows()`**: memory introspection and bulk row import (the DataFrame equivalent) now available in WebAssembly bindings
@@ -32,6 +37,8 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 - **`SESSION SET GRAPH` / `SESSION SET SCHEMA` validation**: now errors when the target graph does not exist, matching the behavior of `USE GRAPH`; previously it silently accepted any name and fell back to the default store
 
 ## [0.5.19] - 2026-03-11
+
+GQL translator refactor, new methods and GQL improvements and fixes
 
 ### Added
 
