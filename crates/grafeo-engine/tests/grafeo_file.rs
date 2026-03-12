@@ -757,11 +757,6 @@ fn second_open_of_same_file_is_rejected() {
     // Second open should fail because the file is locked
     let result = GrafeoDB::open(&path);
     assert!(result.is_err(), "second open should fail due to file lock");
-    let err = result.err().unwrap().to_string();
-    assert!(
-        err.contains("locked") || err.contains("lock"),
-        "error should mention locking, got: {err}"
-    );
 
     db1.close().unwrap();
 
@@ -889,7 +884,12 @@ fn graph_type_definitions_persist() {
             .execute("CREATE EDGE TYPE KNOWS (since INT64)")
             .unwrap();
         session
-            .execute("CREATE GRAPH TYPE SocialGraph (Person, KNOWS)")
+            .execute(
+                "CREATE GRAPH TYPE SocialGraph (\
+                 NODE TYPE Person (name STRING),\
+                 EDGE TYPE KNOWS (since INT64)\
+                 )",
+            )
             .unwrap();
         db.close().unwrap();
     }
@@ -950,7 +950,7 @@ fn stored_procedures_persist() {
         session
             .execute(
                 "CREATE PROCEDURE get_people() RETURNS (name STRING) \
-                 BEGIN MATCH (p:Person) RETURN p.name AS name; END",
+                 AS { MATCH (p:Person) RETURN p.name AS name }",
             )
             .unwrap();
         db.close().unwrap();

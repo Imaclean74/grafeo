@@ -1078,7 +1078,16 @@ impl GrafeoDB {
                 wal.sync()?;
             }
             self.checkpoint_to_file(fm)?;
+
+            // Release WAL file handles before removing sidecar directory.
+            // On Windows, open handles prevent directory deletion.
+            #[cfg(feature = "wal")]
+            if let Some(ref wal) = self.wal {
+                wal.close_active_log();
+            }
+
             fm.remove_sidecar_wal()?;
+            fm.close()?;
         }
 
         // Commit and checkpoint WAL (legacy directory format only)
