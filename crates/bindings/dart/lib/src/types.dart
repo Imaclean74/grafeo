@@ -1,5 +1,4 @@
-
-/// Types for Grafeo Dart bindings.
+/// Data types for the Grafeo Dart binding.
 
 import 'dart:ffi';
 
@@ -12,20 +11,88 @@ typedef GrafeoResultPtr = Pointer<Void>;
 /// Opaque pointer to a Grafeo transaction.
 typedef GrafeoTransactionPtr = Pointer<Void>;
 
-/// Opaque pointer to a Grafeo session.
-typedef GrafeoSessionPtr = Pointer<Void>;
+/// Transaction isolation levels.
+enum IsolationLevel {
+  readCommitted(0),
+  snapshotIsolation(1),
+  serializable(2);
 
-/// Vector search result.
+  final int code;
+  const IsolationLevel(this.code);
+}
+
+/// A graph node with an ID, labels, and properties.
+class Node {
+  final int id;
+  final List<String> labels;
+  final Map<String, dynamic> properties;
+
+  const Node(this.id, this.labels, this.properties);
+
+  @override
+  String toString() => 'Node($id, $labels, $properties)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || (other is Node && other.id == id);
+
+  @override
+  int get hashCode => id.hashCode;
+}
+
+/// A graph edge with an ID, type, source/target, and properties.
+class Edge {
+  final int id;
+  final String type;
+  final int sourceId;
+  final int targetId;
+  final Map<String, dynamic> properties;
+
+  const Edge(this.id, this.type, this.sourceId, this.targetId, this.properties);
+
+  @override
+  String toString() =>
+      'Edge($id, $type, $sourceId->$targetId, $properties)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || (other is Edge && other.id == id);
+
+  @override
+  int get hashCode => id.hashCode;
+}
+
+/// The result of a query execution.
+class QueryResult {
+  final List<String> columns;
+  final List<Map<String, dynamic>> rows;
+  final List<Node> nodes;
+  final List<Edge> edges;
+  final double executionTimeMs;
+  final int rowsScanned;
+
+  const QueryResult({
+    required this.columns,
+    required this.rows,
+    required this.nodes,
+    required this.edges,
+    required this.executionTimeMs,
+    required this.rowsScanned,
+  });
+
+  @override
+  String toString() =>
+      'QueryResult(${rows.length} rows, ${nodes.length} nodes, '
+      '${edges.length} edges, ${executionTimeMs.toStringAsFixed(2)}ms)';
+}
+
+/// A single vector search result with a node ID and distance score.
 class VectorResult {
-  /// Node ID
   final int nodeId;
-  
-  /// Distance
   final double distance;
-  
-  /// Create a new VectorResult.
+
   const VectorResult(this.nodeId, this.distance);
-  
+
   @override
   String toString() => 'VectorResult(nodeId: $nodeId, distance: $distance)';
 }

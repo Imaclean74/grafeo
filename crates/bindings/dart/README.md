@@ -1,86 +1,116 @@
 # Grafeo Dart Bindings
 
-Dart bindings for the Grafeo graph database.
+Dart FFI bindings for the [Grafeo](https://grafeo.dev) graph database. Wraps the `grafeo-c` shared library for native performance with a Dart-idiomatic API.
 
 ## Installation
 
-To use Grafeo in your Dart project, add the following dependency to your `pubspec.yaml` file:
-
 ```yaml
 dependencies:
-  grafeo: ^0.1.0
+  grafeo: ^0.5.21
 ```
+
+You also need the `grafeo-c` native library for your platform. See [Building from Source](#building-from-source) below.
 
 ## Quick Start
 
 ```dart
 import 'package:grafeo/grafeo.dart';
 
-void main() async {
-  // Create an in-memory database
-  final db = await GrafeoDatabase.openMemory();
-  
-  // Execute a query
-  await db.execute('CREATE (:Person {name: "Alix", age: 30})');
-  
-  // Query the database
-  final result = await db.execute('MATCH (p:Person) RETURN p.name, p.age');
-  
-  // Process the result
-  print('Query result: $result');
-  
-  // Close the database
-  await db.close();
+void main() {
+  final db = GrafeoDB.memory();
+
+  // Insert data
+  db.execute("INSERT (:Person {name: 'Alix', age: 30})");
+  db.execute("INSERT (:Person {name: 'Gus', age: 28})");
+
+  // Query with parameters
+  final result = db.executeWithParams(
+    r'MATCH (p:Person) WHERE p.age > $minAge RETURN p.name, p.age',
+    {'minAge': 25},
+  );
+
+  for (final row in result.rows) {
+    print('${row['p.name']}: ${row['p.age']}');
+  }
+
+  // Transactions
+  final tx = db.beginTransaction();
+  tx.execute("INSERT (:City {name: 'Amsterdam'})");
+  tx.execute("INSERT (:City {name: 'Berlin'})");
+  tx.commit();
+
+  // CRUD operations
+  final nodeId = db.createNode(['Person'], {'name': 'Vincent'});
+  db.setNodeProperty(nodeId, 'role', 'hitman');
+  final node = db.getNode(nodeId);
+  print(node); // Node(id, [Person], {name: Vincent, role: hitman})
+
+  db.close();
 }
 ```
 
 ## API Reference
 
-### GrafeoDatabase
+### GrafeoDB
 
-#### Static Methods
+| Method | Description |
+|--------|-------------|
+| `GrafeoDB.memory()` | Open an in-memory database |
+| `GrafeoDB.open(path)` | Open a persistent database |
+| `GrafeoDB.version()` | Get the library version string |
+| `execute(query)` | Execute a GQL query |
+| `executeWithParams(query, params)` | Execute with parameters |
+| `executeCypher(query)` | Execute a Cypher query |
+| `executeSparql(query)` | Execute a SPARQL query |
+| `beginTransaction()` | Start an ACID transaction |
+| `createNode(labels, properties)` | Create a node, returns ID |
+| `getNode(id)` | Get a node by ID |
+| `deleteNode(id)` | Delete a node |
+| `createEdge(src, dst, type, props)` | Create an edge, returns ID |
+| `getEdge(id)` | Get an edge by ID |
+| `deleteEdge(id)` | Delete an edge |
+| `setNodeProperty(id, key, value)` | Set a node property |
+| `setEdgeProperty(id, key, value)` | Set an edge property |
+| `nodeCount` | Number of nodes |
+| `edgeCount` | Number of edges |
+| `info()` | Database metadata as JSON map |
+| `close()` | Close and flush |
 
-- `openMemory()`: Open an in-memory database.
-- `open(String path)`: Open a persistent database at the given path.
-- `version()`: Get the Grafeo library version.
+### Transaction
 
-#### Instance Methods
+| Method | Description |
+|--------|-------------|
+| `execute(query)` | Execute within transaction |
+| `executeWithParams(query, params)` | Execute with parameters |
+| `commit()` | Make changes permanent |
+| `rollback()` | Discard changes |
 
-- `execute(String query)`: Execute a GQL query.
-- `executeWithParams(String query, Map<String, dynamic> params)`: Execute a GQL query with parameters.
-- `nodeCount()`: Get the number of nodes in the database.
-- `edgeCount()`: Get the number of edges in the database.
-- `dropVectorIndex(String label, String property)`: Drop a vector index.
-- `rebuildVectorIndex(String label, String property)`: Rebuild a vector index.
-- `mmrSearch(String label, String property, List<double> query, int k, int fetchK, double lambda, int ef)`: Perform an MMR search.
-- `close()`: Close the database and free its resources.
+### Types
+
+- **`QueryResult`**: rows, columns, nodes, edges, executionTimeMs, rowsScanned
+- **`Node`**: id, labels, properties
+- **`Edge`**: id, type, sourceId, targetId, properties
+- **`VectorResult`**: nodeId, distance
 
 ## Building from Source
 
-To build the Grafeo Dart bindings from source, follow these steps:
+```bash
+# Clone and build the native library
+git clone https://github.com/GrafeoDB/grafeo.git
+cd grafeo
+cargo build --release -p grafeo-c
 
-1. Clone the Grafeo repository:
-   ```bash
-   git clone https://github.com/GrafeoDB/grafeo.git
-   cd grafeo
-   ```
+# Copy to the Dart package (or your project)
+# Linux:   cp target/release/libgrafeo_c.so crates/bindings/dart/
+# macOS:   cp target/release/libgrafeo_c.dylib crates/bindings/dart/
+# Windows: copy target\release\grafeo_c.dll crates\bindings\dart\
 
-2. Build the Rust library:
-   ```bash
-   cargo build --release
-   ```
-
-3. Copy the built library to the Dart package directory:
-   - On Windows: `copy target\release\grafeo_c.dll crates\bindings\dart\`
-   - On macOS: `cp target/release/libgrafeo_c.dylib crates/bindings/dart/`
-   - On Linux: `cp target/release/libgrafeo_c.so crates/bindings/dart/`
-
-4. Build the Dart package:
-   ```bash
-   cd dart
-   dart pub get
-   ```
+# Run tests
+cd crates/bindings/dart
+dart pub get
+dart test
+```
 
 ## License
 
-This project is licensed under the Apache-2.0 license. See the [LICENSE](LICENSE) file for details.
+Apache-2.0. See [LICENSE](../../LICENSE) for details.
