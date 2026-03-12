@@ -69,12 +69,13 @@ rdf = ["grafeo-core/rdf", "grafeo-adapters/rdf", "md5", "sha1", "sha2"]  # RDF g
 parallel = ["rayon", "crossbeam", "grafeo-core/parallel", "grafeo-adapters/parallel"]  # Parallel execution
 algos = ["grafeo-adapters/algos"]  # Graph algorithm plugin (SSSP, PageRank, etc.)
 wal = ["grafeo-adapters/wal"]  # Write-ahead log storage
+grafeo-file = ["grafeo-adapters/grafeo-file"]  # Single-file .grafeo format
 spill = ["grafeo-core/spill"]  # Disk spilling for out-of-core execution
 mmap = ["grafeo-core/mmap"]  # File-backed vector storage
 # Convenience groups
 languages = ["gql", "cypher", "sparql", "gremlin", "graphql", "sql-pgq"]  # All query language parsers
 ai = ["vector-index", "text-index", "hybrid-search", "cdc"]  # All AI/RAG features
-storage = ["wal", "spill", "mmap"]  # Persistent storage (WAL, disk spill, memory-mapped files)
+storage = ["wal", "grafeo-file", "spill", "mmap"]  # Persistent storage (WAL, single-file, disk spill, mmap)
 
 # Named profiles (ecosystem-aligned)
 embedded = ["gql", "ai", "algos", "parallel", "regex", "jsonl-import"]  # Python libs, MCP, in-process

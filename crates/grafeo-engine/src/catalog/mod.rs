@@ -395,6 +395,21 @@ impl Catalog {
         }
     }
 
+    /// Checks whether a schema namespace exists.
+    #[must_use]
+    pub fn schema_exists(&self, name: &str) -> bool {
+        self.schema.as_ref().is_some_and(|s| s.schema_exists(name))
+    }
+
+    /// Returns all registered schema namespace names.
+    #[must_use]
+    pub fn schema_names(&self) -> Vec<String> {
+        self.schema
+            .as_ref()
+            .map(|s| s.schema_names())
+            .unwrap_or_default()
+    }
+
     /// Adds a constraint to an existing node type, creating a minimal type if needed.
     pub fn add_constraint_to_type(
         &self,
@@ -565,6 +580,51 @@ impl Catalog {
     /// Gets a stored procedure by name.
     pub fn get_procedure(&self, name: &str) -> Option<ProcedureDefinition> {
         self.schema.as_ref()?.get_procedure(name)
+    }
+
+    /// Returns all registered node type definitions.
+    #[must_use]
+    pub fn all_node_type_defs(&self) -> Vec<NodeTypeDefinition> {
+        self.schema
+            .as_ref()
+            .map(SchemaCatalog::all_node_type_defs)
+            .unwrap_or_default()
+    }
+
+    /// Returns all registered edge type definitions.
+    #[must_use]
+    pub fn all_edge_type_defs(&self) -> Vec<EdgeTypeDefinition> {
+        self.schema
+            .as_ref()
+            .map(SchemaCatalog::all_edge_type_defs)
+            .unwrap_or_default()
+    }
+
+    /// Returns all registered graph type definitions.
+    #[must_use]
+    pub fn all_graph_type_defs(&self) -> Vec<GraphTypeDefinition> {
+        self.schema
+            .as_ref()
+            .map(SchemaCatalog::all_graph_type_defs)
+            .unwrap_or_default()
+    }
+
+    /// Returns all registered procedure definitions.
+    #[must_use]
+    pub fn all_procedure_defs(&self) -> Vec<ProcedureDefinition> {
+        self.schema
+            .as_ref()
+            .map(SchemaCatalog::all_procedure_defs)
+            .unwrap_or_default()
+    }
+
+    /// Returns all graph type bindings (graph_name, type_name).
+    #[must_use]
+    pub fn all_graph_type_bindings(&self) -> Vec<(String, String)> {
+        self.schema
+            .as_ref()
+            .map(SchemaCatalog::all_graph_type_bindings)
+            .unwrap_or_default()
     }
 }
 
@@ -872,7 +932,7 @@ impl IndexCatalog {
 // === Type Definitions ===
 
 /// Data type for a typed property in a node or edge type definition.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PropertyDataType {
     /// UTF-8 string.
     String,
@@ -985,7 +1045,7 @@ impl std::fmt::Display for PropertyDataType {
 }
 
 /// A typed property within a node or edge type definition.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TypedProperty {
     /// Property name.
     pub name: String,
@@ -998,7 +1058,7 @@ pub struct TypedProperty {
 }
 
 /// A constraint on a node or edge type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum TypeConstraint {
     /// Primary key (implies UNIQUE + NOT NULL).
     PrimaryKey(Vec<String>),
@@ -1016,7 +1076,7 @@ pub enum TypeConstraint {
 }
 
 /// Definition of a node type (label schema).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeTypeDefinition {
     /// Type name (corresponds to a label).
     pub name: String,
@@ -1029,7 +1089,7 @@ pub struct NodeTypeDefinition {
 }
 
 /// Definition of an edge type (relationship type schema).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EdgeTypeDefinition {
     /// Type name (corresponds to an edge type / relationship type).
     pub name: String,
@@ -1044,7 +1104,7 @@ pub struct EdgeTypeDefinition {
 }
 
 /// Definition of a graph type (constrains which node/edge types a graph allows).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GraphTypeDefinition {
     /// Graph type name.
     pub name: String,
@@ -1057,7 +1117,7 @@ pub struct GraphTypeDefinition {
 }
 
 /// Definition of a stored procedure.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProcedureDefinition {
     /// Procedure name.
     pub name: String,
@@ -1201,6 +1261,12 @@ impl SchemaCatalog {
         self.node_types.read().keys().cloned().collect()
     }
 
+    /// Returns all registered node type definitions.
+    #[must_use]
+    pub fn all_node_type_defs(&self) -> Vec<NodeTypeDefinition> {
+        self.node_types.read().values().cloned().collect()
+    }
+
     // --- Edge type operations ---
 
     /// Registers a new edge type definition.
@@ -1239,6 +1305,12 @@ impl SchemaCatalog {
         self.edge_types.read().keys().cloned().collect()
     }
 
+    /// Returns all registered edge type definitions.
+    #[must_use]
+    pub fn all_edge_type_defs(&self) -> Vec<EdgeTypeDefinition> {
+        self.edge_types.read().values().cloned().collect()
+    }
+
     // --- Graph type operations ---
 
     /// Registers a new graph type definition.
@@ -1272,6 +1344,12 @@ impl SchemaCatalog {
         self.graph_types.read().keys().cloned().collect()
     }
 
+    /// Returns all registered graph type definitions.
+    #[must_use]
+    pub fn all_graph_type_defs(&self) -> Vec<GraphTypeDefinition> {
+        self.graph_types.read().values().cloned().collect()
+    }
+
     // --- Schema namespace operations ---
 
     /// Registers a schema namespace.
@@ -1293,6 +1371,21 @@ impl SchemaCatalog {
         } else {
             Err(CatalogError::SchemaNotFound(name.to_string()))
         }
+    }
+
+    /// Checks whether a schema namespace exists.
+    #[must_use]
+    pub fn schema_exists(&self, name: &str) -> bool {
+        self.schemas
+            .read()
+            .iter()
+            .any(|s| s.eq_ignore_ascii_case(name))
+    }
+
+    /// Returns all registered schema namespace names.
+    #[must_use]
+    pub fn schema_names(&self) -> Vec<String> {
+        self.schemas.read().clone()
     }
 
     // --- ALTER operations ---
@@ -1492,6 +1585,22 @@ impl SchemaCatalog {
     /// Gets a stored procedure by name.
     pub fn get_procedure(&self, name: &str) -> Option<ProcedureDefinition> {
         self.procedures.read().get(name).cloned()
+    }
+
+    /// Returns all registered procedure definitions.
+    #[must_use]
+    pub fn all_procedure_defs(&self) -> Vec<ProcedureDefinition> {
+        self.procedures.read().values().cloned().collect()
+    }
+
+    /// Returns all graph type bindings (graph_name, type_name).
+    #[must_use]
+    pub fn all_graph_type_bindings(&self) -> Vec<(String, String)> {
+        self.graph_type_bindings
+            .read()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     fn add_unique_constraint(

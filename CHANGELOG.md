@@ -2,7 +2,51 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
+## [0.5.21] - Unreleased
+
+First implementation of C# and Dart bindings, single file database completed, snapshot consolidation and test hardening
+
+### Added
+
+- **C# / .NET bindings** (`crates/bindings/csharp`): full-featured .NET 8 binding wrapping the C FFI layer via source-generated P/Invoke (`LibraryImport`). Includes `GrafeoDB` lifecycle (memory/persistent), GQL + multi-language query execution (sync and async), ACID transactions with auto-rollback, typed node/edge CRUD, vector search (k-NN + MMR), parameterized queries with temporal type support, and a `SafeHandle`-based resource management pattern. 40 xUnit tests across database, query, transaction, and CRUD categories. CI matrix covers Ubuntu, Windows, and macOS.
+- **Single-file `.grafeo` database format**: new persistence format stores the entire database in a single file with a sidecar WAL directory during operation (DuckDB-style). Features dual-header crash safety with CRC32 checksums, automatic format detection by file extension, and seamless WAL checkpoint merging. Enable with the `grafeo-file` feature flag (included in `storage` and `full` profiles). Use `GrafeoDB::open("mydb.grafeo")` or `db.save("mydb.grafeo")` to create single-file databases.
+- **Exclusive file locking** for `.grafeo` files: prevents multiple processes from opening the same database file simultaneously. Lock is acquired on open and released on close/drop (uses `fs2` for cross-platform advisory locking).
+- **DDL schema persistence in snapshots**: `CREATE NODE TYPE`, `CREATE EDGE TYPE`, `CREATE GRAPH TYPE`, `CREATE PROCEDURE`, and `CREATE SCHEMA` definitions now survive close/reopen cycles and export/import roundtrips. Snapshot format consolidated from v1/v2 to a single v3 format that includes full schema metadata alongside graph data.
+- **Crash injection testing** (`testing-crash-injection` feature): `maybe_crash()` instrumentation points in `write_snapshot` and `checkpoint_to_file` enable deterministic crash simulation for verifying sidecar WAL recovery
+- **Introspection functions**: `RETURN CURRENT_SCHEMA`, `RETURN CURRENT_GRAPH`, `RETURN info()`, `RETURN schema()` for querying session state and database metadata from within GQL
+
+### Breaking
+
+- **Snapshot format v3**: `export_snapshot()`/`import_snapshot()` now produce/consume v3 format (includes schema metadata). Snapshots from previous versions are no longer readable. Re-export from a running database to migrate.
+
+### Testing
+
+- **Seam tests for spec compliance** (139 new tests): systematic coverage of feature boundaries and negative paths targeting ISO/IEC 39075 sections 4.7.3, 7.1, 7.2, 8, 13, 16, 20.9, and 21; covers session state independence, transaction enforcement, DML edge cases, pattern matching boundaries, aggregate NULL semantics, CASE expressions, type coercion, and cross-graph isolation; uncovered 3 spec deviations (DDL in READ ONLY transactions, SUM on empty sets, CASE ELSE with NULL comparisons)
+
+### Fixed
+
+- **DDL in READ ONLY transactions** (ISO/IEC 39075 Section 8): `CREATE GRAPH` and `DROP GRAPH` are now correctly blocked inside `START TRANSACTION READ ONLY`; previously they bypassed the read-only check because they were dispatched as session commands rather than schema commands
+- **SUM on empty set returns NULL** (ISO/IEC 39075 Section 20.9): `SUM()` over zero rows now returns `NULL` instead of `0`, matching the behavior of `AVG`, `MIN`, and `MAX` on empty sets
+- **CASE WHEN with NULL conditions** (ISO/IEC 39075 Section 21): `CASE WHEN` expressions where the condition evaluates to NULL (e.g. comparing a missing property) now correctly fall through to `ELSE` instead of returning NULL for the entire expression
+- **`SESSION SET SCHEMA` / `SESSION SET GRAPH` separation** (ISO/IEC 39075 Section 7.1): session schema and session graph are now independent fields per the GQL standard; `SESSION SET SCHEMA` sets the session schema (validating against registered schemas), `SESSION SET GRAPH` sets the session graph (resolved within the current schema), and `SESSION RESET` supports independent targets (`SESSION RESET SCHEMA`, `SESSION RESET GRAPH`, `SESSION RESET TIME ZONE`, `SESSION RESET PARAMETERS`) per Section 7.2; graphs created within a schema are stored with schema-scoped keys for cross-schema isolation; added `SHOW SCHEMAS` command and `DROP SCHEMA` now enforces "schema must be empty" per Section 12.3
+- **`COUNT(*)` parsing** (ISO/IEC 39075 Section 20.9): `COUNT(*)` is now correctly parsed as a zero-argument aggregate counting all rows, rather than failing on the `*` token
+
+## [0.5.20] - 2026-03-11
+
+Small release bringing new methods to WASM and added SESSION SET validation
+
+### Added
+
+- **WASM `memoryUsage()` and `importRows()`**: memory introspection and bulk row import (the DataFrame equivalent) now available in WebAssembly bindings
+- **WASM vector search bindings**: `createVectorIndex()`, `dropVectorIndex()`, `rebuildVectorIndex()`, `vectorSearch()`, and `mmrSearch()` now exposed in WebAssembly, enabling client-side k-NN and MMR search with HNSW indexes
+
+### Fixed
+
+- **`SESSION SET GRAPH` / `SESSION SET SCHEMA` validation**: now errors when the target graph does not exist, matching the behavior of `USE GRAPH`; previously it silently accepted any name and fell back to the default store
+
 ## [0.5.19] - 2026-03-11
+
+GQL translator refactor, new methods and GQL improvements and fixes
 
 ### Added
 

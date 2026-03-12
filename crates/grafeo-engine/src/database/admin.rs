@@ -349,6 +349,13 @@ impl super::GrafeoDB {
             wal.checkpoint(transaction_id, epoch)?;
             wal.sync()?;
         }
+
+        // For single-file format: flush snapshot to .grafeo file
+        #[cfg(feature = "grafeo-file")]
+        if let Some(ref fm) = self.file_manager {
+            self.checkpoint_to_file(fm)?;
+        }
+
         Ok(())
     }
 

@@ -24,14 +24,14 @@ pub(crate) enum AggregateState {
     Count(i64),
     /// Count distinct state (count, seen values).
     CountDistinct(i64, HashSet<HashableValue>),
-    /// Sum state (integer).
-    SumInt(i64),
-    /// Sum distinct state (integer, seen values).
-    SumIntDistinct(i64, HashSet<HashableValue>),
-    /// Sum state (float).
-    SumFloat(f64),
-    /// Sum distinct state (float, seen values).
-    SumFloatDistinct(f64, HashSet<HashableValue>),
+    /// Sum state (integer sum, count of values added).
+    SumInt(i64, i64),
+    /// Sum distinct state (integer sum, count, seen values).
+    SumIntDistinct(i64, i64, HashSet<HashableValue>),
+    /// Sum state (float sum, count of values added).
+    SumFloat(f64, i64),
+    /// Sum distinct state (float sum, count, seen values).
+    SumFloatDistinct(f64, i64, HashSet<HashableValue>),
     /// Average state (sum, count).
     Avg(f64, i64),
     /// Average distinct state (sum, count, seen values).
@@ -94,8 +94,8 @@ impl AggregateState {
             (AggregateFunction::Count | AggregateFunction::CountNonNull, true) => {
                 AggregateState::CountDistinct(0, HashSet::new())
             }
-            (AggregateFunction::Sum, false) => AggregateState::SumInt(0),
-            (AggregateFunction::Sum, true) => AggregateState::SumIntDistinct(0, HashSet::new()),
+            (AggregateFunction::Sum, false) => AggregateState::SumInt(0, 0),
+            (AggregateFunction::Sum, true) => AggregateState::SumIntDistinct(0, 0, HashSet::new()),
             (AggregateFunction::Avg, false) => AggregateState::Avg(0.0, 0),
             (AggregateFunction::Avg, true) => AggregateState::AvgDistinct(0.0, 0, HashSet::new()),
             (AggregateFunction::Min, _) => AggregateState::Min(None), // MIN/MAX don't need distinct
@@ -185,52 +185,64 @@ impl AggregateState {
                     }
                 }
             }
-            AggregateState::SumInt(sum) => {
+            AggregateState::SumInt(sum, count) => {
                 if let Some(Value::Int64(v)) = value {
                     *sum += v;
+                    *count += 1;
                 } else if let Some(Value::Float64(v)) = value {
-                    // Convert to float sum
-                    *self = AggregateState::SumFloat(*sum as f64 + v);
+                    // Convert to float sum, carrying count forward
+                    *self = AggregateState::SumFloat(*sum as f64 + v, *count + 1);
                 } else if let Some(ref v) = value {
                     // RDF stores numeric literals as strings - try to parse
                     if let Some(num) = value_to_f64(v) {
-                        *self = AggregateState::SumFloat(*sum as f64 + num);
+                        *self = AggregateState::SumFloat(*sum as f64 + num, *count + 1);
                     }
                 }
             }
-            AggregateState::SumIntDistinct(sum, seen) => {
+            AggregateState::SumIntDistinct(sum, count, seen) => {
                 if let Some(ref v) = value {
                     let hashable = HashableValue::from(v);
                     if seen.insert(hashable) {
                         if let Value::Int64(i) = v {
                             *sum += i;
+                            *count += 1;
                         } else if let Value::Float64(f) = v {
                             // Convert to float distinct: move the seen set instead of cloning
                             let moved_seen = std::mem::take(seen);
-                            *self = AggregateState::SumFloatDistinct(*sum as f64 + f, moved_seen);
+                            *self = AggregateState::SumFloatDistinct(
+                                *sum as f64 + f,
+                                *count + 1,
+                                moved_seen,
+                            );
                         } else if let Some(num) = value_to_f64(v) {
                             // RDF string-encoded numerics
                             let moved_seen = std::mem::take(seen);
-                            *self = AggregateState::SumFloatDistinct(*sum as f64 + num, moved_seen);
+                            *self = AggregateState::SumFloatDistinct(
+                                *sum as f64 + num,
+                                *count + 1,
+                                moved_seen,
+                            );
                         }
                     }
                 }
             }
-            AggregateState::SumFloat(sum) => {
+            AggregateState::SumFloat(sum, count) => {
                 if let Some(ref v) = value {
                     // Use value_to_f64 which now handles strings
                     if let Some(num) = value_to_f64(v) {
                         *sum += num;
+                        *count += 1;
                     }
                 }
             }
-            AggregateState::SumFloatDistinct(sum, seen) => {
+            AggregateState::SumFloatDistinct(sum, count, seen) => {
                 if let Some(ref v) = value {
                     let hashable = HashableValue::from(v);
                     if seen.insert(hashable)
                         && let Some(num) = value_to_f64(v)
                     {
                         *sum += num;
+                        *count += 1;
                     }
                 }
             }
@@ -388,11 +400,20 @@ impl AggregateState {
             AggregateState::Count(count) | AggregateState::CountDistinct(count, _) => {
                 Value::Int64(*count)
             }
-            AggregateState::SumInt(sum) | AggregateState::SumIntDistinct(sum, _) => {
-                Value::Int64(*sum)
+            AggregateState::SumInt(sum, count) | AggregateState::SumIntDistinct(sum, count, _) => {
+                if *count == 0 {
+                    Value::Null
+                } else {
+                    Value::Int64(*sum)
+                }
             }
-            AggregateState::SumFloat(sum) | AggregateState::SumFloatDistinct(sum, _) => {
-                Value::Float64(*sum)
+            AggregateState::SumFloat(sum, count)
+            | AggregateState::SumFloatDistinct(sum, count, _) => {
+                if *count == 0 {
+                    Value::Null
+                } else {
+                    Value::Float64(*sum)
+                }
             }
             AggregateState::Avg(sum, count) | AggregateState::AvgDistinct(sum, count, _) => {
                 if *count == 0 {
@@ -1658,7 +1679,8 @@ mod tests {
 
     #[test]
     fn test_empty_aggregation() {
-        // No input rows: COUNT should be 0, SUM 0, AVG null, MIN/MAX null
+        // No input rows: COUNT should be 0, SUM/AVG/MIN/MAX should be NULL
+        // (ISO/IEC 39075 Section 20.9)
         let mock = MockOperator::new(vec![]);
 
         let mut agg = SimpleAggregateOperator::new(
@@ -1681,7 +1703,10 @@ mod tests {
 
         let result = agg.next().unwrap().unwrap();
         assert_eq!(result.column(0).unwrap().get_int64(0), Some(0)); // COUNT
-        assert_eq!(result.column(1).unwrap().get_int64(0), Some(0)); // SUM
+        assert!(matches!(
+            result.column(1).unwrap().get_value(0),
+            Some(Value::Null)
+        )); // SUM
         assert!(matches!(
             result.column(2).unwrap().get_value(0),
             Some(Value::Null)

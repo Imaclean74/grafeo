@@ -304,6 +304,159 @@ impl Database {
         Ok(arr.into())
     }
 
+    // ── Vector Index ──────────────────────────────────────────────────
+
+    /// Creates a vector (HNSW) index on a label+property pair.
+    ///
+    /// Indexes all existing nodes whose property value is a float array.
+    ///
+    /// ```js
+    /// db.createVectorIndex("Doc", "embedding", {
+    ///   dimensions: 384,
+    ///   metric: "cosine",       // "cosine" | "euclidean" | "dot_product" | "manhattan"
+    ///   m: 16,                  // HNSW links per node
+    ///   efConstruction: 128,    // build beam width
+    /// });
+    /// ```
+    #[cfg(feature = "vector-index")]
+    #[wasm_bindgen(js_name = "createVectorIndex")]
+    pub fn create_vector_index(
+        &self,
+        label: &str,
+        property: &str,
+        options: JsValue,
+    ) -> Result<(), JsError> {
+        let opts: VectorIndexOptions = if options.is_undefined() || options.is_null() {
+            VectorIndexOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|e| JsError::new(&format!("Invalid options: {e}")))?
+        };
+
+        self.inner
+            .create_vector_index(
+                label,
+                property,
+                opts.dimensions,
+                opts.metric.as_deref(),
+                opts.m,
+                opts.ef_construction,
+            )
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Drops a vector index on a label+property pair.
+    ///
+    /// Returns `true` if the index existed and was removed.
+    #[cfg(feature = "vector-index")]
+    #[wasm_bindgen(js_name = "dropVectorIndex")]
+    pub fn drop_vector_index(&self, label: &str, property: &str) -> bool {
+        self.inner.drop_vector_index(label, property)
+    }
+
+    /// Rebuilds a vector index by re-scanning all matching nodes.
+    ///
+    /// Use after bulk imports to refresh the index. Preserves existing
+    /// configuration (dimensions, metric, M, ef_construction).
+    #[cfg(feature = "vector-index")]
+    #[wasm_bindgen(js_name = "rebuildVectorIndex")]
+    pub fn rebuild_vector_index(&self, label: &str, property: &str) -> Result<(), JsError> {
+        self.inner
+            .rebuild_vector_index(label, property)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Performs k-nearest-neighbor vector search.
+    ///
+    /// Returns an array of `{id, distance}` objects, ordered by proximity.
+    ///
+    /// ```js
+    /// db.createVectorIndex("Doc", "embedding");
+    /// const results = db.vectorSearch("Doc", "embedding",
+    ///   new Float32Array([1.0, 0.0, 0.0]), 10, { ef: 200 });
+    /// // [{id: 42, distance: 0.12}, {id: 17, distance: 0.34}]
+    /// ```
+    #[cfg(feature = "vector-index")]
+    #[wasm_bindgen(js_name = "vectorSearch")]
+    pub fn vector_search(
+        &self,
+        label: &str,
+        property: &str,
+        query: &[f32],
+        k: usize,
+        options: JsValue,
+    ) -> Result<JsValue, JsError> {
+        let opts: VectorSearchOptions = if options.is_undefined() || options.is_null() {
+            VectorSearchOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|e| JsError::new(&format!("Invalid options: {e}")))?
+        };
+
+        let filters = opts.filters.as_ref().map(|f| {
+            f.iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect::<HashMap<String, Value>>()
+        });
+
+        let results = self
+            .inner
+            .vector_search(label, property, query, k, opts.ef, filters.as_ref())
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        Ok(vector_results_to_js(&results))
+    }
+
+    /// Performs Maximal Marginal Relevance search for diverse results.
+    ///
+    /// Balances relevance and diversity via the `lambda` parameter
+    /// (1.0 = pure relevance, 0.0 = pure diversity).
+    ///
+    /// ```js
+    /// const results = db.mmrSearch("Doc", "embedding",
+    ///   new Float32Array([1.0, 0.0, 0.0]), 5, { fetchK: 20, lambda: 0.7 });
+    /// // [{id, distance}]
+    /// ```
+    #[cfg(feature = "vector-index")]
+    #[wasm_bindgen(js_name = "mmrSearch")]
+    pub fn mmr_search(
+        &self,
+        label: &str,
+        property: &str,
+        query: &[f32],
+        k: usize,
+        options: JsValue,
+    ) -> Result<JsValue, JsError> {
+        let opts: MmrSearchOptions = if options.is_undefined() || options.is_null() {
+            MmrSearchOptions::default()
+        } else {
+            serde_wasm_bindgen::from_value(options)
+                .map_err(|e| JsError::new(&format!("Invalid options: {e}")))?
+        };
+
+        let filters = opts.filters.as_ref().map(|f| {
+            f.iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect::<HashMap<String, Value>>()
+        });
+
+        let results = self
+            .inner
+            .mmr_search(
+                label,
+                property,
+                query,
+                k,
+                opts.fetch_k,
+                opts.lambda,
+                opts.ef,
+                filters.as_ref(),
+            )
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        Ok(vector_results_to_js(&results))
+    }
+
     /// Executes a GQL query with parameters and returns results as an array of objects.
     ///
     /// Parameters are passed as a JavaScript object with string keys.
@@ -616,6 +769,125 @@ impl Database {
         Ok(result.into())
     }
 
+    /// Returns a hierarchical memory usage breakdown.
+    ///
+    /// The returned object mirrors the engine's `MemoryUsage` struct with
+    /// `totalBytes`, `store`, `indexes`, `mvcc`, `caches`, `stringPool`,
+    /// and `bufferManager` sections.
+    ///
+    /// ```js
+    /// const usage = db.memoryUsage();
+    /// console.log(`Total: ${usage.total_bytes} bytes`);
+    /// console.log(`Store: ${usage.store.total_bytes} bytes`);
+    /// console.log(`Indexes: ${usage.indexes.total_bytes} bytes`);
+    /// ```
+    #[wasm_bindgen(js_name = "memoryUsage")]
+    pub fn memory_usage(&self) -> Result<JsValue, JsError> {
+        let usage = self.inner.memory_usage();
+        serde_wasm_bindgen::to_value(&usage).map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Bulk-imports rows (array of objects) as nodes or edges.
+    ///
+    /// This is the WASM equivalent of Python's `import_df()`: each object
+    /// in the array becomes a node or edge, with object keys as property names.
+    ///
+    /// **Node import** (`mode: "nodes"`): requires `label` (string or string[]).
+    /// All object keys become node properties.
+    ///
+    /// **Edge import** (`mode: "edges"`): requires `edgeType`. The `source`
+    /// and `target` keys in each object must contain integer node IDs.
+    /// Remaining keys become edge properties. Override column names with
+    /// the `source` and `target` options (default `"source"` / `"target"`).
+    ///
+    /// Returns the number of created entities.
+    ///
+    /// ```js
+    /// // Import nodes
+    /// const count = db.importRows(
+    ///   [{ name: "Alix", age: 30 }, { name: "Gus", age: 25 }],
+    ///   { mode: "nodes", label: "Person" }
+    /// );
+    ///
+    /// // Import edges
+    /// const edgeCount = db.importRows(
+    ///   [{ source: 0, target: 1, since: 2020 }],
+    ///   { mode: "edges", edgeType: "KNOWS" }
+    /// );
+    ///
+    /// // Custom source/target column names
+    /// const edgeCount2 = db.importRows(
+    ///   [{ from: 0, to: 1 }],
+    ///   { mode: "edges", edgeType: "KNOWS", source: "from", target: "to" }
+    /// );
+    /// ```
+    #[wasm_bindgen(js_name = "importRows")]
+    pub fn import_rows(&self, rows: JsValue, options: JsValue) -> Result<u32, JsError> {
+        let opts: ImportRowsOptions = serde_wasm_bindgen::from_value(options)
+            .map_err(|e| JsError::new(&format!("Invalid options: {e}")))?;
+        let data: Vec<serde_json::Map<String, serde_json::Value>> =
+            serde_wasm_bindgen::from_value(rows)
+                .map_err(|e| JsError::new(&format!("rows must be an array of objects: {e}")))?;
+
+        let mut count: u32 = 0;
+
+        match opts.mode.as_str() {
+            "nodes" => {
+                let labels = opts.labels()?;
+                let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+
+                for row in &data {
+                    let props: Vec<(PropertyKey, Value)> = row
+                        .iter()
+                        .filter(|(_, v)| !v.is_null())
+                        .map(|(k, v)| (PropertyKey::new(k.as_str()), json_to_value(v)))
+                        .collect();
+                    self.inner.create_node_with_props(&label_refs, props);
+                    count += 1;
+                }
+            }
+            "edges" => {
+                let edge_type = opts
+                    .edge_type
+                    .as_deref()
+                    .ok_or_else(|| JsError::new("edgeType is required for mode 'edges'"))?;
+                let source_col = opts.source.as_deref().unwrap_or("source");
+                let target_col = opts.target.as_deref().unwrap_or("target");
+
+                for (i, row) in data.iter().enumerate() {
+                    let src_val = row.get(source_col).ok_or_else(|| {
+                        JsError::new(&format!("rows[{i}]: missing '{source_col}' column"))
+                    })?;
+                    let dst_val = row.get(target_col).ok_or_else(|| {
+                        JsError::new(&format!("rows[{i}]: missing '{target_col}' column"))
+                    })?;
+
+                    let src_id = json_to_node_id(src_val, source_col, i)?;
+                    let dst_id = json_to_node_id(dst_val, target_col, i)?;
+
+                    let props: Vec<(PropertyKey, Value)> = row
+                        .iter()
+                        .filter(|(k, v)| {
+                            k.as_str() != source_col && k.as_str() != target_col && !v.is_null()
+                        })
+                        .map(|(k, v)| (PropertyKey::new(k.as_str()), json_to_value(v)))
+                        .collect();
+
+                    self.inner
+                        .create_edge_with_props(src_id, dst_id, edge_type, props);
+                    count += 1;
+                }
+            }
+            other => {
+                return Err(JsError::new(&format!(
+                    "mode must be 'nodes' or 'edges', got '{other}'"
+                )));
+            }
+        }
+
+        Ok(count)
+    }
+
     /// Returns the Grafeo version.
     pub fn version() -> String {
         env!("CARGO_PKG_VERSION").to_string()
@@ -668,8 +940,117 @@ impl Database {
 }
 
 // ---------------------------------------------------------------------------
+// Vector search option types (serde, not exported to JS)
+// ---------------------------------------------------------------------------
+
+/// Options for `createVectorIndex()`.
+#[cfg(feature = "vector-index")]
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VectorIndexOptions {
+    dimensions: Option<usize>,
+    metric: Option<String>,
+    m: Option<usize>,
+    ef_construction: Option<usize>,
+}
+
+/// Options for `vectorSearch()`.
+#[cfg(feature = "vector-index")]
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VectorSearchOptions {
+    ef: Option<usize>,
+    filters: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Options for `mmrSearch()`.
+#[cfg(feature = "vector-index")]
+#[derive(Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MmrSearchOptions {
+    fetch_k: Option<usize>,
+    lambda: Option<f32>,
+    ef: Option<usize>,
+    filters: Option<HashMap<String, serde_json::Value>>,
+}
+
+/// Converts a `Vec<(NodeId, f32)>` to a JS array of `{id, distance}` objects.
+#[cfg(feature = "vector-index")]
+fn vector_results_to_js(results: &[(grafeo_common::types::NodeId, f32)]) -> JsValue {
+    let arr = Array::new_with_length(results.len() as u32);
+    for (i, (id, distance)) in results.iter().enumerate() {
+        let obj = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("id"),
+            &JsValue::from_f64(id.0 as f64),
+        );
+        let _ = js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("distance"),
+            &JsValue::from_f64(f64::from(*distance)),
+        );
+        arr.set(i as u32, obj.into());
+    }
+    arr.into()
+}
+
+// ---------------------------------------------------------------------------
 // Batch import data types (serde, not exported to JS)
 // ---------------------------------------------------------------------------
+
+/// Options for `importRows()`.
+#[derive(serde::Deserialize)]
+struct ImportRowsOptions {
+    mode: String,
+    /// Node label(s): a single string or an array of strings.
+    #[serde(default)]
+    label: Option<ImportLabel>,
+    /// Edge type (required for mode "edges").
+    #[serde(default, rename = "edgeType")]
+    edge_type: Option<String>,
+    /// Source column name (default "source").
+    #[serde(default)]
+    source: Option<String>,
+    /// Target column name (default "target").
+    #[serde(default)]
+    target: Option<String>,
+}
+
+/// A label can be a single string or an array of strings.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ImportLabel {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl ImportRowsOptions {
+    fn labels(&self) -> Result<Vec<String>, JsError> {
+        match &self.label {
+            Some(ImportLabel::Single(s)) => Ok(vec![s.clone()]),
+            Some(ImportLabel::Multiple(v)) => Ok(v.clone()),
+            None => Err(JsError::new("label is required for mode 'nodes'")),
+        }
+    }
+}
+
+/// Extracts a `NodeId` from a JSON number value.
+fn json_to_node_id(
+    val: &serde_json::Value,
+    col_name: &str,
+    row_idx: usize,
+) -> Result<grafeo_common::types::NodeId, JsError> {
+    let n = val
+        .as_u64()
+        .or_else(|| val.as_f64().map(|f| f as u64))
+        .ok_or_else(|| {
+            JsError::new(&format!(
+                "rows[{row_idx}].{col_name}: expected a non-negative integer, got {val}"
+            ))
+        })?;
+    Ok(grafeo_common::types::NodeId::new(n))
+}
 
 /// LPG batch import payload.
 #[derive(serde::Deserialize)]
@@ -753,6 +1134,124 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    // === Vector options deserialization tests ===
+
+    #[cfg(feature = "vector-index")]
+    mod vector_tests {
+        use serde_json::json;
+
+        use super::super::*;
+
+        #[test]
+        fn vector_index_options_defaults() {
+            let opts: VectorIndexOptions = serde_json::from_value(json!({})).unwrap();
+            assert!(opts.dimensions.is_none());
+            assert!(opts.metric.is_none());
+            assert!(opts.m.is_none());
+            assert!(opts.ef_construction.is_none());
+        }
+
+        #[test]
+        fn vector_index_options_full() {
+            let opts: VectorIndexOptions = serde_json::from_value(json!({
+                "dimensions": 384,
+                "metric": "cosine",
+                "m": 16,
+                "efConstruction": 128
+            }))
+            .unwrap();
+            assert_eq!(opts.dimensions, Some(384));
+            assert_eq!(opts.metric.as_deref(), Some("cosine"));
+            assert_eq!(opts.m, Some(16));
+            assert_eq!(opts.ef_construction, Some(128));
+        }
+
+        #[test]
+        fn vector_search_options_with_filters() {
+            let opts: VectorSearchOptions = serde_json::from_value(json!({
+                "ef": 200,
+                "filters": { "category": "science" }
+            }))
+            .unwrap();
+            assert_eq!(opts.ef, Some(200));
+            assert!(opts.filters.is_some());
+            assert_eq!(opts.filters.unwrap()["category"], json!("science"));
+        }
+
+        #[test]
+        fn mmr_search_options_partial() {
+            let opts: MmrSearchOptions =
+                serde_json::from_value(json!({ "fetchK": 20, "lambda": 0.7 })).unwrap();
+            assert_eq!(opts.fetch_k, Some(20));
+            assert_eq!(opts.lambda, Some(0.7));
+            assert!(opts.ef.is_none());
+            assert!(opts.filters.is_none());
+        }
+
+        // vector_results_to_js requires a JS runtime, tested via wasm-bindgen-test
+
+        #[test]
+        fn create_vector_index_and_search() {
+            use grafeo_common::types::{PropertyKey, Value};
+
+            let db = GrafeoDB::new_in_memory();
+            // Create index first, then insert nodes with Value::Vector
+            db.create_vector_index("Doc", "embedding", Some(3), Some("cosine"), None, None)
+                .unwrap();
+
+            let vecs: &[&[f32]] = &[&[1.0, 0.0, 0.0], &[0.0, 1.0, 0.0], &[0.0, 0.0, 1.0]];
+            for (i, v) in vecs.iter().enumerate() {
+                let id = db.create_node_with_props(
+                    &["Doc"],
+                    vec![(PropertyKey::new("title"), Value::from(format!("doc_{i}")))],
+                );
+                db.set_node_property(id, "embedding", Value::Vector(v.to_vec().into()));
+            }
+
+            let results = db
+                .vector_search("Doc", "embedding", &[1.0, 0.0, 0.0], 2, None, None)
+                .unwrap();
+            assert_eq!(results.len(), 2);
+            assert!(
+                results[0].1 <= results[1].1,
+                "results should be sorted by distance"
+            );
+        }
+
+        #[test]
+        fn mmr_search_returns_diverse_results() {
+            use grafeo_common::types::{PropertyKey, Value};
+
+            let db = GrafeoDB::new_in_memory();
+            db.create_vector_index("Doc", "embedding", Some(3), Some("cosine"), None, None)
+                .unwrap();
+
+            for i in 0..5 {
+                let x = if i < 3 { 1.0f32 } else { 0.0 };
+                let y = if i >= 3 { 1.0f32 } else { 0.0 };
+                let id = db.create_node_with_props(
+                    &["Doc"],
+                    vec![(PropertyKey::new("idx"), Value::Int64(i))],
+                );
+                db.set_node_property(id, "embedding", Value::Vector(vec![x, y, 0.0].into()));
+            }
+
+            let results = db
+                .mmr_search(
+                    "Doc",
+                    "embedding",
+                    &[1.0, 0.0, 0.0],
+                    3,
+                    Some(5),
+                    Some(0.5),
+                    None,
+                    None,
+                )
+                .unwrap();
+            assert_eq!(results.len(), 3);
+        }
+    }
 
     // === LPG deserialization tests ===
 
@@ -879,6 +1378,224 @@ mod tests {
         });
         let result: Result<LpgImport, _> = serde_json::from_value(input);
         assert!(result.is_err(), "edge without 'type' should fail");
+    }
+
+    // === memoryUsage tests ===
+
+    #[test]
+    fn memory_usage_returns_hierarchical_breakdown() {
+        let db = GrafeoDB::new_in_memory();
+        db.create_node_with_props(
+            &["Person"],
+            vec![
+                (PropertyKey::new("name"), Value::from("Alix")),
+                (PropertyKey::new("age"), Value::Int64(30)),
+            ],
+        );
+
+        let usage = db.memory_usage();
+        assert!(usage.total_bytes > 0, "should report non-zero memory");
+        assert!(usage.store.total_bytes > 0, "store should use memory");
+        assert!(usage.store.nodes_bytes > 0, "should have node storage");
+    }
+
+    #[test]
+    fn memory_usage_empty_db() {
+        let db = GrafeoDB::new_in_memory();
+        let usage = db.memory_usage();
+        // Even an empty DB has some baseline allocation
+        assert_eq!(usage.store.nodes_bytes, 0);
+        assert_eq!(usage.store.edges_bytes, 0);
+    }
+
+    #[test]
+    fn memory_usage_serializes_to_json() {
+        let db = GrafeoDB::new_in_memory();
+        let usage = db.memory_usage();
+        let json = serde_json::to_value(&usage).unwrap();
+        assert!(json.get("total_bytes").is_some());
+        assert!(json.get("store").is_some());
+        assert!(json.get("indexes").is_some());
+        assert!(json.get("mvcc").is_some());
+        assert!(json.get("caches").is_some());
+        assert!(json.get("string_pool").is_some());
+        assert!(json.get("buffer_manager").is_some());
+    }
+
+    // === importRows options deserialization tests ===
+
+    #[test]
+    fn import_rows_options_single_label() {
+        let input = json!({ "mode": "nodes", "label": "Person" });
+        let opts: ImportRowsOptions = serde_json::from_value(input).unwrap();
+        assert_eq!(opts.mode, "nodes");
+        let labels = opts.labels().unwrap();
+        assert_eq!(labels, vec!["Person"]);
+    }
+
+    #[test]
+    fn import_rows_options_multiple_labels() {
+        let input = json!({ "mode": "nodes", "label": ["Person", "Employee"] });
+        let opts: ImportRowsOptions = serde_json::from_value(input).unwrap();
+        let labels = opts.labels().unwrap();
+        assert_eq!(labels, vec!["Person", "Employee"]);
+    }
+
+    #[test]
+    fn import_rows_options_edge_mode() {
+        let input = json!({ "mode": "edges", "edgeType": "KNOWS" });
+        let opts: ImportRowsOptions = serde_json::from_value(input).unwrap();
+        assert_eq!(opts.mode, "edges");
+        assert_eq!(opts.edge_type.as_deref(), Some("KNOWS"));
+    }
+
+    #[test]
+    fn import_rows_options_custom_columns() {
+        let input = json!({
+            "mode": "edges",
+            "edgeType": "LINKED",
+            "source": "from",
+            "target": "to"
+        });
+        let opts: ImportRowsOptions = serde_json::from_value(input).unwrap();
+        assert_eq!(opts.source.as_deref(), Some("from"));
+        assert_eq!(opts.target.as_deref(), Some("to"));
+    }
+
+    #[test]
+    fn import_rows_options_missing_label_is_none() {
+        let input = json!({ "mode": "nodes" });
+        let opts: ImportRowsOptions = serde_json::from_value(input).unwrap();
+        assert!(opts.label.is_none(), "label should be None when omitted");
+    }
+
+    #[test]
+    fn json_to_node_id_integer() {
+        let val = json!(42);
+        let id = json_to_node_id(&val, "source", 0).unwrap();
+        assert_eq!(id, grafeo_common::types::NodeId::new(42));
+    }
+
+    #[test]
+    fn json_to_node_id_float_truncates() {
+        let val = json!(7.0);
+        let id = json_to_node_id(&val, "target", 0).unwrap();
+        assert_eq!(id, grafeo_common::types::NodeId::new(7));
+    }
+
+    #[test]
+    fn json_to_node_id_string_is_not_u64() {
+        let val = json!("not_a_number");
+        // as_u64 and as_f64 both return None for strings
+        assert!(val.as_u64().is_none());
+        assert!(val.as_f64().is_none());
+    }
+
+    // === Engine-level importRows tests ===
+
+    #[test]
+    fn import_rows_nodes_basic() {
+        let db = GrafeoDB::new_in_memory();
+        let rows: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_value(json!([
+            { "name": "Alix", "age": 30 },
+            { "name": "Gus", "age": 25 }
+        ]))
+        .unwrap();
+
+        let label_refs = vec!["Person"];
+        for row in &rows {
+            let props: Vec<(PropertyKey, Value)> = row
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (PropertyKey::new(k.as_str()), json_to_value(v)))
+                .collect();
+            db.create_node_with_props(&label_refs, props);
+        }
+
+        assert_eq!(db.node_count(), 2);
+        let session = db.session();
+        let result = session
+            .execute("MATCH (p:Person) RETURN p.name ORDER BY p.name")
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn import_rows_edges_basic() {
+        let db = GrafeoDB::new_in_memory();
+        let alix = db.create_node_with_props(
+            &["Person"],
+            vec![(PropertyKey::new("name"), Value::from("Alix"))],
+        );
+        let gus = db.create_node_with_props(
+            &["Person"],
+            vec![(PropertyKey::new("name"), Value::from("Gus"))],
+        );
+
+        let rows: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_value(json!([
+            { "source": alix.0, "target": gus.0, "since": 2020 }
+        ]))
+        .unwrap();
+
+        for row in &rows {
+            let src = json_to_node_id(&row["source"], "source", 0).unwrap();
+            let dst = json_to_node_id(&row["target"], "target", 0).unwrap();
+            let props: Vec<(PropertyKey, Value)> = row
+                .iter()
+                .filter(|(k, v)| k.as_str() != "source" && k.as_str() != "target" && !v.is_null())
+                .map(|(k, v)| (PropertyKey::new(k.as_str()), json_to_value(v)))
+                .collect();
+            db.create_edge_with_props(src, dst, "KNOWS", props);
+        }
+
+        assert_eq!(db.edge_count(), 1);
+    }
+
+    #[test]
+    fn import_rows_null_values_filtered() {
+        let db = GrafeoDB::new_in_memory();
+        let rows: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_value(json!([
+            { "name": "Alix", "nickname": null, "age": 30 }
+        ]))
+        .unwrap();
+
+        for row in &rows {
+            let props: Vec<(PropertyKey, Value)> = row
+                .iter()
+                .filter(|(_, v)| !v.is_null())
+                .map(|(k, v)| (PropertyKey::new(k.as_str()), json_to_value(v)))
+                .collect();
+            db.create_node_with_props(&["Person"], props);
+        }
+
+        assert_eq!(db.node_count(), 1);
+        let session = db.session();
+        let result = session
+            .execute("MATCH (p:Person) RETURN p.nickname")
+            .unwrap();
+        assert_eq!(result.rows[0][0], Value::Null);
+    }
+
+    #[test]
+    fn import_rows_large_batch() {
+        let db = GrafeoDB::new_in_memory();
+        let rows: Vec<serde_json::Map<String, serde_json::Value>> = (0..500)
+            .map(|i| {
+                let mut map = serde_json::Map::new();
+                map.insert("index".to_string(), json!(i));
+                map
+            })
+            .collect();
+
+        for row in &rows {
+            let props: Vec<(PropertyKey, Value)> = row
+                .iter()
+                .map(|(k, v)| (PropertyKey::new(k.as_str()), json_to_value(v)))
+                .collect();
+            db.create_node_with_props(&["Item"], props);
+        }
+
+        assert_eq!(db.node_count(), 500);
     }
 
     // === Engine-level LPG batch tests ===

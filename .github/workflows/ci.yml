@@ -341,6 +341,67 @@ jobs:
           cp ../../../target/release/grafeo_c.dll.lib .
           CGO_ENABLED=1 CGO_LDFLAGS="-L. -lgrafeo_c -lws2_32 -lbcrypt -lntdll -luserenv" go test -v ./...
 
+  csharp-test:
+    name: C# Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-csharp-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-csharp-
+
+      # Full profile: builds with all language parsers and AI features so the
+      # C FFI exposes the complete API surface for the C# bindings.
+      - name: Build shared library
+        run: cargo build --release -p grafeo-c --features full
+
+      - name: Copy library (Linux)
+        if: runner.os == 'Linux'
+        run: cp target/release/libgrafeo_c.so crates/bindings/csharp/tests/Grafeo.Tests/
+
+      - name: Copy library (macOS)
+        if: runner.os == 'macOS'
+        run: cp target/release/libgrafeo_c.dylib crates/bindings/csharp/tests/Grafeo.Tests/
+
+      - name: Copy library (Windows)
+        if: runner.os == 'Windows'
+        run: copy target\release\grafeo_c.dll crates\bindings\csharp\tests\Grafeo.Tests\
+
+      - name: Restore
+        run: dotnet restore
+        working-directory: crates/bindings/csharp
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+        working-directory: crates/bindings/csharp
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release --verbosity normal
+        working-directory: crates/bindings/csharp
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/crates/bindings/csharp/tests/Grafeo.Tests
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/crates/bindings/csharp/tests/Grafeo.Tests
+
   # WASM build
   # WASM profile: builds with default-features = false and only the "gql"
   # feature enabled (minimal, no threads). The wasm32-unknown-unknown target
