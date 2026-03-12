@@ -402,6 +402,68 @@ jobs:
           LD_LIBRARY_PATH: ${{ github.workspace }}/crates/bindings/csharp/tests/Grafeo.Tests
           DYLD_LIBRARY_PATH: ${{ github.workspace }}/crates/bindings/csharp/tests/Grafeo.Tests
 
+  # Dart tests
+  # Default profile: grafeo-c is built with --features full explicitly,
+  # so the Dart FFI tests exercise the complete C API surface.
+  dart-test:
+    name: Dart Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-dart-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-dart-
+
+      - name: Build shared library
+        run: cargo build --release -p grafeo-c --features full
+
+      - name: Copy library (Linux)
+        if: runner.os == 'Linux'
+        run: cp target/release/libgrafeo_c.so crates/bindings/dart/
+
+      - name: Copy library (macOS)
+        if: runner.os == 'macOS'
+        run: cp target/release/libgrafeo_c.dylib crates/bindings/dart/
+
+      - name: Copy library (Windows)
+        if: runner.os == 'Windows'
+        run: copy target\release\grafeo_c.dll crates\bindings\dart\
+
+      - name: Install dependencies
+        working-directory: crates/bindings/dart
+        run: dart pub get
+
+      - name: Analyze
+        working-directory: crates/bindings/dart
+        run: dart analyze --fatal-infos
+
+      - name: Run tests
+        working-directory: crates/bindings/dart
+        run: dart test
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/crates/bindings/dart
+          DYLD_LIBRARY_PATH: ${{ github.workspace }}/crates/bindings/dart
+
   # WASM build
   # WASM profile: builds with default-features = false and only the "gql"
   # feature enabled (minimal, no threads). The wasm32-unknown-unknown target
