@@ -1,6 +1,6 @@
 ---
 title: Schema and DDL
-description: GQL schema definition, graph management, type definitions, indexes, and constraints.
+description: GQL schema definition, graph management, type definitions, indexes and constraints.
 tags:
   - gql
   - schema
@@ -9,7 +9,7 @@ tags:
 
 # Schema and DDL
 
-GQL provides Data Definition Language (DDL) statements for managing graphs, type definitions, indexes, constraints, and stored procedures.
+GQL provides Data Definition Language (DDL) statements for managing graphs, type definitions, indexes, constraints and stored procedures.
 
 ## Graph Management
 
@@ -61,7 +61,7 @@ USE GRAPH my_graph
 
 ## Node and Edge Types
 
-Type definitions declare the schema for nodes and edges: which properties they have, their types, and constraints.
+Type definitions declare the schema for nodes and edges: which properties they have, their types and constraints.
 
 ### Creating Types
 
@@ -198,7 +198,7 @@ DROP SCHEMA IF EXISTS analytics
 
 ## Indexes
 
-Indexes improve query performance for property lookups, text search, and vector similarity.
+Indexes improve query performance for property lookups, text search and vector similarity.
 
 ### Property Indexes
 

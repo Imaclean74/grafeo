@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Grafeo</RootNamespace>
+
+    <!-- NuGet metadata -->
+    <PackageId>Grafeo</PackageId>
+    <Version>0.5.20</Version>
+    <Description>C# bindings for the Grafeo graph database. Supports GQL queries, ACID transactions, and vector search.</Description>
+    <Authors>GrafeoDB</Authors>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://grafeo.dev</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/GrafeoDB/grafeo</RepositoryUrl>
+    <PackageTags>database;graph;gql;ffi;native</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+</Project>

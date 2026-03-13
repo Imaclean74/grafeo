@@ -18,7 +18,7 @@ graph TB
         RS[Rust API]
         JS[Node.js API]
         WA[WASM API]
-        CC[C/Go FFI]
+        CC[C/Go/C#/Dart FFI]
     end
 
     subgraph "grafeo-engine"

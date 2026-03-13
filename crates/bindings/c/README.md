@@ -31,10 +31,10 @@ int main(void) {
     }
 
     // Create nodes
-    uint64_t alice_id, bob_id;
+    uint64_t alix_id, gus_id;
     const char *labels[] = {"Person"};
-    grafeo_create_node(db, labels, 1, "{\"name\":\"Alix\",\"age\":30}", &alice_id);
-    grafeo_create_node(db, labels, 1, "{\"name\":\"Gus\",\"age\":25}", &bob_id);
+    grafeo_create_node(db, labels, 1, "{\"name\":\"Alix\",\"age\":30}", &alix_id);
+    grafeo_create_node(db, labels, 1, "{\"name\":\"Gus\",\"age\":25}", &gus_id);
 
     // Query with GQL
     GrafeoResult *result = NULL;
@@ -150,6 +150,8 @@ if (grafeo_execute(db, query, &result) != GRAFEO_OK) {
 - [Documentation](https://grafeo.dev)
 - [GitHub](https://github.com/GrafeoDB/grafeo)
 - [Go Bindings](https://github.com/GrafeoDB/grafeo/tree/main/crates/bindings/go) (uses this library via CGO)
+- [C# Bindings](https://github.com/GrafeoDB/grafeo/tree/main/crates/bindings/csharp) (uses this library via P/Invoke)
+- [Dart Bindings](https://github.com/GrafeoDB/grafeo/tree/main/crates/bindings/dart) (uses this library via dart:ffi)
 
 ## License
 

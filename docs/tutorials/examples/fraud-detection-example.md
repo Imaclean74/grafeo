@@ -9,7 +9,7 @@ tags:
 
 # Fraud Detection
 
-Model a transaction network, inject known fraud patterns, detect them with graph queries, and score risk with PageRank.
+Model a transaction network, inject known fraud patterns, detect them with graph queries and score risk with PageRank.
 
 !!! tip "Run it locally"
 

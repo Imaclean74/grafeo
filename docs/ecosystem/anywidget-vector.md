@@ -10,7 +10,7 @@ Interactive 3D vector visualization for Python notebooks.
 anywidget-vector provides 3D visualization for high-dimensional embeddings and vector data. Built on **Three.js** and the [anywidget](https://anywidget.dev/) framework, it works universally across Jupyter, Marimo, VS Code, Colab and Databricks.
 
 - **6D Visualization**: X, Y, Z position + Color, Shape, Size encoding
-- **Backend-agnostic**: NumPy, pandas, Qdrant, Chroma, Pinecone, Weaviate, LanceDB, or raw dicts
+- **Backend-agnostic**: NumPy, pandas, Qdrant, Chroma, Pinecone, Weaviate, LanceDB or raw dicts
 - **Interactive**: Orbit, pan, zoom, click, hover, box select
 - **Customizable**: Color scales, shapes, sizes, themes
 - **Performant**: Instanced rendering for large point clouds

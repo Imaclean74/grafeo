@@ -75,7 +75,7 @@ jupyter lab
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| grafeo | >=0.3.4 | Graph database |
+| grafeo | >=0.5.0 | Graph database |
 | anywidget-graph | >=0.2.0 | Graph visualization |
 | anywidget-vector | >=0.2.0 | Vector visualization |
 | marimo | >=0.19.0 | Interactive notebooks |

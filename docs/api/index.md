@@ -37,6 +37,23 @@ CGO bindings for cloud-native applications.
 - Node/edge CRUD, property management, label operations
 - ACID transactions, vector search, batch operations
 
+## C# / .NET API
+
+Full-featured .NET 8 bindings via source-generated P/Invoke.
+
+- **Package**: `GrafeoDB` (NuGet)
+- GQL + multi-language queries (sync and async), ACID transactions
+- Typed node/edge CRUD, vector search (k-NN + MMR), temporal type support
+- `SafeHandle`-based resource management
+
+## Dart API
+
+Dart FFI bindings wrapping the C layer.
+
+- **Package**: [`grafeo`](https://pub.dev/packages/grafeo)
+- GQL query execution with parameterized queries, ACID transactions
+- Typed node/edge CRUD, vector search, `NativeFinalizer` resource management
+
 ## WebAssembly API
 
 Run Grafeo in the browser, Deno or Cloudflare Workers.
@@ -62,6 +79,8 @@ The Rust API provides direct access to Grafeo internals.
 | Python | Stable |
 | Node.js / TypeScript | Stable |
 | Go | Stable |
-| WebAssembly | Experimental |
+| C# / .NET | Stable |
+| Dart | Stable |
+| WebAssembly | Stable |
 | Rust (grafeo-engine) | Stable |
 | Rust (internal crates) | Unstable |

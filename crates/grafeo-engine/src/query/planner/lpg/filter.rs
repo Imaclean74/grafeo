@@ -84,7 +84,8 @@ impl super::Planner {
             variable_columns,
             Arc::clone(&self.store) as Arc<dyn GraphStore>,
         )
-        .with_transaction_context(self.viewing_epoch, self.transaction_id);
+        .with_transaction_context(self.viewing_epoch, self.transaction_id)
+        .with_session_context(self.session_context.clone());
 
         // Create the filter operator
         let operator = Box::new(FilterOperator::new(input_op, Box::new(predicate)));
@@ -292,7 +293,8 @@ impl super::Planner {
                 variable_columns,
                 Arc::clone(&self.store) as Arc<dyn GraphStore>,
             )
-            .with_transaction_context(self.viewing_epoch, self.transaction_id);
+            .with_transaction_context(self.viewing_epoch, self.transaction_id)
+            .with_session_context(self.session_context.clone());
             let filter_op = Box::new(FilterOperator::new(join_op, Box::new(predicate)));
             return Ok((filter_op, output_columns));
         }
@@ -381,7 +383,8 @@ impl super::Planner {
                 variable_columns,
                 Arc::clone(&self.store) as Arc<dyn GraphStore>,
             )
-            .with_transaction_context(self.viewing_epoch, self.transaction_id);
+            .with_transaction_context(self.viewing_epoch, self.transaction_id)
+            .with_session_context(self.session_context.clone());
             result = Box::new(FilterOperator::new(result, Box::new(predicate)));
         }
 
@@ -454,7 +457,8 @@ impl super::Planner {
                 variable_columns,
                 Arc::clone(&self.store) as Arc<dyn GraphStore>,
             )
-            .with_transaction_context(self.viewing_epoch, self.transaction_id);
+            .with_transaction_context(self.viewing_epoch, self.transaction_id)
+            .with_session_context(self.session_context.clone());
             let filter_op = Box::new(FilterOperator::new(join_op, Box::new(predicate)));
             return Ok((filter_op, output_columns));
         }
@@ -611,7 +615,8 @@ impl super::Planner {
             count_var_columns.clone(),
             Arc::clone(&self.store) as Arc<dyn GraphStore>,
         )
-        .with_transaction_context(self.viewing_epoch, self.transaction_id);
+        .with_transaction_context(self.viewing_epoch, self.transaction_id)
+        .with_session_context(self.session_context.clone());
         let mut result_op: Box<dyn Operator> =
             Box::new(FilterOperator::new(agg_op, Box::new(predicate)));
 
@@ -623,7 +628,8 @@ impl super::Planner {
                 count_var_columns,
                 Arc::clone(&self.store) as Arc<dyn GraphStore>,
             )
-            .with_transaction_context(self.viewing_epoch, self.transaction_id);
+            .with_transaction_context(self.viewing_epoch, self.transaction_id)
+            .with_session_context(self.session_context.clone());
             result_op = Box::new(FilterOperator::new(
                 result_op,
                 Box::new(remaining_predicate),
@@ -835,7 +841,8 @@ impl super::Planner {
                 variable_columns,
                 Arc::clone(&self.store) as Arc<dyn GraphStore>,
             )
-            .with_transaction_context(self.viewing_epoch, self.transaction_id);
+            .with_transaction_context(self.viewing_epoch, self.transaction_id)
+            .with_session_context(self.session_context.clone());
             let filtered = Box::new(FilterOperator::new(node_list_op, Box::new(predicate)));
             Ok(Some((filtered, columns)))
         } else {
@@ -947,6 +954,9 @@ impl super::Planner {
     }
 
     /// Extracts (variable, property, value) from a property equality expression.
+    ///
+    /// Returns `None` for NULL literals: `property = NULL` is UNKNOWN in
+    /// three-valued logic and must never be optimized into an index lookup.
     pub(super) fn extract_property_equality(
         &self,
         left: &LogicalExpression,
@@ -956,11 +966,11 @@ impl super::Planner {
             (
                 LogicalExpression::Property { variable, property },
                 LogicalExpression::Literal(val),
-            ) => Some((variable.clone(), property.clone(), val.clone())),
+            ) if !val.is_null() => Some((variable.clone(), property.clone(), val.clone())),
             (
                 LogicalExpression::Literal(val),
                 LogicalExpression::Property { variable, property },
-            ) => Some((variable.clone(), property.clone(), val.clone())),
+            ) if !val.is_null() => Some((variable.clone(), property.clone(), val.clone())),
             _ => None,
         }
     }

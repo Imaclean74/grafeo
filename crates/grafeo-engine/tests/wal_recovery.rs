@@ -649,7 +649,7 @@ mod wal {
     #[test]
     fn test_create_node_type_persists() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("ddl_node_type.grafeo");
+        let path = dir.path().join("ddl_node_type");
 
         {
             let db = GrafeoDB::open(&path).expect("open");
@@ -683,7 +683,7 @@ mod wal {
     #[test]
     fn test_create_edge_type_persists() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("ddl_edge_type.grafeo");
+        let path = dir.path().join("ddl_edge_type");
 
         {
             let db = GrafeoDB::open(&path).expect("open");
@@ -717,7 +717,7 @@ mod wal {
     #[test]
     fn test_drop_node_type_persists() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("ddl_drop_type.grafeo");
+        let path = dir.path().join("ddl_drop_type");
 
         {
             let db = GrafeoDB::open(&path).expect("open");
@@ -752,7 +752,7 @@ mod wal {
     #[test]
     fn test_schema_with_data_persists() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        let path = dir.path().join("ddl_with_data.grafeo");
+        let path = dir.path().join("ddl_with_data");
 
         {
             let db = GrafeoDB::open(&path).expect("open");

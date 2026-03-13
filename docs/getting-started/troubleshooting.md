@@ -171,7 +171,7 @@ uv add --upgrade grafeo  # or: pip install --upgrade grafeo
 4. **Check SIMD support** - Grafeo uses SIMD for vector operations:
    ```python
    import grafeo
-   print(grafeo.simd_support())  # Should show "avx2", "sse", "neon", or "scalar"
+   print(grafeo.simd_support())  # Should show "avx2", "sse", "neon" or "scalar"
    ```
 
 ### Out of memory errors

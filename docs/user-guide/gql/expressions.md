@@ -1,6 +1,6 @@
 ---
 title: Expressions
-description: GQL expressions, conditional logic, subqueries, and list operations.
+description: GQL expressions, conditional logic, subqueries and list operations.
 tags:
   - gql
   - expressions
@@ -8,7 +8,7 @@ tags:
 
 # Expressions
 
-GQL supports a rich expression language for conditional logic, type conversion, subqueries, and list operations.
+GQL supports a rich expression language for conditional logic, type conversion, subqueries and list operations.
 
 ## CASE Expressions
 

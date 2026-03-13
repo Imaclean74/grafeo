@@ -1,7 +1,7 @@
 # GQL Conformance (ISO/IEC 39075:2024)
 
 This document maps Grafeo's GQL implementation against the ISO/IEC 39075:2024 standard,
-declaring which features are supported, partially supported, or not yet implemented.
+declaring which features are supported, partially supported or not yet implemented.
 
 Grafeo targets **minimum conformance** plus a broad set of optional features.
 

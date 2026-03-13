@@ -4,11 +4,11 @@ We're building a modern graph database ecosystem in Rust, and we'd love your hel
 
 ## Why Contribute?
 
-**Learn by doing**: Work with cutting-edge tech including Rust, WebAssembly, Arrow/Polars vectorization, MVCC transactions, and multiple query language parsers.
+**Learn by doing**: Work with cutting-edge tech including Rust, WebAssembly, Arrow/Polars vectorization, MVCC transactions and multiple query language parsers.
 
 **Shape the project**: We're early-stage and open to ideas. Your contributions can influence the direction of the entire ecosystem.
 
-**Build your portfolio**: Graph databases are in demand. Contributing here gives you real experience with database internals, query optimization, and systems programming.
+**Build your portfolio**: Graph databases are in demand. Contributing here gives you real experience with database internals, query optimization and systems programming.
 
 ## Ways to Get Involved
 
@@ -83,12 +83,18 @@ See each project's CONTRIBUTING.md for specific instructions.
 
 We aim to respond within a few days. Be patient with us, and we'll be patient with you.
 
+## Contributors
+
+Thank you to everyone who has contributed to Grafeo!
+
+- **CorvusYe** ([@CorvusYe](https://github.com/CorvusYe)): Dart bindings ([#138](https://github.com/GrafeoDB/grafeo/pull/138)), single-file `.grafeo` format feature request ([#139](https://github.com/GrafeoDB/grafeo/issues/139))
+
 ## Recognition
 
 Contributors are recognized in:
 - Release notes
 - Project documentation
-- This file (once we have more contributors!)
+- This file
 
 ## Current Maintainers
 
@@ -100,4 +106,4 @@ All contributions are licensed under Apache-2.0.
 
 ---
 
-**Ready to contribute?** Pick a repo, find an issue, and send a PR. We're excited to have you.
+**Ready to contribute?** Pick a repo, find an issue and send a PR. We're excited to have you.

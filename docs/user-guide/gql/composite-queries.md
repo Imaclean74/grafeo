@@ -1,6 +1,6 @@
 ---
 title: Composite Queries
-description: Combine GQL queries with UNION, EXCEPT, INTERSECT, and OTHERWISE.
+description: Combine GQL queries with UNION, EXCEPT, INTERSECT and OTHERWISE.
 tags:
   - gql
   - composite

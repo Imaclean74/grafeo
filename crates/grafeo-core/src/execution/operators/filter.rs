@@ -183,6 +183,65 @@ pub struct ExpressionPredicate {
     transaction_id: Option<TransactionId>,
     /// Viewing epoch for MVCC-aware lookups.
     viewing_epoch: Option<EpochId>,
+    /// Session context for introspection functions (info, schema, current_schema, etc.).
+    session_context: SessionContext,
+}
+
+/// A lazily-computed, cloneable value.
+///
+/// The factory runs at most once (via `OnceLock`). Cloning is cheap because
+/// both the lock and the factory are behind `Arc`.
+#[derive(Clone)]
+pub struct LazyValue {
+    cell: Arc<std::sync::OnceLock<Value>>,
+    factory: Arc<dyn Fn() -> Value + Send + Sync>,
+}
+
+impl LazyValue {
+    /// Creates a new lazy value with the given factory.
+    pub fn new(factory: impl Fn() -> Value + Send + Sync + 'static) -> Self {
+        Self {
+            cell: Arc::new(std::sync::OnceLock::new()),
+            factory: Arc::new(factory),
+        }
+    }
+
+    /// Returns the value, computing it on first access.
+    pub fn get(&self) -> &Value {
+        self.cell.get_or_init(|| (self.factory)())
+    }
+}
+
+impl std::fmt::Debug for LazyValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.cell.get() {
+            Some(v) => write!(f, "LazyValue({v:?})"),
+            None => write!(f, "LazyValue(<not yet computed>)"),
+        }
+    }
+}
+
+impl Default for LazyValue {
+    fn default() -> Self {
+        Self::new(|| Value::Null)
+    }
+}
+
+/// Session-level context passed to the filter evaluator for introspection functions.
+///
+/// Lightweight strings (`current_schema`, `current_graph`) are stored directly.
+/// Expensive introspection maps (`db_info`, `schema_info`) are lazily computed
+/// on first access, so queries that never call `info()` or `schema()` pay zero cost.
+#[derive(Debug, Clone, Default)]
+pub struct SessionContext {
+    /// Current session schema name (for `CURRENT_SCHEMA`).
+    pub current_schema: Option<String>,
+    /// Current session graph name (for `CURRENT_GRAPH`).
+    pub current_graph: Option<String>,
+    /// Lazily-computed `info()` result.
+    pub db_info: LazyValue,
+    /// Lazily-computed `schema()` result.
+    pub schema_info: LazyValue,
 }
 
 /// A filter expression that can be evaluated.
@@ -406,6 +465,7 @@ impl ExpressionPredicate {
             store,
             transaction_id: None,
             viewing_epoch: None,
+            session_context: SessionContext::default(),
         }
     }
 
@@ -417,6 +477,12 @@ impl ExpressionPredicate {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Sets the session context for introspection functions.
+    pub fn with_session_context(mut self, context: SessionContext) -> Self {
+        self.session_context = context;
         self
     }
 
@@ -881,8 +947,22 @@ impl ExpressionPredicate {
                     let r = recurse(right)?;
                     return match r {
                         Value::List(items) => {
-                            let found = items.iter().any(|v| Self::values_equal(&l, v));
-                            Some(Value::Bool(found))
+                            if l.is_null() {
+                                return Some(Value::Null);
+                            }
+                            let mut has_null = false;
+                            for v in items.iter() {
+                                if v.is_null() {
+                                    has_null = true;
+                                } else if Self::values_equal(&l, v) {
+                                    return Some(Value::Bool(true));
+                                }
+                            }
+                            if has_null {
+                                Some(Value::Null)
+                            } else {
+                                Some(Value::Bool(false))
+                            }
                         }
                         _ => None,
                     };
@@ -1009,8 +1089,22 @@ impl ExpressionPredicate {
                     let right_val = self.eval_comprehension_expr(right, item, variable)?;
                     return match right_val {
                         Value::List(items) => {
-                            let found = items.iter().any(|v| Self::values_equal(&left_val, v));
-                            Some(Value::Bool(found))
+                            if left_val.is_null() {
+                                return Some(Value::Null);
+                            }
+                            let mut has_null = false;
+                            for v in items.iter() {
+                                if v.is_null() {
+                                    has_null = true;
+                                } else if Self::values_equal(&left_val, v) {
+                                    return Some(Value::Bool(true));
+                                }
+                            }
+                            if has_null {
+                                Some(Value::Null)
+                            } else {
+                                Some(Value::Bool(false))
+                            }
                         }
                         _ => None,
                     };
@@ -1068,10 +1162,17 @@ impl ExpressionPredicate {
         variable: &str,
     ) -> Option<Value> {
         if let Some(test_expr) = operand {
-            let test_val = self.eval_comprehension_expr(test_expr, item, variable)?;
+            let test_val = self
+                .eval_comprehension_expr(test_expr, item, variable)
+                .unwrap_or(Value::Null);
             for (when_expr, then_expr) in when_clauses {
-                let when_val = self.eval_comprehension_expr(when_expr, item, variable)?;
-                if Self::values_equal(&test_val, &when_val) {
+                let when_val = self
+                    .eval_comprehension_expr(when_expr, item, variable)
+                    .unwrap_or(Value::Null);
+                if !test_val.is_null()
+                    && !when_val.is_null()
+                    && Self::values_equal(&test_val, &when_val)
+                {
                     return self.eval_comprehension_expr(then_expr, item, variable);
                 }
             }
@@ -1090,25 +1191,47 @@ impl ExpressionPredicate {
         }
     }
 
+    /// Evaluates a binary operator with ISO three-valued logic.
+    ///
+    /// NULL propagation: `NULL = x`, `x = NULL`, `NULL <> x` all yield
+    /// `Value::Null` (UNKNOWN), not `Value::Bool`. AND/OR/XOR follow the
+    /// standard truth tables where FALSE AND UNKNOWN = FALSE, etc.
+    ///
+    /// For structural equality (DISTINCT, GROUP BY), use [`values_equal`]
+    /// directly, which treats NULL == NULL as true.
     fn eval_binary_op(&self, left: &Value, op: BinaryFilterOp, right: &Value) -> Option<Value> {
         match op {
-            BinaryFilterOp::And => {
-                let l = left.as_bool()?;
-                let r = right.as_bool()?;
-                Some(Value::Bool(l && r))
+            // Three-valued logic for AND/OR/XOR (ISO/IEC 39075 Section 21)
+            BinaryFilterOp::And => match (left.as_bool(), right.as_bool()) {
+                (Some(false), _) | (_, Some(false)) => Some(Value::Bool(false)),
+                (Some(true), Some(true)) => Some(Value::Bool(true)),
+                _ => Some(Value::Null), // UNKNOWN
+            },
+            BinaryFilterOp::Or => match (left.as_bool(), right.as_bool()) {
+                (Some(true), _) | (_, Some(true)) => Some(Value::Bool(true)),
+                (Some(false), Some(false)) => Some(Value::Bool(false)),
+                _ => Some(Value::Null), // UNKNOWN
+            },
+            BinaryFilterOp::Xor => match (left.as_bool(), right.as_bool()) {
+                (Some(l), Some(r)) => Some(Value::Bool(l ^ r)),
+                _ => Some(Value::Null), // UNKNOWN
+            },
+            // NULL = anything or anything = NULL is UNKNOWN (three-valued logic).
+            // values_equal is preserved for structural equality (DISTINCT, GROUP BY).
+            BinaryFilterOp::Eq => {
+                if left.is_null() || right.is_null() {
+                    Some(Value::Null)
+                } else {
+                    Some(Value::Bool(Self::values_equal(left, right)))
+                }
             }
-            BinaryFilterOp::Or => {
-                let l = left.as_bool()?;
-                let r = right.as_bool()?;
-                Some(Value::Bool(l || r))
+            BinaryFilterOp::Ne => {
+                if left.is_null() || right.is_null() {
+                    Some(Value::Null)
+                } else {
+                    Some(Value::Bool(!Self::values_equal(left, right)))
+                }
             }
-            BinaryFilterOp::Xor => {
-                let l = left.as_bool()?;
-                let r = right.as_bool()?;
-                Some(Value::Bool(l ^ r))
-            }
-            BinaryFilterOp::Eq => Some(Value::Bool(Self::values_equal(left, right))),
-            BinaryFilterOp::Ne => Some(Value::Bool(!Self::values_equal(left, right))),
             BinaryFilterOp::Lt => self.compare_values(left, right).map(|c| Value::Bool(c < 0)),
             BinaryFilterOp::Le => self
                 .compare_values(left, right)
@@ -1347,6 +1470,11 @@ impl ExpressionPredicate {
         }
     }
 
+    /// Evaluates `left IN right` with three-valued NULL semantics.
+    ///
+    /// - `NULL IN [...]` yields UNKNOWN.
+    /// - If no element matches but the list contains NULLs, yields UNKNOWN.
+    /// - Otherwise yields `true` on first match, `false` if none match.
     fn eval_in_operator(
         &self,
         left: &Value,
@@ -1354,12 +1482,26 @@ impl ExpressionPredicate {
         chunk: &DataChunk,
         row: usize,
     ) -> Option<Value> {
-        // Evaluate the right side - it should be a list
         let right_val = self.eval_expr(right, chunk, row)?;
         match right_val {
             Value::List(items) => {
-                let found = items.iter().any(|item| Self::values_equal(left, item));
-                Some(Value::Bool(found))
+                // Three-valued IN: NULL IN (...) is UNKNOWN
+                if left.is_null() {
+                    return Some(Value::Null);
+                }
+                let mut has_null = false;
+                for item in items.iter() {
+                    if item.is_null() {
+                        has_null = true;
+                    } else if Self::values_equal(left, item) {
+                        return Some(Value::Bool(true));
+                    }
+                }
+                if has_null {
+                    Some(Value::Null) // no match but NULLs present: UNKNOWN
+                } else {
+                    Some(Value::Bool(false))
+                }
             }
             _ => None,
         }
@@ -2913,6 +3055,23 @@ impl ExpressionPredicate {
                 // For embedded databases, returns a default user string
                 Some(Value::String("default".into()))
             }
+            // ISO/IEC 39075 Section 17.1 / Section 21: session schema/graph references
+            "current_schema" => Some(self.session_context.current_schema.as_ref().map_or_else(
+                || Value::String("default".into()),
+                |s| Value::String(s.clone().into()),
+            )),
+            "current_graph" => Some(self.session_context.current_graph.as_ref().map_or_else(
+                || Value::String("default".into()),
+                |g| Value::String(g.clone().into()),
+            )),
+            "home_schema" | "home_graph" => {
+                // Home schema/graph: not configurable yet, returns null
+                Some(Value::Null)
+            }
+            // Grafeo extension: info() returns database metadata as a map
+            "info" => Some(self.session_context.db_info.get().clone()),
+            // Grafeo extension: schema() returns schema metadata as a map
+            "schema" => Some(self.session_context.schema_info.get().clone()),
             "octet_length" | "byte_length" => {
                 // octet_length(string) - byte length
                 if args.len() != 1 {
@@ -2968,7 +3127,10 @@ impl ExpressionPredicate {
                 }
                 let val1 = self.eval_expr(&args[0], chunk, row)?;
                 let val2 = self.eval_expr(&args[1], chunk, row)?;
-                if Self::values_equal(&val1, &val2) {
+                // Three-valued: NULLIF(NULL, x) = NULL; NULLIF(x, NULL) = x
+                if val1.is_null() || val2.is_null() {
+                    Some(val1)
+                } else if Self::values_equal(&val1, &val2) {
                     Some(Value::Null)
                 } else {
                     Some(val1)
@@ -2988,17 +3150,25 @@ impl ExpressionPredicate {
     ) -> Option<Value> {
         if let Some(test_expr) = operand {
             // Simple CASE: CASE expr WHEN val1 THEN res1 ...
-            let test_val = self.eval_expr(test_expr, chunk, row)?;
+            // Use unwrap_or(Null) so a NULL test expression falls through to ELSE
+            // rather than short-circuiting the entire CASE (NULL != anything).
+            let test_val = self.eval_expr(test_expr, chunk, row).unwrap_or(Value::Null);
             for (when_expr, then_expr) in when_clauses {
-                let when_val = self.eval_expr(when_expr, chunk, row)?;
-                if Self::values_equal(&test_val, &when_val) {
+                let when_val = self.eval_expr(when_expr, chunk, row).unwrap_or(Value::Null);
+                // Three-valued logic: NULL never matches anything in simple CASE
+                if !test_val.is_null()
+                    && !when_val.is_null()
+                    && Self::values_equal(&test_val, &when_val)
+                {
                     return self.eval_expr(then_expr, chunk, row);
                 }
             }
         } else {
             // Searched CASE: CASE WHEN cond1 THEN res1 ...
+            // Use unwrap_or(Null) so a NULL/UNKNOWN condition falls through
+            // to the next WHEN or ELSE (three-valued logic: only TRUE matches).
             for (when_expr, then_expr) in when_clauses {
-                let when_val = self.eval_expr(when_expr, chunk, row)?;
+                let when_val = self.eval_expr(when_expr, chunk, row).unwrap_or(Value::Null);
                 if when_val.as_bool() == Some(true) {
                     return self.eval_expr(then_expr, chunk, row);
                 }
@@ -3032,6 +3202,11 @@ impl ExpressionPredicate {
         }
     }
 
+    /// Structural equality for DISTINCT, GROUP BY, and list/map comparison.
+    ///
+    /// Treats NULL == NULL as `true` (grouping semantics). For SQL/GQL
+    /// comparison operators, use [`eval_binary_op`] which returns UNKNOWN
+    /// when either operand is NULL.
     fn values_equal(left: &Value, right: &Value) -> bool {
         match (left, right) {
             (Value::Null, Value::Null) => true,

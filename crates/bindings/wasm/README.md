@@ -21,23 +21,27 @@ npm install @grafeo-db/wasm
 ## Usage
 
 ```typescript
-import init, { GrafeoCore } from '@grafeo-db/wasm';
+import init, { Database } from '@grafeo-db/wasm';
 
 // Initialize the WASM module
 await init();
 
-// Low-level API
-const core = new GrafeoCore();
-const result = core.execute(`MATCH (n:Person) RETURN n.name`);
+// Create a database and query
+const db = new Database();
+const result = db.execute(`MATCH (n:Person) RETURN n.name`);
 ```
 
-## Progress
+## Status
 
-- [ ] Core WASM bindings via wasm-bindgen
-- [ ] In-memory database support
-- [ ] All query languages (GQL, Cypher, SPARQL, GraphQL, Gremlin)
-- [ ] TypeScript type definitions
-- [ ] Size optimization (target: <1MB gzipped)
+- [x] Core WASM bindings via wasm-bindgen
+- [x] In-memory database support
+- [x] GQL query language (default via `browser` profile)
+- [x] TypeScript type definitions
+- [x] Size optimization (513 KB gzipped lite, 531 KB AI variant)
+- [x] Vector search bindings (k-NN, MMR)
+- [x] Snapshot export/import for IndexedDB persistence
+- [x] Batch import (importLpg, importRdf, importRows)
+- [x] Memory introspection (memoryUsage)
 
 ## Package Contents
 
@@ -49,28 +53,21 @@ const result = core.execute(`MATCH (n:Person) RETURN n.name`);
 └── package.json
 ```
 
-## Target Bundle Size
+## Bundle Size
 
 | Build | Size (gzip) |
 |-------|-------------|
-| Full (all languages) | ~600 KB |
-| Minimal (GQL only) | ~300 KB |
+| AI variant (GQL + vector/text/hybrid search) | 531 KB |
+| Lite variant (GQL only) | 513 KB |
 
 ## Runtime Support
 
 | Runtime | Status |
 |---------|--------|
-| Browser (Chrome, Firefox, Safari, Edge) | Planned |
-| Deno | Planned |
-| Cloudflare Workers | Planned |
+| Browser (Chrome, Firefox, Safari, Edge) | Supported |
+| Deno | Supported |
+| Cloudflare Workers | Untested |
 | Node.js | Use `@grafeo-db/js` instead |
-
-## Current Alternatives
-
-While WASM bindings are in development, you can use:
-
-- **Python**: [`grafeo`](https://pypi.org/project/grafeo/) - fully functional
-- **Rust**: [`grafeo`](https://crates.io/crates/grafeo) - fully functional
 
 ## Links
 

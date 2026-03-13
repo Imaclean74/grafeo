@@ -271,7 +271,7 @@ import grafeo
 
 # Returns a string identifying the active SIMD instruction set
 simd = grafeo.simd_support()
-print(simd)  # One of: "avx2", "sse", "neon", or "scalar"
+print(simd)  # One of: "avx2", "sse", "neon" or "scalar"
 ```
 
 SIMD is automatically used for:

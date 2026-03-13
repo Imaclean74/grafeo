@@ -12,27 +12,34 @@ use crate::config::Config;
 #[cfg(feature = "wal")]
 use grafeo_adapters::storage::wal::WalRecord;
 
-/// Binary snapshot format v1 (no named graphs).
+use crate::catalog::{
+    EdgeTypeDefinition, GraphTypeDefinition, NodeTypeDefinition, ProcedureDefinition,
+};
+
+/// Current snapshot version.
+const SNAPSHOT_VERSION: u8 = 3;
+
+/// Binary snapshot format (v3: graph data, named graphs, RDF, and schema).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Snapshot {
     version: u8,
     nodes: Vec<SnapshotNode>,
     edges: Vec<SnapshotEdge>,
+    named_graphs: Vec<NamedGraphSnapshot>,
+    rdf_triples: Vec<SnapshotTriple>,
+    rdf_named_graphs: Vec<RdfNamedGraphSnapshot>,
+    schema: SnapshotSchema,
 }
 
-/// Binary snapshot format v2 (with named graphs and optional RDF data).
-#[derive(serde::Serialize, serde::Deserialize)]
-struct SnapshotV2 {
-    version: u8,
-    nodes: Vec<SnapshotNode>,
-    edges: Vec<SnapshotEdge>,
-    named_graphs: Vec<NamedGraphSnapshot>,
-    /// RDF triples in the default graph.
-    #[serde(default)]
-    rdf_triples: Vec<SnapshotTriple>,
-    /// RDF named graph data.
-    #[serde(default)]
-    rdf_named_graphs: Vec<RdfNamedGraphSnapshot>,
+/// Schema metadata within a snapshot.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SnapshotSchema {
+    node_types: Vec<NodeTypeDefinition>,
+    edge_types: Vec<EdgeTypeDefinition>,
+    graph_types: Vec<GraphTypeDefinition>,
+    procedures: Vec<ProcedureDefinition>,
+    schemas: Vec<String>,
+    graph_type_bindings: Vec<(String, String)>,
 }
 
 /// A named graph partition within a v2 snapshot.
@@ -194,6 +201,112 @@ fn populate_rdf_store(store: &grafeo_core::graph::rdf::RdfStore, triples: &[Snap
     }
 }
 
+// =========================================================================
+// Snapshot deserialization helpers (used by single-file format)
+// =========================================================================
+
+/// Decodes snapshot bytes and populates a store and catalog.
+#[cfg(feature = "grafeo-file")]
+pub(super) fn load_snapshot_into_store(
+    store: &std::sync::Arc<grafeo_core::graph::lpg::LpgStore>,
+    catalog: &std::sync::Arc<crate::catalog::Catalog>,
+    #[cfg(feature = "rdf")] rdf_store: &std::sync::Arc<grafeo_core::graph::rdf::RdfStore>,
+    data: &[u8],
+) -> grafeo_common::utils::error::Result<()> {
+    use grafeo_common::utils::error::Error;
+
+    let config = bincode::config::standard();
+    let (snapshot, _) =
+        bincode::serde::decode_from_slice::<Snapshot, _>(data, config).map_err(|e| {
+            Error::Serialization(format!("failed to decode snapshot from .grafeo file: {e}"))
+        })?;
+
+    populate_store_from_snapshot_ref(store, &snapshot.nodes, &snapshot.edges)?;
+    for graph in &snapshot.named_graphs {
+        store
+            .create_graph(&graph.name)
+            .map_err(|e| Error::Internal(e.to_string()))?;
+        if let Some(graph_store) = store.graph(&graph.name) {
+            populate_store_from_snapshot_ref(&graph_store, &graph.nodes, &graph.edges)?;
+        }
+    }
+    restore_schema_from_snapshot(catalog, &snapshot.schema);
+
+    // Restore RDF triples
+    #[cfg(feature = "rdf")]
+    {
+        populate_rdf_store(rdf_store, &snapshot.rdf_triples);
+        for rdf_graph in &snapshot.rdf_named_graphs {
+            rdf_store.create_graph(&rdf_graph.name);
+            if let Some(graph_store) = rdf_store.graph(&rdf_graph.name) {
+                populate_rdf_store(&graph_store, &rdf_graph.triples);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Populates a store from snapshot refs (borrowed, for single-file loading).
+#[cfg(feature = "grafeo-file")]
+fn populate_store_from_snapshot_ref(
+    store: &grafeo_core::graph::lpg::LpgStore,
+    nodes: &[SnapshotNode],
+    edges: &[SnapshotEdge],
+) -> grafeo_common::utils::error::Result<()> {
+    for node in nodes {
+        let label_refs: Vec<&str> = node.labels.iter().map(|s| s.as_str()).collect();
+        store.create_node_with_id(node.id, &label_refs)?;
+        for (key, value) in &node.properties {
+            store.set_node_property(node.id, key, value.clone());
+        }
+    }
+    for edge in edges {
+        store.create_edge_with_id(edge.id, edge.src, edge.dst, &edge.edge_type)?;
+        for (key, value) in &edge.properties {
+            store.set_edge_property(edge.id, key, value.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Restores schema definitions from a snapshot into the catalog.
+fn restore_schema_from_snapshot(
+    catalog: &std::sync::Arc<crate::catalog::Catalog>,
+    schema: &SnapshotSchema,
+) {
+    for def in &schema.node_types {
+        catalog.register_or_replace_node_type(def.clone());
+    }
+    for def in &schema.edge_types {
+        catalog.register_or_replace_edge_type_def(def.clone());
+    }
+    for def in &schema.graph_types {
+        let _ = catalog.register_graph_type(def.clone());
+    }
+    for def in &schema.procedures {
+        catalog.replace_procedure(def.clone()).ok();
+    }
+    for name in &schema.schemas {
+        let _ = catalog.register_schema_namespace(name.clone());
+    }
+    for (graph_name, type_name) in &schema.graph_type_bindings {
+        let _ = catalog.bind_graph_type(graph_name, type_name.clone());
+    }
+}
+
+/// Collects schema definitions from the catalog into snapshot format.
+fn collect_schema(catalog: &std::sync::Arc<crate::catalog::Catalog>) -> SnapshotSchema {
+    SnapshotSchema {
+        node_types: catalog.all_node_type_defs(),
+        edge_types: catalog.all_edge_type_defs(),
+        graph_types: catalog.all_graph_type_defs(),
+        procedures: catalog.all_procedure_defs(),
+        schemas: catalog.schema_names(),
+        graph_type_bindings: catalog.all_graph_type_bindings(),
+    }
+}
+
 impl super::GrafeoDB {
     // =========================================================================
     // ADMIN API: Persistence Control
@@ -201,6 +314,8 @@ impl super::GrafeoDB {
 
     /// Saves the database to a file path.
     ///
+    /// - If the path ends in `.grafeo`: creates a single-file database
+    /// - Otherwise: creates a WAL directory-backed database at the path
     /// - If in-memory: creates a new persistent database at path
     /// - If file-backed: creates a copy at the new path
     ///
@@ -214,6 +329,12 @@ impl super::GrafeoDB {
     #[cfg(feature = "wal")]
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
+
+        // Single-file format: export snapshot directly to a .grafeo file
+        #[cfg(feature = "grafeo-file")]
+        if path.extension().is_some_and(|ext| ext == "grafeo") {
+            return self.save_as_grafeo_file(path);
+        }
 
         // Create target database with WAL enabled
         let target_config = Config::persistent(path);
@@ -376,6 +497,31 @@ impl super::GrafeoDB {
     /// Returns a new database that is completely independent, including
     /// all named graph data.
     /// Useful for:
+    /// Saves the database to a single `.grafeo` file.
+    #[cfg(feature = "grafeo-file")]
+    fn save_as_grafeo_file(&self, path: &Path) -> Result<()> {
+        use grafeo_adapters::storage::file::GrafeoFileManager;
+
+        let snapshot_data = self.export_snapshot()?;
+        let epoch = self.store.current_epoch();
+        let transaction_id = self
+            .transaction_manager
+            .last_assigned_transaction_id()
+            .map_or(0, |t| t.0);
+        let node_count = self.store.node_count() as u64;
+        let edge_count = self.store.edge_count() as u64;
+
+        let fm = GrafeoFileManager::create(path)?;
+        fm.write_snapshot(
+            &snapshot_data,
+            epoch.0,
+            transaction_id,
+            node_count,
+            edge_count,
+        )?;
+        Ok(())
+    }
+
     /// - Testing modifications without affecting the original
     /// - Faster operations when persistence isn't needed
     ///
@@ -532,13 +678,16 @@ impl super::GrafeoDB {
         #[cfg(not(feature = "rdf"))]
         let rdf_named_graphs = Vec::new();
 
-        let snapshot = SnapshotV2 {
-            version: 2,
+        let schema = collect_schema(&self.catalog);
+
+        let snapshot = Snapshot {
+            version: SNAPSHOT_VERSION,
             nodes,
             edges,
             named_graphs,
             rdf_triples,
             rdf_named_graphs,
+            schema,
         };
 
         let config = bincode::config::standard();
@@ -565,31 +714,16 @@ impl super::GrafeoDB {
             return Err(Error::Internal("empty snapshot data".to_string()));
         }
 
-        let config = bincode::config::standard();
-
         // Peek at version byte (bincode standard encodes u8 as raw byte)
-        match data[0] {
-            1 => Self::import_snapshot_v1(data, config),
-            2 => Self::import_snapshot_v2(data, config),
-            v => Err(Error::Internal(format!(
-                "unsupported snapshot version: {v}"
-            ))),
+        if data[0] != SNAPSHOT_VERSION {
+            return Err(Error::Internal(format!(
+                "unsupported snapshot version: {} (expected {SNAPSHOT_VERSION})",
+                data[0]
+            )));
         }
-    }
 
-    fn import_snapshot_v1(data: &[u8], config: bincode::config::Configuration) -> Result<Self> {
+        let config = bincode::config::standard();
         let (snapshot, _): (Snapshot, _) = bincode::serde::decode_from_slice(data, config)
-            .map_err(|e| Error::Internal(format!("snapshot import failed: {e}")))?;
-
-        validate_snapshot_data(&snapshot.nodes, &snapshot.edges)?;
-
-        let db = Self::new_in_memory();
-        populate_store_from_snapshot(&db.store, snapshot.nodes, snapshot.edges)?;
-        Ok(db)
-    }
-
-    fn import_snapshot_v2(data: &[u8], config: bincode::config::Configuration) -> Result<Self> {
-        let (snapshot, _): (SnapshotV2, _) = bincode::serde::decode_from_slice(data, config)
             .map_err(|e| Error::Internal(format!("snapshot import failed: {e}")))?;
 
         // Validate default graph data
@@ -623,6 +757,9 @@ impl super::GrafeoDB {
             }
         }
 
+        // Restore schema
+        restore_schema_from_snapshot(&db.catalog, &snapshot.schema);
+
         Ok(db)
     }
 
@@ -646,41 +783,15 @@ impl super::GrafeoDB {
             return Err(Error::Internal("empty snapshot data".to_string()));
         }
 
+        if data[0] != SNAPSHOT_VERSION {
+            return Err(Error::Internal(format!(
+                "unsupported snapshot version: {} (expected {SNAPSHOT_VERSION})",
+                data[0]
+            )));
+        }
+
         let config = bincode::config::standard();
-
-        match data[0] {
-            1 => self.restore_snapshot_v1(data, config),
-            2 => self.restore_snapshot_v2(data, config),
-            v => Err(Error::Internal(format!(
-                "unsupported snapshot version: {v}"
-            ))),
-        }
-    }
-
-    fn restore_snapshot_v1(
-        &self,
-        data: &[u8],
-        config: bincode::config::Configuration,
-    ) -> Result<()> {
         let (snapshot, _): (Snapshot, _) = bincode::serde::decode_from_slice(data, config)
-            .map_err(|e| Error::Internal(format!("snapshot restore failed: {e}")))?;
-
-        validate_snapshot_data(&snapshot.nodes, &snapshot.edges)?;
-
-        // Drop all named graphs before clearing the default store
-        for name in self.store.graph_names() {
-            self.store.drop_graph(&name);
-        }
-        self.store.clear();
-        populate_store_from_snapshot(&self.store, snapshot.nodes, snapshot.edges)
-    }
-
-    fn restore_snapshot_v2(
-        &self,
-        data: &[u8],
-        config: bincode::config::Configuration,
-    ) -> Result<()> {
-        let (snapshot, _): (SnapshotV2, _) = bincode::serde::decode_from_slice(data, config)
             .map_err(|e| Error::Internal(format!("snapshot restore failed: {e}")))?;
 
         // Validate all data before making any changes
@@ -722,6 +833,9 @@ impl super::GrafeoDB {
             }
         }
 
+        // Restore schema
+        restore_schema_from_snapshot(&self.catalog, &snapshot.schema);
+
         Ok(())
     }
 
@@ -749,7 +863,7 @@ mod tests {
     use grafeo_common::types::{EdgeId, NodeId, Value};
 
     use super::super::GrafeoDB;
-    use super::{Snapshot, SnapshotEdge, SnapshotNode};
+    use super::{SNAPSHOT_VERSION, Snapshot, SnapshotEdge, SnapshotNode, SnapshotSchema};
 
     #[test]
     fn test_restore_snapshot_basic() {
@@ -988,8 +1102,17 @@ mod tests {
 
     // --- restore_snapshot() validation ---
 
-    fn encode_snapshot(snap: &Snapshot) -> Vec<u8> {
-        bincode::serde::encode_to_vec(snap, bincode::config::standard()).unwrap()
+    fn make_snapshot(version: u8, nodes: Vec<SnapshotNode>, edges: Vec<SnapshotEdge>) -> Vec<u8> {
+        let snap = Snapshot {
+            version,
+            nodes,
+            edges,
+            named_graphs: vec![],
+            rdf_triples: vec![],
+            rdf_named_graphs: vec![],
+            schema: SnapshotSchema::default(),
+        };
+        bincode::serde::encode_to_vec(&snap, bincode::config::standard()).unwrap()
     }
 
     #[test]
@@ -998,12 +1121,7 @@ mod tests {
         let session = db.session();
         session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
 
-        let snap = Snapshot {
-            version: 99,
-            nodes: vec![],
-            edges: vec![],
-        };
-        let bytes = encode_snapshot(&snap);
+        let bytes = make_snapshot(99, vec![], vec![]);
 
         let result = db.restore_snapshot(&bytes);
         assert!(result.is_err());
@@ -1020,9 +1138,9 @@ mod tests {
         let session = db.session();
         session.execute("INSERT (:Person {name: 'Alix'})").unwrap();
 
-        let snap = Snapshot {
-            version: 1,
-            nodes: vec![
+        let bytes = make_snapshot(
+            SNAPSHOT_VERSION,
+            vec![
                 SnapshotNode {
                     id: NodeId::new(0),
                     labels: vec!["A".into()],
@@ -1034,9 +1152,8 @@ mod tests {
                     properties: vec![],
                 },
             ],
-            edges: vec![],
-        };
-        let bytes = encode_snapshot(&snap);
+            vec![],
+        );
 
         let result = db.restore_snapshot(&bytes);
         assert!(result.is_err());
@@ -1049,9 +1166,9 @@ mod tests {
     fn test_restore_rejects_duplicate_edge_ids() {
         let db = GrafeoDB::new_in_memory();
 
-        let snap = Snapshot {
-            version: 1,
-            nodes: vec![
+        let bytes = make_snapshot(
+            SNAPSHOT_VERSION,
+            vec![
                 SnapshotNode {
                     id: NodeId::new(0),
                     labels: vec![],
@@ -1063,7 +1180,7 @@ mod tests {
                     properties: vec![],
                 },
             ],
-            edges: vec![
+            vec![
                 SnapshotEdge {
                     id: EdgeId::new(0),
                     src: NodeId::new(0),
@@ -1079,8 +1196,7 @@ mod tests {
                     properties: vec![],
                 },
             ],
-        };
-        let bytes = encode_snapshot(&snap);
+        );
 
         let result = db.restore_snapshot(&bytes);
         assert!(result.is_err());
@@ -1092,22 +1208,21 @@ mod tests {
     fn test_restore_rejects_dangling_source() {
         let db = GrafeoDB::new_in_memory();
 
-        let snap = Snapshot {
-            version: 1,
-            nodes: vec![SnapshotNode {
+        let bytes = make_snapshot(
+            SNAPSHOT_VERSION,
+            vec![SnapshotNode {
                 id: NodeId::new(0),
                 labels: vec![],
                 properties: vec![],
             }],
-            edges: vec![SnapshotEdge {
+            vec![SnapshotEdge {
                 id: EdgeId::new(0),
                 src: NodeId::new(999),
                 dst: NodeId::new(0),
                 edge_type: "REL".into(),
                 properties: vec![],
             }],
-        };
-        let bytes = encode_snapshot(&snap);
+        );
 
         let result = db.restore_snapshot(&bytes);
         assert!(result.is_err());
@@ -1119,22 +1234,21 @@ mod tests {
     fn test_restore_rejects_dangling_destination() {
         let db = GrafeoDB::new_in_memory();
 
-        let snap = Snapshot {
-            version: 1,
-            nodes: vec![SnapshotNode {
+        let bytes = make_snapshot(
+            SNAPSHOT_VERSION,
+            vec![SnapshotNode {
                 id: NodeId::new(0),
                 labels: vec![],
                 properties: vec![],
             }],
-            edges: vec![SnapshotEdge {
+            vec![SnapshotEdge {
                 id: EdgeId::new(0),
                 src: NodeId::new(0),
                 dst: NodeId::new(999),
                 edge_type: "REL".into(),
                 properties: vec![],
             }],
-        };
-        let bytes = encode_snapshot(&snap);
+        );
 
         let result = db.restore_snapshot(&bytes);
         assert!(result.is_err());

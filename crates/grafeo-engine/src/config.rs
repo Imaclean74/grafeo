@@ -29,6 +29,34 @@ impl fmt::Display for GraphModel {
     }
 }
 
+/// Storage format for persistent databases.
+///
+/// Controls whether the database uses a single `.grafeo` file or a legacy
+/// WAL directory. The default (`Auto`) auto-detects based on the path:
+/// files ending in `.grafeo` use single-file format, directories use WAL.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum StorageFormat {
+    /// Auto-detect based on path: `.grafeo` extension = single file,
+    /// existing directory = WAL directory, new path without extension = WAL directory.
+    #[default]
+    Auto,
+    /// Legacy WAL directory format (directory with `wal/` subdirectory).
+    WalDirectory,
+    /// Single `.grafeo` file with a sidecar `.grafeo.wal/` directory during operation.
+    /// At rest (after checkpoint), only the `.grafeo` file exists.
+    SingleFile,
+}
+
+impl fmt::Display for StorageFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Auto => write!(f, "auto"),
+            Self::WalDirectory => write!(f, "wal-directory"),
+            Self::SingleFile => write!(f, "single-file"),
+        }
+    }
+}
+
 /// WAL durability mode controlling the trade-off between safety and speed.
 ///
 /// This enum lives in config so that `Config` can always carry the desired
@@ -141,6 +169,12 @@ pub struct Config {
     /// WAL durability mode. Only used when `wal_enabled` is true.
     pub wal_durability: DurabilityMode,
 
+    /// Storage format for persistent databases.
+    ///
+    /// `Auto` (default) detects the format from the path: `.grafeo` extension
+    /// uses single-file format, directories use the legacy WAL directory.
+    pub storage_format: StorageFormat,
+
     /// Whether to enable catalog schema constraint enforcement.
     ///
     /// When true, the catalog enforces label, edge type, and property constraints
@@ -244,6 +278,7 @@ impl Default for Config {
             adaptive: AdaptiveConfig::default(),
             factorized_execution: true,
             wal_durability: DurabilityMode::default(),
+            storage_format: StorageFormat::default(),
             schema_constraints: false,
             query_timeout: None,
             gc_interval: 100,
@@ -352,6 +387,13 @@ impl Config {
     #[must_use]
     pub fn with_wal_durability(mut self, mode: DurabilityMode) -> Self {
         self.wal_durability = mode;
+        self
+    }
+
+    /// Sets the storage format for persistent databases.
+    #[must_use]
+    pub fn with_storage_format(mut self, format: StorageFormat) -> Self {
+        self.storage_format = format;
         self
     }
 

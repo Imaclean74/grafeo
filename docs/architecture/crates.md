@@ -23,6 +23,9 @@ graph BT
     NODE[grafeo-node]
     CFFI[grafeo-c]
     WASM[grafeo-wasm]
+    CSHARP[grafeo-csharp]
+    DART[grafeo-dart]
+    COMMON_BIND[grafeo-bindings-common]
     CLI[grafeo-cli]
 
     CORE --> COMMON
@@ -32,10 +35,13 @@ graph BT
     ENGINE --> CORE
     ENGINE --> ADAPTERS
     GRAFEO --> ENGINE
-    PYTHON --> ENGINE
-    NODE --> ENGINE
-    CFFI --> ENGINE
-    WASM --> ENGINE
+    COMMON_BIND --> ENGINE
+    PYTHON --> COMMON_BIND
+    NODE --> COMMON_BIND
+    CFFI --> COMMON_BIND
+    WASM --> COMMON_BIND
+    CSHARP --> CFFI
+    DART --> CFFI
     CLI --> ENGINE
 ```
 
@@ -154,7 +160,29 @@ C FFI layer for cross-language interop. Located at `crates/bindings/c`.
 | `lib.rs` | C-compatible function exports |
 | `types.rs` | C-safe type wrappers |
 
-Also used by the Go bindings (`crates/bindings/go`) via CGO.
+Also used by Go (CGO), C# (P/Invoke) and Dart (dart:ffi) bindings.
+
+## grafeo-csharp
+
+C# / .NET 8 bindings via source-generated P/Invoke. Located at `crates/bindings/csharp`.
+
+Wraps grafeo-c with a .NET-native API including `GrafeoDB`, typed CRUD, transactions, vector search and `SafeHandle`-based resource management.
+
+## grafeo-dart
+
+Dart bindings via dart:ffi. Located at `crates/bindings/dart`.
+
+Wraps grafeo-c with `NativeFinalizer` for automatic resource cleanup, sealed exception hierarchy and `late final` cached FFI lookups.
+
+## grafeo-bindings-common
+
+Shared library for all language bindings. Located at `crates/bindings/common`.
+
+| Module | Purpose |
+|--------|---------|
+| `entities.rs` | Entity extraction (RawNode, RawEdge) |
+| `errors.rs` | Error classification |
+| `json.rs` | JSON to/from Value conversion |
 
 ## grafeo-wasm
 
@@ -166,8 +194,9 @@ WebAssembly bindings via wasm-bindgen. Located at `crates/bindings/wasm`.
 | `types.rs` | JavaScript ↔ WASM type conversions |
 
 ```javascript
-import { GrafeoDB } from '@grafeo-db/wasm';
-const db = new GrafeoDB();
+import init, { Database } from '@grafeo-db/wasm';
+await init();
+const db = new Database();
 ```
 
 ## grafeo-cli

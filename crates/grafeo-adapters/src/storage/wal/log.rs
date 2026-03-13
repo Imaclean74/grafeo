@@ -511,6 +511,17 @@ impl WalManager {
         }
     }
 
+    /// Closes the active log file, releasing its file handle.
+    ///
+    /// This allows the WAL directory to be safely removed on Windows,
+    /// where open file handles prevent directory deletion. A new log file
+    /// will be created automatically on the next write.
+    pub fn close_active_log(&self) {
+        let mut guard = self.active_log.lock();
+        // Dropping the LogFile closes the BufWriter and underlying File
+        *guard = None;
+    }
+
     // === Private methods ===
 
     fn ensure_active_log(&self) -> Result<()> {

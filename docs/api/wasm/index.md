@@ -139,7 +139,7 @@ const result = db.importRdf({
 console.log(result); // { triples: 3 }
 ```
 
-Objects can be a plain string (treated as IRI), or a structured literal with `value`, optional `datatype`, and optional `language` fields.
+Objects can be a plain string (treated as IRI), or a structured literal with `value`, optional `datatype` and optional `language` fields.
 
 ## Snapshots (Persistence)
 

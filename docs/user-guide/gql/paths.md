@@ -203,7 +203,7 @@ RETURN b.name, length(path)
 
 ## Paths as Values
 
-Paths are first-class values in GQL (GV55). A path variable can be returned, compared, and passed to functions:
+Paths are first-class values in GQL (GV55). A path variable can be returned, compared and passed to functions:
 
 ```sql
 -- Return the path itself

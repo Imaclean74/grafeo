@@ -12,7 +12,7 @@ Grafeo graph database running entirely in the browser via WebAssembly. Zero back
 
 ## Overview
 
-`@grafeo-db/web` wraps the Grafeo WASM binary in a TypeScript SDK with persistence, Web Worker support and framework-specific hooks. It supports all major query languages (GQL, Cypher, SPARQL, Gremlin, GraphQL) and provides a consistent API across React, Vue and Svelte.
+`@grafeo-db/web` wraps the Grafeo WASM binary in a TypeScript SDK with persistence, Web Worker support and framework-specific hooks. It supports all major query languages (GQL, Cypher, SPARQL, Gremlin, GraphQL, SQL/PGQ) and provides a consistent API across React, Vue and Svelte.
 
 ## Installation
 
@@ -51,7 +51,7 @@ await db.close();
 
 ## Multi-Language Queries
 
-All five query languages supported by the Grafeo engine are available:
+All six query languages supported by the Grafeo engine are available:
 
 ```typescript
 // GQL (default)
@@ -64,7 +64,7 @@ await db.execute(`MATCH (p:Person) RETURN p.name`, { language: 'cypher' });
 await db.execute(`SELECT ?name WHERE { ?p a :Person ; :name ?name }`, { language: 'sparql' });
 ```
 
-Supported values: `gql`, `cypher`, `sparql`, `gremlin`, `graphql`.
+Supported values: `gql`, `cypher`, `sparql`, `gremlin`, `graphql`, `sql`.
 
 ## API
 

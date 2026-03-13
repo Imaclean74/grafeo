@@ -55,7 +55,7 @@ Runnable [marimo](https://marimo.io/) notebooks you can launch locally. Each exa
 
     ---
 
-    PageRank, community detection, and interactive visualization with anywidget-graph.
+    PageRank, community detection and interactive visualization with anywidget-graph.
 
     [:octicons-arrow-right-24: View Example](examples/graph-visualization.md)
 
@@ -63,7 +63,7 @@ Runnable [marimo](https://marimo.io/) notebooks you can launch locally. Each exa
 
     ---
 
-    Cosine similarity, hybrid filtering, and 3D embedding visualization.
+    Cosine similarity, hybrid filtering and 3D embedding visualization.
 
     [:octicons-arrow-right-24: View Example](examples/vector-search.md)
 
@@ -71,7 +71,7 @@ Runnable [marimo](https://marimo.io/) notebooks you can launch locally. Each exa
 
     ---
 
-    Ring detection, mule accounts, and risk scoring with PageRank.
+    Ring detection, mule accounts and risk scoring with PageRank.
 
     [:octicons-arrow-right-24: View Example](examples/fraud-detection-example.md)
 
@@ -79,7 +79,7 @@ Runnable [marimo](https://marimo.io/) notebooks you can launch locally. Each exa
 
     ---
 
-    Centrality, clustering, and matplotlib visualization via NetworkX.
+    Centrality, clustering and matplotlib visualization via NetworkX.
 
     [:octicons-arrow-right-24: View Example](examples/networkx-integration.md)
 

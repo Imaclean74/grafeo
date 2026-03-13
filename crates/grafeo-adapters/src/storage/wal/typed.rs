@@ -126,6 +126,14 @@ impl<R: WalEntry> TypedWal<R> {
         self.manager.rotate()
     }
 
+    /// Closes the active log file, releasing its file handle.
+    ///
+    /// This allows the WAL directory to be safely removed on Windows,
+    /// where open file handles prevent directory deletion.
+    pub fn close_active_log(&self) {
+        self.manager.close_active_log();
+    }
+
     /// Returns the underlying [`WalManager`].
     ///
     /// Useful for accessing administrative methods or for passing to

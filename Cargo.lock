@@ -982,6 +982,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1120,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "grafeo-adapters",
  "grafeo-common",
@@ -1132,13 +1142,14 @@ dependencies = [
 
 [[package]]
 name = "grafeo-adapters"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "bincode",
  "byteorder",
  "bytes",
  "crc32fast",
  "crossbeam",
+ "fs2",
  "grafeo-common",
  "grafeo-core",
  "hashbrown 0.16.1",
@@ -1156,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-bindings-common"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "grafeo-common",
  "grafeo-engine",
@@ -1165,7 +1176,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-c"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "grafeo-bindings-common",
  "grafeo-common",
@@ -1177,7 +1188,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cli"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "anyhow",
  "clap",
@@ -1198,7 +1209,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-common"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "arcstr",
  "bincode",
@@ -1218,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-core"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "arcstr",
  "bincode",
@@ -1249,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-engine"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "anyhow",
  "arcstr",
@@ -1282,14 +1293,14 @@ dependencies = [
 
 [[package]]
 name = "grafeo-examples"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "grafeo",
 ]
 
 [[package]]
 name = "grafeo-node"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "grafeo-adapters",
  "grafeo-bindings-common",
@@ -1307,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-python"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "grafeo-adapters",
  "grafeo-bindings-common",
@@ -1323,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-wasm"
-version = "0.5.20"
+version = "0.5.21"
 dependencies = [
  "console_error_panic_hook",
  "getrandom 0.4.2",
