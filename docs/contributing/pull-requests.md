@@ -10,7 +10,7 @@ tags:
 ## Before Submitting
 
 - [ ] Tests pass: `cargo test --workspace`
-- [ ] No clippy warnings: `cargo clippy --workspace`
+- [ ] No clippy warnings: `cargo clippy --all-targets --all-features -- -D warnings`
 - [ ] Code formatted: `cargo fmt --all`
 - [ ] Documentation updated
 

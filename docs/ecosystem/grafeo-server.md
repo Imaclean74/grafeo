@@ -7,48 +7,56 @@ Standalone HTTP server and web UI for the Grafeo graph database.
 
 ## Overview
 
-grafeo-server wraps the Grafeo engine in a REST API and GQL Wire Protocol (gRPC), turning it from an embeddable library into a standalone database server. Pure Rust, single binary.
+grafeo-server wraps the Grafeo engine in a REST API, GQL Wire Protocol (gRPC) and Bolt v5.x wire protocol, turning it from an embeddable library into a standalone database server. Pure Rust, single binary. Available in four tiers to match different deployment needs.
 
 - **REST API** with auto-commit and explicit transaction modes
-- **GQL Wire Protocol** (gRPC) on port 7687 for binary wire-protocol clients
+- **GQL Wire Protocol** (gRPC) on port 7688 for binary wire-protocol clients
+- **Bolt v5.x** on port 7687 for Neo4j driver compatibility
 - **Multi-language queries**: GQL, Cypher, GraphQL, Gremlin, SPARQL, SQL/PGQ
 - **Admin API**: database stats, WAL management, integrity validation, index management
-- **Search API**: vector (KNN/HNSW), text (BM25), and hybrid search
+- **Search API**: vector (KNN/HNSW), text (BM25) and hybrid search
 - **Batch queries** with atomic rollback
 - **WebSocket streaming** for interactive query execution
 - **Web UI** (Studio) for interactive query exploration
 - **ACID transactions** with session-based lifecycle
 - **In-memory or persistent**: omit data directory for ephemeral, set it for durable storage
-- **Multiple Docker image variants** for different deployment needs
 
-## Docker Image Variants
+## Docker Image Tiers
 
-Three variants are published to Docker Hub on every release:
+Four tiers are published to Docker Hub on every release:
 
-| Variant | Tag | Languages | Engine Features | Web UI | Auth/TLS |
-|---------|-----|-----------|-----------------|--------|----------|
-| **lite** | `grafeo-server:lite` | GQL only | Core storage | No | No |
-| **standard** | `grafeo-server:latest` | All 6 | All + AI/search | Yes | No |
-| **full** | `grafeo-server:full` | All 6 | All + AI + ONNX embed | Yes | Yes |
+| Tier | Tag | Transport | Languages | AI/Search | Web UI | Binary |
+|------|-----|-----------|-----------|-----------|--------|--------|
+| **gwp** | `grafeo-server:gwp` | GWP (gRPC :7688) | GQL | No | No | ~7 MB |
+| **bolt** | `grafeo-server:bolt` | Bolt v5 (:7687) | Cypher | No | No | ~8 MB |
+| **standard** | `grafeo-server:latest` | HTTP (:7474) | All 6 | No | Studio | ~21 MB |
+| **full** | `grafeo-server:full` | HTTP + GWP + Bolt | All 6 | Yes + embed | Studio | ~25 MB |
 
-Versioned tags follow the pattern: `0.4.3`, `0.4.3-lite`, `0.4.3-full`.
+Versioned tags follow the pattern: `0.4.6`, `0.4.6-gwp`, `0.4.6-bolt`, `0.4.6-full`.
 
-### Lite
+### GWP
 
-Minimal footprint. GQL query language with core storage features (parallel execution, WAL, spill-to-disk, mmap). No web UI, no schema parsing, no auth/TLS. Ideal for:
+GQL-only gRPC wire protocol. Minimal footprint for machine-to-machine communication. Ideal for:
 
 - Sidecar containers
 - CI/CD test environments
-- Embedded deployments
-- Development and prototyping
+- Edge deployments
 
 ```bash
-docker run -p 7474:7474 grafeo/grafeo-server:lite
+docker run -p 7688:7688 grafeo/grafeo-server:gwp --data-dir /data
+```
+
+### Bolt
+
+Cypher-only Bolt v5 wire protocol. Compatible with existing Neo4j drivers (Python `neo4j`, JavaScript `neo4j-driver`, etc.).
+
+```bash
+docker run -p 7687:7687 grafeo/grafeo-server:bolt --data-dir /data
 ```
 
 ### Standard (default)
 
-All query languages, AI/search features (vector index, text index, hybrid search, CDC), RDF support and the Studio web UI. This is the default `grafeo-server:latest` image.
+HTTP REST API with all query languages, graph algorithms and the Studio web UI. This is the default `grafeo-server:latest` image.
 
 ```bash
 docker run -p 7474:7474 grafeo/grafeo-server
@@ -56,11 +64,10 @@ docker run -p 7474:7474 grafeo/grafeo-server
 
 ### Full
 
-Everything in standard plus authentication (bearer token, HTTP Basic), TLS, JSON Schema validation and ONNX embedding generation. Production-ready with security features built in.
+Everything in standard plus GWP, Bolt, AI/search features, ONNX embedding generation, authentication (bearer token, HTTP Basic), TLS and JSON Schema validation. Production-ready with all features and security built in.
 
 ```bash
-docker run -p 7474:7474 grafeo/grafeo-server:full \
-  --auth-token my-secret --tls-cert /certs/cert.pem --tls-key /certs/key.pem
+docker run -p 7474:7474 -p 7687:7687 -p 7688:7688 grafeo/grafeo-server:full
 ```
 
 ## Quick Start
@@ -137,7 +144,7 @@ Connect to `ws://localhost:7474/ws` for interactive query execution:
 
 ### Admin
 
-Database introspection, maintenance, and index management:
+Database introspection, maintenance and index management:
 
 | Endpoint | Description |
 |----------|-------------|
@@ -145,12 +152,12 @@ Database introspection, maintenance, and index management:
 | `GET /admin/{db}/wal` | WAL status (enabled, path, size, record count) |
 | `POST /admin/{db}/wal/checkpoint` | Force WAL checkpoint |
 | `GET /admin/{db}/validate` | Database integrity validation |
-| `POST /admin/{db}/index` | Create property, vector, or text index |
+| `POST /admin/{db}/index` | Create property, vector or text index |
 | `DELETE /admin/{db}/index` | Drop an index |
 
 ### Search
 
-Vector, text, and hybrid search (requires `vector-index`, `text-index`, `hybrid-search` features):
+Vector, text and hybrid search (requires `vector-index`, `text-index`, `hybrid-search` features):
 
 | Endpoint | Description |
 |----------|-------------|
@@ -160,7 +167,11 @@ Vector, text, and hybrid search (requires `vector-index`, `text-index`, `hybrid-
 
 ### GQL Wire Protocol (GWP)
 
-The lite and full builds include a gRPC-based binary wire protocol on port 7687. All query, transaction, database, admin, and search operations are available over gRPC. Configure with `--gwp-port` or `GRAFEO_GWP_PORT`.
+The gwp and full builds include a gRPC-based binary wire protocol on port 7688. All query, transaction, database, admin and search operations are available over gRPC. Configure with `--gwp-port` or `GRAFEO_GWP_PORT`.
+
+### Bolt v5.x (BOLTR)
+
+The bolt and full builds include a Bolt v5.x wire protocol on port 7687, compatible with Neo4j drivers. Configure with `--bolt-port` or `GRAFEO_BOLT_PORT`.
 
 ### Health & Feature Discovery
 
@@ -173,11 +184,10 @@ The health endpoint reports which features are compiled into the running server:
 ```json
 {
   "status": "ok",
-  "version": "0.4.3",
   "features": {
     "languages": ["gql", "cypher", "sparql", "gremlin", "graphql", "sql-pgq"],
-    "engine": ["parallel", "wal", "spill", "mmap", "rdf", "vector-index", "text-index", "hybrid-search", "cdc"],
-    "server": ["owl-schema", "rdfs-schema"]
+    "engine": ["parallel", "wal", "spill", "mmap"],
+    "server": ["gwp"]
   }
 }
 ```
@@ -196,11 +206,13 @@ Environment variables (prefix `GRAFEO_`), overridden by CLI flags:
 | `GRAFEO_CORS_ORIGINS` | _(none)_ | Comma-separated allowed origins (`*` for all) |
 | `GRAFEO_LOG_LEVEL` | `info` | Tracing log level |
 | `GRAFEO_LOG_FORMAT` | `pretty` | Log format: `pretty` or `json` |
-| `GRAFEO_GWP_PORT` | `7687` | GQL Wire Protocol (gRPC) port |
+| `GRAFEO_GWP_PORT` | `7688` | GQL Wire Protocol (gRPC) port |
 | `GRAFEO_GWP_MAX_SESSIONS` | `0` | Max concurrent GWP sessions (0 = unlimited) |
+| `GRAFEO_BOLT_PORT` | `7687` | Bolt v5.x wire protocol port |
+| `GRAFEO_BOLT_MAX_SESSIONS` | `0` | Max concurrent Bolt sessions (0 = unlimited) |
 | `GRAFEO_RATE_LIMIT` | `0` | Max requests per window per IP (0 = disabled) |
 
-### Authentication (full variant)
+### Authentication (feature: `auth`)
 
 | Variable | Description |
 |----------|-------------|
@@ -208,7 +220,7 @@ Environment variables (prefix `GRAFEO_`), overridden by CLI flags:
 | `GRAFEO_AUTH_USER` | HTTP Basic username |
 | `GRAFEO_AUTH_PASSWORD` | HTTP Basic password |
 
-### TLS (full variant)
+### TLS (feature: `tls`)
 
 | Variable | Description |
 |----------|-------------|
@@ -219,17 +231,21 @@ Environment variables (prefix `GRAFEO_`), overridden by CLI flags:
 
 When building from source, Cargo feature flags control which capabilities are compiled in:
 
-| Preset | Cargo Command | Matches Docker |
-|--------|---------------|----------------|
-| Lite | `cargo build --release --no-default-features --features "gql,storage"` | `lite` |
+| Tier | Cargo Command | Matches Docker |
+|------|---------------|----------------|
+| GWP | `cargo build --release --no-default-features --features gwp` | `gwp` |
+| Bolt | `cargo build --release --no-default-features --features bolt` | `bolt` |
 | Standard | `cargo build --release` | `standard` |
 | Full | `cargo build --release --features full` | `full` |
 
 Individual features can also be mixed:
 
 ```bash
-# GQL + Cypher only, with auth
-cargo build --release --no-default-features --features "gql,cypher,storage,auth"
+# GWP + Bolt (both wire protocols, no HTTP)
+cargo build --release --no-default-features --features "gwp,bolt,gql,cypher,storage"
+
+# HTTP API with auth
+cargo build --release --features auth
 ```
 
 See the [grafeo-server README](https://github.com/GrafeoDB/grafeo-server#feature-flags) for the complete feature flag reference.
@@ -243,7 +259,7 @@ grafeo-server supports two binary wire protocols for high-performance client-ser
 [:octicons-mark-github-16: GitHub](https://github.com/GrafeoDB/gql-wire-protocol){ .md-button }
 [:material-package-variant: crates.io](https://crates.io/crates/gwp){ .md-button }
 
-A pure Rust gRPC wire protocol for [GQL (ISO/IEC 39075)](https://www.iso.org/standard/76120.html), the international standard query language for property graphs. GWP is the primary wire protocol for grafeo-server, available on port 7687 by default.
+A pure Rust gRPC wire protocol for [GQL (ISO/IEC 39075)](https://www.iso.org/standard/76120.html), the international standard query language for property graphs. GWP is the primary wire protocol for grafeo-server, available on port 7688 by default.
 
 **Key features:**
 
@@ -296,7 +312,7 @@ A pure Rust implementation of the [Bolt v5.x wire protocol](https://neo4j.com/do
 | **Streaming** | Server-side gRPC streaming | Pull-based (PULL/DISCARD) |
 | **Error model** | GQLSTATUS codes (ISO) | Neo4j error codes |
 | **Client bindings** | Rust, Python, JS, Go, Java | Rust (Neo4j drivers compatible) |
-| **Default port** | 7687 | Configurable |
+| **Default port** | 7688 | 7687 |
 | **Use case** | Standards-based GQL clients | Neo4j driver compatibility |
 
 ## When to Use
@@ -306,7 +322,7 @@ A pure Rust implementation of the [Bolt v5.x wire protocol](https://neo4j.com/do
 | Multi-client access over HTTP | grafeo-server |
 | Embedded in an application | [grafeo](https://github.com/GrafeoDB/grafeo) (library) |
 | Browser-only, no backend | [grafeo-web](grafeo-web.md) (WASM) |
-| Lightweight sidecar / CI | grafeo-server **lite** variant |
+| Lightweight sidecar / CI | grafeo-server **gwp** or **bolt** tier |
 | Production with security | grafeo-server **full** variant |
 
 ## Requirements

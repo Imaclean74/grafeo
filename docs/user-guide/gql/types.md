@@ -1,6 +1,6 @@
 ---
 title: Type System
-description: GQL data types, typed literals, type checking, and type conversion.
+description: GQL data types, typed literals, type checking and type conversion.
 tags:
   - gql
   - types
@@ -8,7 +8,7 @@ tags:
 
 # Type System
 
-GQL supports a rich type system with scalar, temporal, collection, and graph element types.
+GQL supports a rich type system with scalar, temporal, collection and graph element types.
 
 ## Scalar Types
 
@@ -76,7 +76,7 @@ RETURN ZONED DATETIME '2024-01-15T14:30:00Z'
 RETURN ZONED TIME '14:30:00-04:00'
 ```
 
-See [Temporal Functions](functions-temporal.md) for constructors, extraction, and arithmetic.
+See [Temporal Functions](functions-temporal.md) for constructors, extraction and arithmetic.
 
 ## Collection Types
 
@@ -166,7 +166,7 @@ See [Element & Path Functions](functions-element.md#type-conversion-functions) a
 
 ## Three-Valued Logic
 
-GQL uses three-valued logic: `TRUE`, `FALSE`, and `NULL` (unknown). `NULL` propagates through most operations:
+GQL uses three-valued logic: `TRUE`, `FALSE` and `NULL` (unknown). `NULL` propagates through most operations:
 
 ```sql
 -- NULL comparisons

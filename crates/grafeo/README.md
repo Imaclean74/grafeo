@@ -3,9 +3,9 @@ A high-performance, embeddable graph database with a Rust core and no required C
 ## Features
 
 - **Dual data model support**: LPG and RDF with optimized storage for each
-- **Multi-language queries**: GQL, Cypher, Gremlin, GraphQL, SPARQL, and SQL/PGQ (all enabled by default)
+- **Multi-language queries**: GQL, Cypher, Gremlin, GraphQL, SPARQL and SQL/PGQ
 - Embeddable with zero external dependencies
-- Multi-language bindings: Python (PyO3), Node.js (napi-rs), Go (CGO), WebAssembly (wasm-bindgen)
+- Multi-language bindings: Python (PyO3), Node.js (napi-rs), Go (CGO), C (FFI), C# (.NET P/Invoke), Dart (dart:ffi), WebAssembly (wasm-bindgen)
 - In-memory and persistent storage modes
 - MVCC transactions with snapshot isolation
 
@@ -24,8 +24,8 @@ Grafeo uses a modular translator architecture where query languages are parsed i
 
 ### Data Models
 
-- **LPG (Labeled Property Graph)**: Nodes with labels and properties, edges with types and properties. Ideal for social networks, knowledge graphs, and application data.
-- **RDF (Resource Description Framework)**: Triple-based storage (subject-predicate-object) with SPO/POS/OSP indexes. Ideal for semantic web, linked data, and ontology-based applications.
+- **LPG (Labeled Property Graph)**: Nodes with labels and properties, edges with types and properties. Ideal for social networks, knowledge graphs and application data.
+- **RDF (Resource Description Framework)**: Triple-based storage (subject-predicate-object) with SPO/POS/OSP indexes. Ideal for semantic web, linked data and ontology-based applications.
 
 ## Installation
 
@@ -33,10 +33,11 @@ Grafeo uses a modular translator architecture where query languages are parsed i
 cargo add grafeo
 ```
 
-By default, all query languages and AI features are enabled (`full` = `languages` + `ai`). Customize with feature groups:
+By default, the `embedded` profile is enabled: GQL, AI features (vector/text/hybrid search, CDC), graph algorithms and parallel execution. Customize with feature groups:
 
 ```bash
-cargo add grafeo                                             # Everything (default)
+cargo add grafeo                                             # Default (embedded profile)
+cargo add grafeo --no-default-features --features full       # All languages + AI + storage + RDF
 cargo add grafeo --no-default-features --features languages  # All languages, no AI
 cargo add grafeo --no-default-features --features gql,ai     # GQL + AI features
 cargo add grafeo --no-default-features --features gql        # Minimal: GQL only

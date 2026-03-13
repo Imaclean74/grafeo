@@ -58,6 +58,8 @@ See [ARCHITECTURE.md](.claude/ARCHITECTURE.md) for the full picture. The short v
 | `grafeo-node` | Node.js/TypeScript bindings (napi-rs) |
 | `grafeo-c` | C FFI layer (also used by Go via CGO) |
 | `grafeo-wasm` | WebAssembly bindings (wasm-bindgen) |
+| `grafeo-csharp` | C# / .NET 8 bindings (P/Invoke, wraps grafeo-c) |
+| `grafeo-dart` | Dart bindings (dart:ffi, wraps grafeo-c) |
 
 ## Code Style
 
@@ -73,7 +75,7 @@ See [CODE_STYLE.md](.claude/CODE_STYLE.md) for the full guide.
 ```bash
 cd crates/bindings/python
 maturin develop
-pytest crates/bindings/python/tests/ -v --ignore=crates/bindings/python/tests/benchmark_phases.py
+pytest tests/ -v --ignore=tests/benchmark_phases.py
 ```
 
 ## Node.js Bindings
@@ -111,7 +113,7 @@ cargo install prek
 prek install
 ```
 
-This runs format, lint, and license checks automatically before each commit.
+This runs format, lint and license checks automatically before each commit.
 
 ## Links
 

@@ -9,7 +9,7 @@ Interactive graph visualization for Python notebooks.
 
 anywidget-graph provides interactive graph visualization powered by **Sigma.js**. Built on the [anywidget](https://anywidget.dev/) framework, it works universally across Jupyter, Marimo, VS Code, Colab and Databricks.
 
-- **Backend-agnostic**: Grafeo, Neo4j, NetworkX, pandas, or raw dicts
+- **Backend-agnostic**: Grafeo, Neo4j, NetworkX, pandas or raw dicts
 - **Interactive**: Pan, zoom, click, drag, pin, expand neighbors, box select
 - **Customizable**: Colors, sizes, layouts, dark mode
 - **Exportable**: HTML, JSON
@@ -180,7 +180,7 @@ graph.unpin_all()                   # Unpin everything
 ### Clear
 
 ```python
-graph.clear()                   # Remove all nodes, edges, pins, and selection
+graph.clear()                   # Remove all nodes, edges, pins and selection
 ```
 
 ## Styling

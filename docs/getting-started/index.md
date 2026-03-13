@@ -15,7 +15,7 @@ Welcome to Grafeo! This guide covers getting started with the high-performance g
 
     ---
 
-    Install Grafeo for Python, Node.js, Go, Rust or WebAssembly.
+    Install Grafeo for Python, Node.js, Go, C#, Dart, Rust or WebAssembly.
 
     [:octicons-arrow-right-24: Installation Guide](installation.md)
 
@@ -61,6 +61,14 @@ Welcome to Grafeo! This guide covers getting started with the high-performance g
 
 - Go 1.22 or later
 - C compiler (for CGO)
+
+### For C# Users
+
+- .NET 8 SDK or later
+
+### For Dart Users
+
+- Dart SDK 3.0 or later
 
 ### For Rust Users
 

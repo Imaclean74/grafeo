@@ -17,7 +17,7 @@ tags:
 | `ceil(n)` / `ceiling(n)` | Round up |
 | `floor(n)` | Round down |
 | `round(n)` | Round to nearest |
-| `sign(n)` | Sign (-1, 0, or 1) |
+| `sign(n)` | Sign (-1, 0 or 1) |
 | `sqrt(n)` | Square root |
 | `log(n)` / `ln(n)` | Natural logarithm |
 | `log10(n)` | Base-10 logarithm |

@@ -24,7 +24,7 @@ Grafeo supports both **Labeled Property Graph (LPG)** and **Resource Description
 - **Dual data model support**: LPG and RDF with optimized storage for each
 - **Multi-language queries**: GQL, Cypher, Gremlin, GraphQL, SPARQL and SQL/PGQ
 - Embeddable with zero external dependencies - no JVM, no Docker, no external processes
-- **Multi-language bindings**: Python (PyO3), Node.js/TypeScript (napi-rs), Go (CGO), WebAssembly (wasm-bindgen)
+- **Multi-language bindings**: Python (PyO3), Node.js/TypeScript (napi-rs), Go (CGO), C (FFI), C# (.NET 8 P/Invoke), Dart (dart:ffi), WebAssembly (wasm-bindgen)
 - In-memory and persistent storage modes
 - MVCC transactions with snapshot isolation
 
@@ -151,6 +151,20 @@ go get github.com/GrafeoDB/grafeo/crates/bindings/go
 
 ```bash
 npm install @grafeo-db/wasm
+```
+
+### C# / .NET
+
+```bash
+dotnet add package GrafeoDB
+```
+
+### Dart
+
+```yaml
+# pubspec.yaml
+dependencies:
+  grafeo: ^0.5.21
 ```
 
 ### Python

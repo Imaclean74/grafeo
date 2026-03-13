@@ -43,7 +43,7 @@ marimo run examples/graph_visualization.py
 
     ---
 
-    Model a transaction network, detect money laundering rings and mule accounts, and score risk with PageRank.
+    Model a transaction network, detect money laundering rings and mule accounts and score risk with PageRank.
 
     [:octicons-arrow-right-24: View Example](fraud-detection-example.md)
 
@@ -51,7 +51,7 @@ marimo run examples/graph_visualization.py
 
     ---
 
-    Convert Grafeo graphs to NetworkX, run centrality and clustering algorithms, and visualize with matplotlib.
+    Convert Grafeo graphs to NetworkX, run centrality and clustering algorithms and visualize with matplotlib.
 
     [:octicons-arrow-right-24: View Example](networkx-integration.md)
 

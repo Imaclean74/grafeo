@@ -9,7 +9,7 @@ tags:
 
 # Graph Visualization
 
-Build a social network, query it, run graph algorithms, and visualize everything interactively.
+Build a social network, query it, run graph algorithms and visualize everything interactively.
 
 !!! tip "Run it locally"
 
@@ -114,7 +114,7 @@ graph_widget = Graph(nodes=graph_nodes, edges=graph_edges, height=500)
 graph_widget
 ```
 
-This renders a force-directed graph with Person nodes (blue) and Company nodes (green), connected by `KNOWS` and `WORKS_AT` edges. Pan, zoom, and drag nodes to explore.
+This renders a force-directed graph with Person nodes (blue) and Company nodes (green), connected by `KNOWS` and `WORKS_AT` edges. Pan, zoom and drag nodes to explore.
 
 ## PageRank Analysis
 

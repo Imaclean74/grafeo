@@ -9,7 +9,7 @@ tags:
 
 # Vector Search
 
-Store document embeddings, perform similarity search with filters, and visualize the embedding space in 3D.
+Store document embeddings, perform similarity search with filters and visualize the embedding space in 3D.
 
 !!! tip "Run it locally"
 

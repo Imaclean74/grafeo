@@ -20,7 +20,7 @@ Grafeo is an **embeddable** graph database designed to run within your applicati
 - Built-in authentication or authorization
 - Multi-tenant isolation
 
-**Security is the responsibility of the embedding application.** If you expose Grafeo through a network service, you must implement appropriate authentication, authorization, and input validation in your application layer.
+**Security is the responsibility of the embedding application.** If you expose Grafeo through a network service, you must implement appropriate authentication, authorization and input validation in your application layer.
 
 ### Query Injection
 

@@ -2,17 +2,17 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.21] - 2026-03-12
+## [0.5.21] - 2026-03-13
 
 First implementation of C# and Dart bindings, single file database completed, snapshot consolidation and test hardening
 
 ### Added
 
-- **C# / .NET bindings** (`crates/bindings/csharp`): full-featured .NET 8 binding wrapping the C FFI layer via source-generated P/Invoke (`LibraryImport`). Includes `GrafeoDB` lifecycle (memory/persistent), GQL + multi-language query execution (sync and async), ACID transactions with auto-rollback, typed node/edge CRUD, vector search (k-NN + MMR), parameterized queries with temporal type support, and a `SafeHandle`-based resource management pattern. tests across database, query, transaction, and CRUD categories. CI matrix covers Ubuntu, Windows, and macOS.
-- **Dart bindings** (`crates/bindings/dart`): Dart FFI binding for grafeo-c. Full API coverage including GQL query execution with parameterized queries (temporal type encoding via `$timestamp_us`, `$date`, `$duration` wire format), ACID transactions with commit/rollback, typed node/edge CRUD, vector search (MMR), and database lifecycle management. Uses `NativeFinalizer` for leak prevention, `late final` cached FFI lookups, sealed exception hierarchy matching C status codes, and consistent `malloc` allocator usage. Tests with assertions across database, query, transaction, CRUD, and error categories. CI matrix covers Ubuntu, Windows, and macOS. Based on community PR #138 by @CorvusYe.
-- **Single-file `.grafeo` database format**: new persistence format stores the entire database in a single file with a sidecar WAL directory during operation (DuckDB-style). Features dual-header crash safety with CRC32 checksums, automatic format detection by file extension, and seamless WAL checkpoint merging. Enable with the `grafeo-file` feature flag (included in `storage` and `full` profiles). Use `GrafeoDB::open("mydb.grafeo")` or `db.save("mydb.grafeo")` to create single-file databases. This previously deferred feature was pulled into this release to realise feature request #139 by @CorvusYe.
+- **C# / .NET bindings** (`crates/bindings/csharp`): full-featured .NET 8 binding wrapping the C FFI layer via source-generated P/Invoke (`LibraryImport`). Includes `GrafeoDB` lifecycle (memory/persistent), GQL + multi-language query execution (sync and async), ACID transactions with auto-rollback, typed node/edge CRUD, vector search (k-NN + MMR), parameterized queries with temporal type support and a `SafeHandle`-based resource management pattern. tests across database, query, transaction and CRUD categories. CI matrix covers Ubuntu, Windows and macOS.
+- **Dart bindings** (`crates/bindings/dart`): Dart FFI binding for grafeo-c. Full API coverage including GQL query execution with parameterized queries (temporal type encoding via `$timestamp_us`, `$date`, `$duration` wire format), ACID transactions with commit/rollback, typed node/edge CRUD, vector search (MMR) and database lifecycle management. Uses `NativeFinalizer` for leak prevention, `late final` cached FFI lookups, sealed exception hierarchy matching C status codes and consistent `malloc` allocator usage. Tests with assertions across database, query, transaction, CRUD and error categories. CI matrix covers Ubuntu, Windows and macOS. Based on community PR #138 by @CorvusYe.
+- **Single-file `.grafeo` database format**: new persistence format stores the entire database in a single file with a sidecar WAL directory during operation (DuckDB-style). Features dual-header crash safety with CRC32 checksums, automatic format detection by file extension and seamless WAL checkpoint merging. Enable with the `grafeo-file` feature flag (included in `storage` and `full` profiles). Use `GrafeoDB::open("mydb.grafeo")` or `db.save("mydb.grafeo")` to create single-file databases. This previously deferred feature was pulled into this release to realize feature request #139 by @CorvusYe.
 - **Exclusive file locking** for `.grafeo` files: prevents multiple processes from opening the same database file simultaneously. Lock is acquired on open and released on close/drop (uses `fs2` for cross-platform advisory locking).
-- **DDL schema persistence in snapshots**: `CREATE NODE TYPE`, `CREATE EDGE TYPE`, `CREATE GRAPH TYPE`, `CREATE PROCEDURE`, and `CREATE SCHEMA` definitions now survive close/reopen cycles and export/import roundtrips. Snapshot format consolidated from v1/v2 to a single v3 format that includes full schema metadata alongside graph data.
+- **DDL schema persistence in snapshots**: `CREATE NODE TYPE`, `CREATE EDGE TYPE`, `CREATE GRAPH TYPE`, `CREATE PROCEDURE` and `CREATE SCHEMA` definitions now survive close/reopen cycles and export/import roundtrips. Snapshot format consolidated from v1/v2 to a single v3 format that includes full schema metadata alongside graph data.
 - **Crash injection testing** (`testing-crash-injection` feature): `maybe_crash()` instrumentation points in `write_snapshot` and `checkpoint_to_file` enable deterministic crash simulation for verifying sidecar WAL recovery
 - **Introspection functions**: `RETURN CURRENT_SCHEMA`, `RETURN CURRENT_GRAPH`, `RETURN info()`, `RETURN schema()` for querying session state and database metadata from within GQL
 
@@ -22,24 +22,24 @@ First implementation of C# and Dart bindings, single file database completed, sn
 
 ### Testing
 
-- **Seam tests for spec compliance**: systematic coverage of feature boundaries and negative paths targeting ISO/IEC 39075 sections 4.7.3, 7.1, 7.2, 8, 13, 16, 20.9, and 21; covers session state independence, transaction enforcement, DML edge cases, pattern matching boundaries, aggregate NULL semantics, CASE expressions, type coercion, and cross-graph isolation; uncovered 3 spec deviations (DDL in READ ONLY transactions, SUM on empty sets, CASE ELSE with NULL comparisons)
+- **Seam tests for spec compliance**: systematic coverage of feature boundaries and negative paths targeting ISO/IEC 39075 sections 4.7.3, 7.1, 7.2, 8, 13, 16, 20.9 and 21; covers session state independence, transaction enforcement, DML edge cases, pattern matching boundaries, aggregate NULL semantics, CASE expressions, type coercion and cross-graph isolation; uncovered 3 spec deviations (DDL in READ ONLY transactions, SUM on empty sets, CASE ELSE with NULL comparisons)
 
 ### Fixed
 
 - **DDL in READ ONLY transactions** (ISO/IEC 39075 Section 8): `CREATE GRAPH` and `DROP GRAPH` are now correctly blocked inside `START TRANSACTION READ ONLY`; previously they bypassed the read-only check because they were dispatched as session commands rather than schema commands
-- **SUM on empty set returns NULL** (ISO/IEC 39075 Section 20.9): `SUM()` over zero rows now returns `NULL` instead of `0`, matching the behavior of `AVG`, `MIN`, and `MAX` on empty sets
+- **SUM on empty set returns NULL** (ISO/IEC 39075 Section 20.9): `SUM()` over zero rows now returns `NULL` instead of `0`, matching the behavior of `AVG`, `MIN` and `MAX` on empty sets
 - **CASE WHEN with NULL conditions** (ISO/IEC 39075 Section 21): `CASE WHEN` expressions where the condition evaluates to NULL (e.g. comparing a missing property) now correctly fall through to `ELSE` instead of returning NULL for the entire expression
-- **`SESSION SET SCHEMA` / `SESSION SET GRAPH` separation** (ISO/IEC 39075 Section 7.1): session schema and session graph are now independent fields per the GQL standard; `SESSION SET SCHEMA` sets the session schema (validating against registered schemas), `SESSION SET GRAPH` sets the session graph (resolved within the current schema), and `SESSION RESET` supports independent targets (`SESSION RESET SCHEMA`, `SESSION RESET GRAPH`, `SESSION RESET TIME ZONE`, `SESSION RESET PARAMETERS`) per Section 7.2; graphs created within a schema are stored with schema-scoped keys for cross-schema isolation; added `SHOW SCHEMAS` command and `DROP SCHEMA` now enforces "schema must be empty" per Section 12.3
+- **`SESSION SET SCHEMA` / `SESSION SET GRAPH` separation** (ISO/IEC 39075 Section 7.1): session schema and session graph are now independent fields per the GQL standard; `SESSION SET SCHEMA` sets the session schema (validating against registered schemas), `SESSION SET GRAPH` sets the session graph (resolved within the current schema) and `SESSION RESET` supports independent targets (`SESSION RESET SCHEMA`, `SESSION RESET GRAPH`, `SESSION RESET TIME ZONE`, `SESSION RESET PARAMETERS`) per Section 7.2; graphs created within a schema are stored with schema-scoped keys for cross-schema isolation; added `SHOW SCHEMAS` command and `DROP SCHEMA` now enforces "schema must be empty" per Section 12.3
 - **`COUNT(*)` parsing** (ISO/IEC 39075 Section 20.9): `COUNT(*)` is now correctly parsed as a zero-argument aggregate counting all rows, rather than failing on the `*` token
 
 ## [0.5.20] - 2026-03-11
 
-Small release bringing new methods to WASM and added SESSION SET validation
+Small release bringing new methods to WASM and adding SESSION SET validation
 
 ### Added
 
 - **WASM `memoryUsage()` and `importRows()`**: memory introspection and bulk row import (the DataFrame equivalent) now available in WebAssembly bindings
-- **WASM vector search bindings**: `createVectorIndex()`, `dropVectorIndex()`, `rebuildVectorIndex()`, `vectorSearch()`, and `mmrSearch()` now exposed in WebAssembly, enabling client-side k-NN and MMR search with HNSW indexes
+- **WASM vector search bindings**: `createVectorIndex()`, `dropVectorIndex()`, `rebuildVectorIndex()`, `vectorSearch()` and `mmrSearch()` now exposed in WebAssembly, enabling client-side k-NN and MMR search with HNSW indexes
 
 ### Fixed
 
@@ -47,16 +47,16 @@ Small release bringing new methods to WASM and added SESSION SET validation
 
 ## [0.5.19] - 2026-03-11
 
-GQL translator refactor, new methods and GQL improvements and fixes
+GQL translator refactor, new methods, GQL improvements and fixes
 
 ### Added
 
-- **Graph type enforcement**: full write-path schema enforcement with node type inheritance, edge endpoint validation, UNIQUE/NOT NULL/CHECK constraints, default value injection, closed graph type guards, MERGE validator support, pattern-form syntax, SHOW commands, and Cypher `ALTER CURRENT GRAPH TYPE`
+- **Graph type enforcement**: full write-path schema enforcement with node type inheritance, edge endpoint validation, UNIQUE/NOT NULL/CHECK constraints, default value injection, closed graph type guards, MERGE validator support, pattern-form syntax, SHOW commands and Cypher `ALTER CURRENT GRAPH TYPE`
 - **LOAD DATA (multi-format import)**: generalized `LOAD DATA FROM 'path' FORMAT CSV|JSONL|PARQUET [WITH HEADERS] AS variable` in GQL, with Cypher-compatible `LOAD CSV` syntax preserved; JSONL behind `jsonl-import` feature, Parquet behind `parquet-import` feature
 - **Python `import_df()`**: bulk-import nodes or edges from a pandas or polars DataFrame via `db.import_df(df, 'nodes', label='Person')` or `db.import_df(df, 'edges', edge_type='KNOWS')`
-- **Memory introspection**: `db.memory_usage()` returns a hierarchical breakdown of heap usage across store, indexes, MVCC chains, query caches, string pools, and buffer manager regions
+- **Memory introspection**: `db.memory_usage()` returns a hierarchical breakdown of heap usage across store, indexes, MVCC chains, query caches, string pools and buffer manager regions
 - **Named graph WAL persistence**: `CREATE GRAPH` / `DROP GRAPH` and all data mutations within named graphs are now WAL-logged and recovered on restart via `SwitchGraph` context records; concurrent sessions writing to different named graphs are safely interleaved
-- **Named graph snapshot persistence**: snapshot v2 format includes named graph data in `export_snapshot`, `import_snapshot`, `restore_snapshot`, `save`, and `to_memory`; v1 snapshots remain backward-compatible
+- **Named graph snapshot persistence**: snapshot v2 format includes named graph data in `export_snapshot`, `import_snapshot`, `restore_snapshot`, `save` and `to_memory`; v1 snapshots remain backward-compatible
 - **SHOW GRAPHS**: `SHOW GRAPHS` lists all named graphs in the database, complementing existing `SHOW NODE TYPES` / `SHOW EDGE TYPES`
 - **RDF persistence**: SPARQL INSERT/DELETE/CLEAR/CREATE/DROP operations are now WAL-logged and recovered on restart; snapshot export/import includes RDF triples and RDF named graphs
 - **Cross-graph transactions**: `USE GRAPH` and `SESSION SET GRAPH` now work within active transactions; commit/rollback/savepoint operations apply atomically across all touched graphs
@@ -65,7 +65,7 @@ GQL translator refactor, new methods and GQL improvements and fixes
 
 ### Fixed
 
-- **Named graph data isolation** ([#133](https://github.com/GrafeoDB/grafeo/issues/133)): `USE GRAPH`, `SESSION SET SCHEMA`, and `SESSION SET GRAPH` now correctly route all queries and mutations to the selected named graph instead of always using the default store; query cache keys include the active graph name to prevent cross-graph cache hits; dropping the active graph resets the session to default
+- **Named graph data isolation** ([#133](https://github.com/GrafeoDB/grafeo/issues/133)): `USE GRAPH`, `SESSION SET SCHEMA` and `SESSION SET GRAPH` now correctly route all queries and mutations to the selected named graph instead of always using the default store; query cache keys include the active graph name to prevent cross-graph cache hits; dropping the active graph resets the session to default
 - **OPTIONAL MATCH WHERE pushdown**: right-side predicates are now correctly pushed into the join instead of filtering out NULL rows, with dedicated cost/cardinality estimation for LeftJoin
 - **Cypher COUNT(expr) NULL skipping**: `COUNT(expr)` now correctly skips NULLs (using `CountNonNull`), matching `COUNT(*)` which counts all rows
 - **Vector validity bitmap fix**: consecutive NULL pushes to the same column no longer silently drop null bits, fixing incorrect empty-string results in SPARQL OPTIONAL and RDF left joins
@@ -74,11 +74,11 @@ GQL translator refactor, new methods and GQL improvements and fixes
 
 - **GQL translator submodules**: split `gql.rs` into `gql/mod.rs`, `expression.rs`, `pattern.rs`, `aggregate.rs` for maintainability
 - **Wildcard imports lint**: re-enabled `clippy::wildcard_imports` as warning; replaced `use super::*` in LPG planner submodules with explicit imports
-- **Unwrap reduction**: replaced production `.expect()` calls with `Result`/`?` propagation in session initialization, persistence, and WAL recovery paths
+- **Unwrap reduction**: replaced production `.expect()` calls with `Result`/`?` propagation in session initialization, persistence and WAL recovery paths
 
 ## [0.5.18] - 2026-03-09
 
-Query language compliance improvements, expanded test coverage, and Deriva compatibility fixes.
+Query language compliance improvements, expanded test coverage and Deriva compatibility fixes
 
 ### Added
 
@@ -126,7 +126,7 @@ Performance enhancements, bug fixes and Rust examples
 
 ### Added
 
-- **LOAD CSV**: `LOAD CSV [WITH HEADERS] FROM 'path' AS row [FIELDTERMINATOR '\t']` in Cypher, with inline CSV parser supporting quoted fields, `file:///` URIs, and custom delimiters
+- **LOAD CSV**: `LOAD CSV [WITH HEADERS] FROM 'path' AS row [FIELDTERMINATOR '\t']` in Cypher, with inline CSV parser supporting quoted fields, `file:///` URIs and custom delimiters
 - **Cypher schema DDL**: `CREATE/DROP INDEX`, `CREATE/DROP CONSTRAINT`, `SHOW INDEXES`, `SHOW CONSTRAINTS`
 - **Relationship WHERE**: inline predicates on relationship patterns (`-[r WHERE r.since > 2020]->`)
 - **Temporal map constructors**: `date({year:2024, month:3})`, `time({hour:14})`, `datetime(...)`, `duration({years:1, months:2, days:3})`
@@ -151,7 +151,7 @@ Performance enhancements, bug fixes and Rust examples
 
 ## [0.5.15] - 2026-03-07
 
-Full ecosystem feature profiles reworks and several graph database nice to haves
+Full ecosystem feature profile rework and several graph database nice-to-haves
 
 ### Added
 
@@ -178,7 +178,7 @@ Full ecosystem feature profiles reworks and several graph database nice to haves
 
 ## [0.5.14] - 2026-03-06
 
-Moving crates and lots of small improvements & fixes
+Moving crates and lots of small improvements and fixes
 
 ### Added
 
@@ -208,7 +208,7 @@ Moving crates and lots of small improvements & fixes
 
 ## [0.5.13] - 2026-03-04
 
-Big language compliance push, schema DDL, time-travel and named graphs.
+Big language compliance push, schema DDL, time-travel and named graphs
 
 ### Improved
 

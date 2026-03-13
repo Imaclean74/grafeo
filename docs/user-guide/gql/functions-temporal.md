@@ -1,6 +1,6 @@
 ---
 title: Temporal Functions
-description: GQL date, time, datetime, duration, and zoned temporal functions in Grafeo.
+description: GQL date, time, datetime, duration and zoned temporal functions in Grafeo.
 tags:
   - gql
   - functions

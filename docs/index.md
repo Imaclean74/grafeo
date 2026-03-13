@@ -1,6 +1,6 @@
 ---
 title: Grafeo - High-Performance Graph Database
-description: A high-performance, embeddable graph database with a Rust core and no required C dependencies. Python, Node.js, Go and WebAssembly bindings. GQL (ISO standard) query language.
+description: A high-performance, embeddable graph database with a Rust core and no required C dependencies. Python, Node.js, Go, C, C#, Dart and WebAssembly bindings. GQL (ISO standard) query language.
 hide:
   - navigation
   - toc
@@ -75,13 +75,13 @@ hide:
 
     ---
 
-    Python (PyO3), Node.js/TypeScript (napi-rs), Go (CGO) and WebAssembly (wasm-bindgen). Use Grafeo from the language of choice.
+    Python (PyO3), Node.js/TypeScript (napi-rs), Go (CGO), C (FFI), C# (.NET 8 P/Invoke), Dart (dart:ffi) and WebAssembly (wasm-bindgen). Use Grafeo from the language of choice.
 
 -   :material-puzzle:{ .lg .middle } **Ecosystem**
 
     ---
 
-    AI integrations (LangChain, LlamaIndex, MCP), interactive notebook widgets, browser-based graphs via WebAssembly, standalone server with web UI, and benchmarking tools.
+    AI integrations (LangChain, LlamaIndex, MCP), interactive notebook widgets, browser-based graphs via WebAssembly, standalone server with web UI and benchmarking tools.
 
 </div>
 
@@ -276,6 +276,20 @@ Choose the query language that fits the project:
 
     ```bash
     cargo add grafeo
+    ```
+
+=== "C#"
+
+    ```bash
+    dotnet add package GrafeoDB
+    ```
+
+=== "Dart"
+
+    ```yaml
+    # pubspec.yaml
+    dependencies:
+      grafeo: ^0.5.21
     ```
 
 === "WASM"

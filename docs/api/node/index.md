@@ -38,7 +38,7 @@ db.close();
 | [QueryResult](query.md) | Query result with rows, columns, nodes, edges |
 | [Transaction](transaction.md) | ACID transaction management |
 | [JsNode](node.md) | Graph node with labels and properties |
-| [JsEdge](edge.md) | Graph edge with type, endpoints, and properties |
+| [JsEdge](edge.md) | Graph edge with type, endpoints and properties |
 
 ## Query Languages
 

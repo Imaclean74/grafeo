@@ -41,90 +41,90 @@ GQL uses pattern matching to query and manipulate graph data. The syntax is very
 
     ---
 
-    MATCH, RETURN, OPTIONAL MATCH, WITH, LET, CALL, and query composition.
+    MATCH, RETURN, OPTIONAL MATCH, WITH, LET, CALL and query composition.
 
 -   **[Pattern Matching](patterns.md)**
 
     ---
 
-    Node and edge patterns, label expressions, path quantifiers, search prefixes, and path modes.
+    Node and edge patterns, label expressions, path quantifiers, search prefixes and path modes.
 
 -   **[Filtering](filtering.md)**
 
     ---
 
-    WHERE clauses, comparison operators, LIKE, type checking, and graph predicates.
+    WHERE clauses, comparison operators, LIKE, type checking and graph predicates.
 
 -   **[Expressions](expressions.md)**
 
     ---
 
-    CASE, CAST, COALESCE, list comprehensions, reduce, and subquery expressions.
+    CASE, CAST, COALESCE, list comprehensions, reduce and subquery expressions.
 
 -   **[Aggregations](aggregations.md)**
 
     ---
 
-    COUNT, SUM, AVG, STDEV, percentiles, GROUP BY, and HAVING.
+    COUNT, SUM, AVG, STDEV, percentiles, GROUP BY and HAVING.
 
 -   **[Path Queries](paths.md)**
 
     ---
 
-    Variable-length paths, shortest paths, path modes, and path predicates.
+    Variable-length paths, shortest paths, path modes and path predicates.
 
 -   **[Mutations](mutations.md)**
 
     ---
 
-    INSERT, SET, DELETE, MERGE, and label operations.
+    INSERT, SET, DELETE, MERGE and label operations.
 
 -   **[Composite Queries](composite-queries.md)**
 
     ---
 
-    UNION, EXCEPT, INTERSECT, and OTHERWISE for combining query results.
+    UNION, EXCEPT, INTERSECT and OTHERWISE for combining query results.
 
 -   **[String Functions](functions-string.md)**
 
     ---
 
-    String manipulation: toUpper, replace, split, substring, and more.
+    String manipulation: toUpper, replace, split, substring and more.
 
 -   **[Numeric Functions](functions-numeric.md)**
 
     ---
 
-    Math functions: abs, sqrt, log, trigonometry, and constants.
+    Math functions: abs, sqrt, log, trigonometry and constants.
 
 -   **[Temporal Functions](functions-temporal.md)**
 
     ---
 
-    Date, time, datetime, duration, zoned temporals, and arithmetic.
+    Date, time, datetime, duration, zoned temporals and arithmetic.
 
 -   **[Element & Path Functions](functions-element.md)**
 
     ---
 
-    Identity, labels, properties, path decomposition, and list utilities.
+    Identity, labels, properties, path decomposition and list utilities.
 
 -   **[Type System](types.md)**
 
     ---
 
-    Data types, typed literals, type checking, CAST, and three-valued logic.
+    Data types, typed literals, type checking, CAST and three-valued logic.
 
 -   **[Schema & DDL](schema.md)**
 
     ---
 
-    Graph management, type definitions, indexes, constraints, and stored procedures.
+    Graph management, type definitions, indexes, constraints and stored procedures.
 
 -   **[Transactions & Sessions](transactions.md)**
 
     ---
 
-    Transaction control, isolation levels, and session configuration.
+    Transaction control, isolation levels and session configuration.
 
 </div>

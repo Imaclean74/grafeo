@@ -76,7 +76,7 @@ for r in results:
     print(f"Node {r['node_id']}: score {r['score']:.3f}")
 ```
 
-Text indexes stay in sync automatically as nodes are created, updated, or deleted.
+Text indexes stay in sync automatically as nodes are created, updated or deleted.
 
 ## Hybrid Search
 
@@ -102,7 +102,7 @@ model = load_embedding_model(EmbeddingModelConfig.MiniLM_L6_v2)
 vectors = model.embed(["graph databases are fast", "hello world"])
 ```
 
-Three presets are available: MiniLM-L6-v2 (22M params), MiniLM-L12-v2 (33M), and BGE-small-en-v1.5 (33M). Models are auto-downloaded from HuggingFace Hub on first use.
+Three presets are available: MiniLM-L6-v2 (22M params), MiniLM-L12-v2 (33M) and BGE-small-en-v1.5 (33M). Models are auto-downloaded from HuggingFace Hub on first use.
 
 ## Documentation
 

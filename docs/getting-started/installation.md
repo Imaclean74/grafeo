@@ -1,11 +1,11 @@
 ---
 title: Installation
-description: Install Grafeo for Python, Node.js, Go, Rust or WebAssembly.
+description: Install Grafeo for Python, Node.js, Go, C#, Dart, Rust or WebAssembly.
 ---
 
 # Installation
 
-Grafeo supports Python, Node.js/TypeScript, Go, Rust and WebAssembly. Choose the installation method for the preferred language.
+Grafeo supports Python, Node.js/TypeScript, Go, C#, Dart, Rust and WebAssembly. Choose the installation method for the preferred language.
 
 ## Python
 
@@ -101,6 +101,42 @@ const db = new Database();
 console.log('Grafeo WASM installed successfully!');
 ```
 
+## C# / .NET
+
+```bash
+dotnet add package GrafeoDB
+```
+
+### Verify Installation
+
+```csharp
+using Grafeo;
+
+var db = new GrafeoDB();
+Console.WriteLine("Grafeo installed successfully!");
+```
+
+## Dart
+
+Add to `pubspec.yaml`:
+
+```yaml
+dependencies:
+  grafeo: ^0.5.21
+```
+
+### Verify Installation
+
+```dart
+import 'package:grafeo/grafeo.dart';
+
+void main() {
+  final db = GrafeoDB.memory();
+  print('Grafeo installed successfully!');
+  db.close();
+}
+```
+
 ## Rust
 
 ### Using Cargo
@@ -120,12 +156,15 @@ grafeo = "0.5"
 
 ### Feature Flags
 
-All query languages and AI features are enabled by default via the `full` feature group. Use feature groups or individual flags to customize:
+The `embedded` profile is enabled by default: GQL, AI features (vector/text/hybrid search, CDC), graph algorithms and parallel execution. Use feature groups or individual flags to customize:
 
 ```toml
 [dependencies]
-# Default: all languages + AI features
+# Default (embedded profile): GQL + AI + algorithms + parallel
 grafeo = "0.5"
+
+# All languages + AI + storage + RDF
+grafeo = { version = "0.5", default-features = false, features = ["full"] }
 
 # Only query languages, no AI features
 grafeo = { version = "0.5", default-features = false, features = ["languages"] }
@@ -142,11 +181,15 @@ grafeo = { version = "0.5", features = ["embed"] }
 
 #### Feature Groups
 
-| Group | Contents | Description |
-|-------|----------|-------------|
-| `full` | languages + ai | Everything (default) |
+| Profile / Group | Contents | Description |
+|-----------------|----------|-------------|
+| `embedded` | gql, ai, algos, parallel, regex | Default for libraries and bindings |
+| `browser` | gql, regex-lite | Default for WASM |
+| `server` / `full` | embedded + languages + storage + rdf + cdc | Everything except embed |
 | `languages` | gql, cypher, sparql, gremlin, graphql, sql-pgq | All query language parsers |
 | `ai` | vector-index, text-index, hybrid-search, cdc | AI/RAG search + change tracking |
+| `storage` | wal, spill, mmap, grafeo-file | Persistence backends |
+| `algos` | graph algorithms | SSSP, PageRank, centrality, community detection |
 | `embed` | ort, tokenizers | ONNX embedding generation (opt-in, ~17MB) |
 
 #### Individual Language Flags
@@ -175,7 +218,7 @@ grafeo = { version = "0.5", features = ["embed"] }
 use grafeo::GrafeoDB;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = GrafeoDB::new_in_memory()?;
+    let db = GrafeoDB::new_in_memory();
     println!("Grafeo installed successfully!");
     Ok(())
 }

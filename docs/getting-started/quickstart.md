@@ -30,7 +30,7 @@ This guide covers getting up and running with Grafeo in just a few minutes.
     let db = GrafeoDB::new_in_memory();
 
     // Or create a persistent database
-    let db = GrafeoDB::new("my_graph.db")?;
+    let db = GrafeoDB::open("my_graph.db")?;
     ```
 
 ## Add Data
@@ -219,13 +219,13 @@ For atomic operations, use transactions:
     ```python
     # Begin a transaction
     with db.begin_transaction() as tx:
-        tx.execute("INSERT (:Person {name: 'Dave'})")
-        tx.execute("INSERT (:Person {name: 'Eve'})")
+        tx.execute("INSERT (:Person {name: 'Vincent'})")
+        tx.execute("INSERT (:Person {name: 'Jules'})")
         tx.commit()  # Both inserts committed atomically
 
     # Or rollback on error
     with db.begin_transaction() as tx:
-        tx.execute("INSERT (:Person {name: 'Frank'})")
+        tx.execute("INSERT (:Person {name: 'Mia'})")
         tx.rollback()  # Changes discarded
     ```
 

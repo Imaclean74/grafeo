@@ -9,7 +9,7 @@ tags:
 
 # NetworkX Integration
 
-Convert a Grafeo graph to NetworkX, run centrality and clustering algorithms, compare performance, and visualize with matplotlib.
+Convert a Grafeo graph to NetworkX, run centrality and clustering algorithms, compare performance and visualize with matplotlib.
 
 !!! tip "Run it locally"
 

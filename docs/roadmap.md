@@ -204,7 +204,7 @@ CREATE VECTOR INDEX movie_embeddings ON :Movie(embedding)
 ### Transaction Correctness (0.5.19)
 
 - **MVCC dirty read prevention**: uncommitted versions use `EpochId::PENDING`, invisible to other sessions
-- **DELETE rollback restoration**: full undo log for node/edge deletions with label, property, and adjacency recovery
+- **DELETE rollback restoration**: full undo log for node/edge deletions with label, property and adjacency recovery
 - **Write-write conflict detection**: end-to-end via `WriteTracker` trait, conflict check at commit time
 - **Session Drop auto-rollback**: active transactions automatically rolled back when sessions go out of scope
 - **Int64/Float64 type coercion**: cross-type comparisons in WHERE clauses
@@ -212,6 +212,14 @@ CREATE VECTOR INDEX movie_embeddings ON :Movie(embedding)
 ### Ecosystem (0.5.1)
 
 - **[grafeo-memory](https://github.com/GrafeoDB/grafeo-memory)**: AI memory layer, LLM-driven fact extraction, knowledge graph storage
+
+### Persistence & Bindings (0.5.21)
+
+- **C# / .NET bindings**: full-featured .NET 8 binding via source-generated P/Invoke, wrapping the C FFI layer
+- **Dart bindings**: Dart FFI binding with NativeFinalizer resource management (community contribution by [@CorvusYe](https://github.com/CorvusYe))
+- **Single-file `.grafeo` database format**: DuckDB-style persistence with dual-header crash safety, CRC32 checksums, exclusive file locking
+- **DDL schema persistence**: CREATE NODE TYPE, CREATE EDGE TYPE, CREATE SCHEMA definitions survive close/reopen cycles (snapshot v3 format)
+- **Introspection functions**: CURRENT_SCHEMA, CURRENT_GRAPH, info(), schema() available from within GQL
 
 ### Goal
 - Ready for production evaluation

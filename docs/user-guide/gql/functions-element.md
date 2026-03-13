@@ -1,6 +1,6 @@
 ---
 title: Element and Path Functions
-description: GQL functions for inspecting graph elements, paths, and lists in Grafeo.
+description: GQL functions for inspecting graph elements, paths and lists in Grafeo.
 tags:
   - gql
   - functions
@@ -8,7 +8,7 @@ tags:
   - paths
 ---
 
-# Element, Path, and List Functions
+# Element, Path and List Functions
 
 ## Element Functions
 
@@ -178,4 +178,4 @@ RETURN toList(42)           -- [42]
 RETURN toList([1, 2])       -- [1, 2] (already a list)
 ```
 
-See also [Temporal Functions](functions-temporal.md) for `toDate()`, `toTime()`, `toDatetime()`, `toDuration()`, `toZonedDatetime()`, and `toZonedTime()`.
+See also [Temporal Functions](functions-temporal.md) for `toDate()`, `toTime()`, `toDatetime()`, `toDuration()`, `toZonedDatetime()` and `toZonedTime()`.

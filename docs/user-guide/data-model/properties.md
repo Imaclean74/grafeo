@@ -95,7 +95,7 @@ RETURN p.name, coalesce(p.email, 'no email') AS email
 
 ## Temporal Properties
 
-Grafeo supports temporal types for dates, times, and durations with ISO 8601 formatting.
+Grafeo supports temporal types for dates, times and durations with ISO 8601 formatting.
 
 ### Creating Temporal Properties
 
