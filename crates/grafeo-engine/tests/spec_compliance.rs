@@ -2423,7 +2423,7 @@ mod sparql_features {
 
     #[test]
     fn sparql_optional_multiple_independent() {
-        // Two independent OPTIONALs: one matches, one doesn't.
+        // Two independent OPTIONALLs: one matches, one doesn't.
         let db = rdf_db();
         let session = db.session();
         session
@@ -2453,7 +2453,7 @@ mod sparql_features {
         assert_eq!(
             result.row_count(),
             3,
-            "All 3 persons should appear with independent OPTIONALs"
+            "All 3 persons should appear with independent OPTIONALLs"
         );
         let alix_row = result
             .rows
