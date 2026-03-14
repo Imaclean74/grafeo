@@ -12,6 +12,7 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 - **Plan cache bindings**: `clear_plan_cache()` exposed in Python, Node.js, C, and WASM bindings
 - **RDF bulk load**: `RdfStore::bulk_load()` builds all indexes in a single pass with pre-sized HashMaps and computes statistics during the same traversal; `RdfStore::load_ntriples()` parses N-Triples documents with full term support (IRIs, blank nodes, typed/language-tagged literals)
 - **SPARQL EXPLAIN**: `EXPLAIN SELECT ...` prefix returns the optimized logical plan tree without executing the query, showing operator types and estimated cardinalities
+- **GQL conformance tracking**: `// ISO:` test annotations linking spec compliance tests to ISO/IEC 39075:2024 feature IDs; `scripts/gql-conformance.py` generates coverage reports and a machine-readable `docs/gql-dialect.json` dialect file for tools like GraphGlot
 
 ### Changed
 
