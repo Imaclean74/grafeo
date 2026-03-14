@@ -2937,6 +2937,12 @@ impl Session {
         let optimizer = Optimizer::from_rdf_statistics(rdf_stats);
         let optimized_plan = optimizer.optimize(logical_plan)?;
 
+        // EXPLAIN: return the logical plan tree without executing
+        if optimized_plan.explain {
+            use crate::query::processor::explain_result;
+            return Ok(explain_result(&optimized_plan));
+        }
+
         let planner = RdfPlanner::new(Arc::clone(&self.rdf_store))
             .with_transaction_id(*self.current_transaction.lock());
         #[cfg(feature = "wal")]
@@ -2984,6 +2990,12 @@ impl Session {
         let rdf_stats = self.rdf_store.collect_statistics();
         let optimizer = Optimizer::from_rdf_statistics(rdf_stats);
         let optimized_plan = optimizer.optimize(logical_plan)?;
+
+        // EXPLAIN: return the logical plan tree without executing
+        if optimized_plan.explain {
+            use crate::query::processor::explain_result;
+            return Ok(explain_result(&optimized_plan));
+        }
 
         let planner = RdfPlanner::new(Arc::clone(&self.rdf_store))
             .with_transaction_id(*self.current_transaction.lock());

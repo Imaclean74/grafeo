@@ -201,6 +201,12 @@ impl super::GrafeoDB {
         let optimizer = Optimizer::from_rdf_statistics(rdf_stats);
         let optimized_plan = optimizer.optimize(logical_plan)?;
 
+        // EXPLAIN: return the logical plan tree without executing
+        if optimized_plan.explain {
+            use crate::query::processor::explain_result;
+            return Ok(explain_result(&optimized_plan));
+        }
+
         // Convert to physical plan using RDF planner
         let planner = RdfPlanner::new(Arc::clone(&self.rdf_store));
         #[cfg(feature = "wal")]
