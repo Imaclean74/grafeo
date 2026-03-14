@@ -2418,6 +2418,237 @@ mod sparql_features {
             .unwrap();
         assert_eq!(result.row_count(), 1, "Only 'x' has count > 1");
     }
+
+    // --- P0 OPTIONAL bug probes ---
+
+    #[test]
+    fn sparql_optional_multiple_independent() {
+        // Two independent OPTIONALLs: one matches, one doesn't.
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    <http://ex.org/alix> <http://ex.org/age> "30" .
+                    <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                    <http://ex.org/gus> <http://ex.org/email> "gus@example.org" .
+                    <http://ex.org/harm> <http://ex.org/name> "Harm" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name ?age ?email WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    OPTIONAL { ?s <http://ex.org/age> ?age }
+                    OPTIONAL { ?s <http://ex.org/email> ?email }
+                }
+                ORDER BY ?name"#,
+            )
+            .unwrap();
+        // Alix: age=30, email=NULL
+        // Gus: age=NULL, email=gus@example.org
+        // Harm: age=NULL, email=NULL
+        assert_eq!(
+            result.row_count(),
+            3,
+            "All 3 persons should appear with independent OPTIONALLs"
+        );
+        let alix_row = result
+            .rows
+            .iter()
+            .find(|r| r[0] == Value::String("Alix".into()))
+            .expect("Alix should appear");
+        assert_eq!(alix_row[1], Value::String("30".into()), "Alix has age");
+        assert_eq!(alix_row[2], Value::Null, "Alix has no email");
+
+        let gus_row = result
+            .rows
+            .iter()
+            .find(|r| r[0] == Value::String("Gus".into()))
+            .expect("Gus should appear");
+        assert_eq!(gus_row[1], Value::Null, "Gus has no age");
+        assert_eq!(
+            gus_row[2],
+            Value::String("gus@example.org".into()),
+            "Gus has email"
+        );
+
+        let harm_row = result
+            .rows
+            .iter()
+            .find(|r| r[0] == Value::String("Harm".into()))
+            .expect("Harm should appear");
+        assert_eq!(harm_row[1], Value::Null, "Harm has no age");
+        assert_eq!(harm_row[2], Value::Null, "Harm has no email");
+    }
+
+    #[test]
+    fn sparql_optional_count_with_null() {
+        // COUNT(expr) should skip NULLs, COUNT(*) should count all rows.
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    <http://ex.org/alix> <http://ex.org/score> "80" .
+                    <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                    <http://ex.org/harm> <http://ex.org/name> "Harm" .
+                    <http://ex.org/harm> <http://ex.org/score> "60" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT (COUNT(?name) AS ?total) (COUNT(?score) AS ?with_score) WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    OPTIONAL { ?s <http://ex.org/score> ?score }
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+        // 3 people total, 2 with scores
+        assert_eq!(
+            result.rows[0][0],
+            Value::Int64(3),
+            "COUNT(?name) should be 3"
+        );
+        assert_eq!(
+            result.rows[0][1],
+            Value::Int64(2),
+            "COUNT(?score) should skip NULLs: 2"
+        );
+    }
+
+    #[test]
+    fn sparql_optional_inner_join_inside() {
+        // OPTIONAL block with a join inside (two triple patterns).
+        // Only matches if BOTH patterns match for the same binding.
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    <http://ex.org/alix> <http://ex.org/knows> <http://ex.org/gus> .
+                    <http://ex.org/gus> <http://ex.org/city> "Amsterdam" .
+                    <http://ex.org/harm> <http://ex.org/name> "Harm" .
+                    <http://ex.org/harm> <http://ex.org/knows> <http://ex.org/jules> .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name ?city WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    OPTIONAL {
+                        ?s <http://ex.org/knows> ?friend .
+                        ?friend <http://ex.org/city> ?city
+                    }
+                }
+                ORDER BY ?name"#,
+            )
+            .unwrap();
+        // Alix: knows Gus who has city Amsterdam
+        // Harm: knows Jules who has NO city -> NULL
+        assert_eq!(
+            result.row_count(),
+            2,
+            "Both people should appear even if inner join of optional fails"
+        );
+        let alix_row = result
+            .rows
+            .iter()
+            .find(|r| r[0] == Value::String("Alix".into()))
+            .expect("Alix should appear");
+        assert_eq!(alix_row[1], Value::String("Amsterdam".into()));
+
+        let harm_row = result
+            .rows
+            .iter()
+            .find(|r| r[0] == Value::String("Harm".into()))
+            .expect("Harm should appear");
+        assert_eq!(
+            harm_row[1],
+            Value::Null,
+            "Harm's friend has no city, optional fails -> NULL"
+        );
+    }
+
+    #[test]
+    fn sparql_optional_all_unbound() {
+        // Every person has no optional match at all.
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name ?email WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    OPTIONAL { ?s <http://ex.org/email> ?email }
+                }
+                ORDER BY ?name"#,
+            )
+            .unwrap();
+        // Both rows should appear with NULL email
+        assert_eq!(result.row_count(), 2, "Both persons should appear");
+        assert_eq!(result.rows[0][1], Value::Null, "Alix: no email");
+        assert_eq!(result.rows[1][1], Value::Null, "Gus: no email");
+    }
+
+    #[test]
+    fn sparql_optional_with_union_inside() {
+        // OPTIONAL { { ?s <p1> ?val } UNION { ?s <p2> ?val } }
+        let db = rdf_db();
+        let session = db.session();
+        session
+            .execute_sparql(
+                r#"INSERT DATA {
+                    <http://ex.org/alix> <http://ex.org/name> "Alix" .
+                    <http://ex.org/alix> <http://ex.org/nick> "Lix" .
+                    <http://ex.org/gus> <http://ex.org/name> "Gus" .
+                    <http://ex.org/gus> <http://ex.org/label> "Gustav" .
+                    <http://ex.org/harm> <http://ex.org/name> "Harm" .
+                }"#,
+            )
+            .unwrap();
+        let result = session
+            .execute_sparql(
+                r#"SELECT ?name ?alt WHERE {
+                    ?s <http://ex.org/name> ?name .
+                    OPTIONAL {
+                        { ?s <http://ex.org/nick> ?alt }
+                        UNION
+                        { ?s <http://ex.org/label> ?alt }
+                    }
+                }
+                ORDER BY ?name"#,
+            )
+            .unwrap();
+        // Alix: alt=Lix (from nick)
+        // Gus: alt=Gustav (from label)
+        // Harm: alt=NULL
+        assert_eq!(
+            result.row_count(),
+            3,
+            "All 3 persons should appear, UNION inside OPTIONAL"
+        );
+        let harm_row = result
+            .rows
+            .iter()
+            .find(|r| r[0] == Value::String("Harm".into()))
+            .expect("Harm should appear");
+        assert_eq!(harm_row[1], Value::Null, "Harm has neither nick nor label");
+    }
 }
 
 // ============================================================================

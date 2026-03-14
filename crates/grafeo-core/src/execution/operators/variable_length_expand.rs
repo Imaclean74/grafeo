@@ -309,18 +309,11 @@ impl VariableLengthExpandOperator {
                 // Filter by visibility
                 if let Some(epoch) = epoch {
                     if let Some(tx) = transaction_id {
-                        let edge_visible =
-                            self.store.get_edge_versioned(*edge_id, epoch, tx).is_some();
-                        let target_visible = self
-                            .store
-                            .get_node_versioned(*target_id, epoch, tx)
-                            .is_some();
-                        edge_visible && target_visible
+                        self.store.is_edge_visible_versioned(*edge_id, epoch, tx)
+                            && self.store.is_node_visible_versioned(*target_id, epoch, tx)
                     } else {
-                        let edge_visible = self.store.get_edge_at_epoch(*edge_id, epoch).is_some();
-                        let target_visible =
-                            self.store.get_node_at_epoch(*target_id, epoch).is_some();
-                        edge_visible && target_visible
+                        self.store.is_edge_visible_at_epoch(*edge_id, epoch)
+                            && self.store.is_node_visible_at_epoch(*target_id, epoch)
                     }
                 } else {
                     true
@@ -1001,5 +994,85 @@ mod tests {
 
         assert_eq!(total, 5);
         assert!(chunk_count >= 2);
+    }
+
+    #[test]
+    fn test_trail_mode_no_repeated_edges() {
+        let store = Arc::new(LpgStore::new().unwrap());
+
+        // Create cycle: a -> b -> a (same edge types)
+        let a = store.create_node(&["Node"]);
+        let b = store.create_node(&["Node"]);
+        store.create_edge(a, b, "EDGE");
+        store.create_edge(b, a, "EDGE");
+
+        let scan = Box::new(ScanOperator::with_label(
+            Arc::clone(&store) as Arc<dyn GraphStore>,
+            "Node",
+        ));
+        let mut expand = VariableLengthExpandOperator::new(
+            Arc::clone(&store) as Arc<dyn GraphStore>,
+            scan,
+            0,
+            Direction::Outgoing,
+            vec![],
+            1,
+            4,
+        )
+        .with_path_mode(PathMode::Trail);
+
+        let mut results = Vec::new();
+        while let Ok(Some(chunk)) = expand.next() {
+            for i in 0..chunk.row_count() {
+                let src = chunk.column(0).unwrap().get_node_id(i).unwrap();
+                let dst = chunk.column(2).unwrap().get_node_id(i).unwrap();
+                results.push((src, dst));
+            }
+        }
+
+        // From 'a': Trail allows a->b (1 hop) and a->b->a (2 hops, different edges)
+        // but NOT a->b->a->b (3 hops, would reuse the a->b edge)
+        let a_results: Vec<_> = results.iter().filter(|(s, _)| *s == a).collect();
+        assert_eq!(a_results.len(), 2, "Trail from a: a->b and a->b->a only");
+    }
+
+    #[test]
+    fn test_acyclic_mode_no_repeated_nodes() {
+        let store = Arc::new(LpgStore::new().unwrap());
+
+        // Create cycle: a -> b -> a
+        let a = store.create_node(&["Node"]);
+        let b = store.create_node(&["Node"]);
+        store.create_edge(a, b, "EDGE");
+        store.create_edge(b, a, "EDGE");
+
+        let scan = Box::new(ScanOperator::with_label(
+            Arc::clone(&store) as Arc<dyn GraphStore>,
+            "Node",
+        ));
+        let mut expand = VariableLengthExpandOperator::new(
+            Arc::clone(&store) as Arc<dyn GraphStore>,
+            scan,
+            0,
+            Direction::Outgoing,
+            vec![],
+            1,
+            4,
+        )
+        .with_path_mode(PathMode::Acyclic);
+
+        let mut results = Vec::new();
+        while let Ok(Some(chunk)) = expand.next() {
+            for i in 0..chunk.row_count() {
+                let src = chunk.column(0).unwrap().get_node_id(i).unwrap();
+                let dst = chunk.column(2).unwrap().get_node_id(i).unwrap();
+                results.push((src, dst));
+            }
+        }
+
+        // From 'a': Acyclic allows a->b only (cannot revisit a)
+        let a_results: Vec<_> = results.iter().filter(|(s, _)| *s == a).collect();
+        assert_eq!(a_results.len(), 1, "Acyclic from a: only a->b");
+        assert_eq!(a_results[0].1, b);
     }
 }

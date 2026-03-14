@@ -283,6 +283,20 @@ impl GraphStore for WalGraphStore {
             .is_node_visible_versioned(id, epoch, transaction_id)
     }
 
+    fn is_edge_visible_at_epoch(&self, id: EdgeId, epoch: EpochId) -> bool {
+        self.inner.is_edge_visible_at_epoch(id, epoch)
+    }
+
+    fn is_edge_visible_versioned(
+        &self,
+        id: EdgeId,
+        epoch: EpochId,
+        transaction_id: TransactionId,
+    ) -> bool {
+        self.inner
+            .is_edge_visible_versioned(id, epoch, transaction_id)
+    }
+
     fn filter_visible_node_ids(&self, ids: &[NodeId], epoch: EpochId) -> Vec<NodeId> {
         self.inner.filter_visible_node_ids(ids, epoch)
     }
@@ -683,6 +697,153 @@ mod tests {
         // 2 DeleteEdge records (one outgoing, one incoming)
         assert_eq!(wal.record_count(), 7);
         assert_eq!(ws.edge_count(), 0);
+    }
+
+    fn setup_named_graph() -> (WalGraphStore, Arc<LpgWal>) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(LpgStore::new().unwrap());
+        let wal = Arc::new(TypedWal::open(dir.path()).unwrap());
+        let wal_ref = Arc::clone(&wal);
+        let ctx = Arc::new(parking_lot::Mutex::new(None));
+        (
+            WalGraphStore::new_for_graph(store, wal, "social".to_string(), ctx),
+            wal_ref,
+        )
+    }
+
+    #[test]
+    fn named_graph_emits_switch_graph_record() {
+        let (ws, wal) = setup_named_graph();
+        let _id = ws.create_node(&["Person"]);
+
+        // Should have SwitchGraph + CreateNode = 2 records
+        assert_eq!(wal.record_count(), 2);
+    }
+
+    #[test]
+    fn named_graph_context_not_repeated() {
+        let (ws, wal) = setup_named_graph();
+        // First mutation: emits SwitchGraph + CreateNode
+        ws.create_node(&["Person"]);
+        assert_eq!(wal.record_count(), 2);
+
+        // Second mutation: context already set, no extra SwitchGraph
+        ws.create_node(&["Person"]);
+        assert_eq!(wal.record_count(), 3); // just CreateNode
+    }
+
+    #[test]
+    fn create_node_versioned_delegates_and_logs() {
+        let (ws, wal) = setup();
+        let epoch = ws.current_epoch();
+        let tx = TransactionId::new(1);
+        let id = ws.create_node_versioned(&["Person"], epoch, tx);
+
+        assert!(id.is_valid());
+        assert_eq!(wal.record_count(), 1);
+    }
+
+    #[test]
+    fn create_edge_versioned_delegates_and_logs() {
+        let (ws, wal) = setup();
+        let epoch = ws.current_epoch();
+        let tx = TransactionId::new(1);
+        let a = ws.create_node(&["Node"]);
+        let b = ws.create_node(&["Node"]);
+        let eid = ws.create_edge_versioned(a, b, "KNOWS", epoch, tx);
+
+        assert!(eid.is_valid());
+        // 2 CreateNode + 1 CreateEdge
+        assert_eq!(wal.record_count(), 3);
+    }
+
+    #[test]
+    fn delete_node_versioned_only_logs_on_success() {
+        let (ws, wal) = setup();
+        let epoch = ws.current_epoch();
+        let tx = TransactionId::new(1);
+        let id = ws.create_node_versioned(&["Person"], epoch, tx);
+        assert_eq!(wal.record_count(), 1);
+
+        // Delete nonexistent: no log
+        assert!(!ws.delete_node_versioned(NodeId::new(999), epoch, tx));
+        assert_eq!(wal.record_count(), 1);
+
+        // Delete real node: logs
+        assert!(ws.delete_node_versioned(id, epoch, tx));
+        assert_eq!(wal.record_count(), 2);
+    }
+
+    #[test]
+    fn delete_edge_versioned_only_logs_on_success() {
+        let (ws, wal) = setup();
+        let epoch = ws.current_epoch();
+        let tx = TransactionId::new(1);
+        let a = ws.create_node(&["Node"]);
+        let b = ws.create_node(&["Node"]);
+        let eid = ws.create_edge_versioned(a, b, "LINK", epoch, tx);
+        assert_eq!(wal.record_count(), 3);
+
+        // Delete nonexistent: no log
+        assert!(!ws.delete_edge_versioned(EdgeId::new(999), epoch, tx));
+        assert_eq!(wal.record_count(), 3);
+
+        // Delete real edge: logs
+        assert!(ws.delete_edge_versioned(eid, epoch, tx));
+        assert_eq!(wal.record_count(), 4);
+    }
+
+    #[test]
+    fn create_node_with_props_via_trait_default() {
+        use grafeo_core::graph::GraphStoreMut;
+
+        let (ws, wal) = setup();
+        let store: &dyn GraphStoreMut = &ws;
+        let id = store.create_node_with_props(
+            &["Person"],
+            &[
+                (PropertyKey::from("name"), Value::String("Alix".into())),
+                (PropertyKey::from("age"), Value::Int64(30)),
+            ],
+        );
+
+        assert!(ws.get_node(id).is_some());
+        // 1 CreateNode + 2 SetNodeProperty
+        assert_eq!(wal.record_count(), 3);
+
+        assert_eq!(
+            ws.get_node_property(id, &PropertyKey::from("name")),
+            Some(Value::String("Alix".into()))
+        );
+        assert_eq!(
+            ws.get_node_property(id, &PropertyKey::from("age")),
+            Some(Value::Int64(30))
+        );
+    }
+
+    #[test]
+    fn create_edge_with_props_via_trait_default() {
+        use grafeo_core::graph::GraphStoreMut;
+
+        let (ws, wal) = setup();
+        let store: &dyn GraphStoreMut = &ws;
+        let a = store.create_node(&["Node"]);
+        let b = store.create_node(&["Node"]);
+        let eid = store.create_edge_with_props(
+            a,
+            b,
+            "KNOWS",
+            &[(PropertyKey::from("since"), Value::Int64(2020))],
+        );
+
+        assert!(ws.get_edge(eid).is_some());
+        // 2 CreateNode + 1 CreateEdge + 1 SetEdgeProperty
+        assert_eq!(wal.record_count(), 4);
+
+        assert_eq!(
+            ws.get_edge_property(eid, &PropertyKey::from("since")),
+            Some(Value::Int64(2020))
+        );
     }
 
     #[test]

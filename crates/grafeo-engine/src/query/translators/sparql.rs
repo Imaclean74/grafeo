@@ -1242,12 +1242,21 @@ impl SparqlTranslator {
                 ast::AggregateExpression::Count {
                     distinct,
                     expression,
-                } => (
-                    AggregateFunction::Count,
-                    expression.as_ref().map(|e| e.as_ref()),
-                    *distinct,
-                    None,
-                ),
+                } => {
+                    // COUNT(?expr) uses CountNonNull to skip NULLs;
+                    // COUNT(*) (no expression) uses Count to count all rows.
+                    let func = if expression.is_some() {
+                        AggregateFunction::CountNonNull
+                    } else {
+                        AggregateFunction::Count
+                    };
+                    (
+                        func,
+                        expression.as_ref().map(|e| e.as_ref()),
+                        *distinct,
+                        None,
+                    )
+                }
                 ast::AggregateExpression::Sum {
                     distinct,
                     expression,
@@ -1330,10 +1339,14 @@ impl SparqlTranslator {
                     upper.as_str(),
                     "COUNT" | "SUM" | "AVG" | "MIN" | "MAX" | "SAMPLE" | "GROUP_CONCAT"
                 ) {
-                    // Find the matching aggregate by function name
+                    // Find the matching aggregate by function name.
+                    // CountNonNull is the physical variant of COUNT(expr),
+                    // so treat it as matching "COUNT" for HAVING rewriting.
                     for agg in aggregates {
                         let agg_name = format!("{:?}", agg.function).to_uppercase();
-                        if agg_name == upper && agg.alias.is_some() {
+                        let matches_name =
+                            agg_name == upper || (upper == "COUNT" && agg_name == "COUNTNONNULL");
+                        if matches_name && agg.alias.is_some() {
                             return LogicalExpression::Variable(
                                 agg.alias.clone().expect("alias checked by is_some guard"),
                             );
