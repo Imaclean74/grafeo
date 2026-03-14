@@ -577,6 +577,131 @@ impl RdfStore {
     }
 
     // =========================================================================
+    // Bulk loading
+    // =========================================================================
+
+    /// Loads triples in bulk, replacing all existing data.
+    ///
+    /// Much faster than `batch_insert()` for initial data loading:
+    /// - Skips duplicate checking entirely (caller must ensure no duplicates)
+    /// - Builds all indexes in a single pass using pre-sized `HashMap`s
+    /// - Computes [`RdfStatistics`](crate::statistics::RdfStatistics) during the
+    ///   same traversal (no extra scan needed)
+    ///
+    /// **Warning**: This replaces all existing triples and indexes in the store.
+    /// Any previously stored data will be lost.
+    pub fn bulk_load(&self, triples: impl IntoIterator<Item = Triple>) -> BulkLoadResult {
+        let arcs: Vec<Arc<Triple>> = triples.into_iter().map(Arc::new).collect();
+        let count = arcs.len();
+
+        if count == 0 {
+            self.clear();
+            return BulkLoadResult {
+                triple_count: 0,
+                statistics: crate::statistics::RdfStatistics::new(),
+            };
+        }
+
+        // Build all indexes in local HashMaps (no locks during build)
+        let hasher = || foldhash::fast::RandomState::default();
+        let mut subject_idx = hashbrown::HashMap::with_capacity_and_hasher(count / 4, hasher());
+        let mut predicate_idx = hashbrown::HashMap::with_capacity_and_hasher(count / 8, hasher());
+        let mut object_idx_map = hashbrown::HashMap::with_capacity_and_hasher(count / 4, hasher());
+        let mut sp_idx = hashbrown::HashMap::with_capacity_and_hasher(count / 2, hasher());
+        let mut po_idx = hashbrown::HashMap::with_capacity_and_hasher(count / 2, hasher());
+        let mut os_idx = hashbrown::HashMap::with_capacity_and_hasher(count / 2, hasher());
+
+        let mut stats_collector = crate::statistics::RdfStatisticsCollector::new();
+
+        for triple in &arcs {
+            // Single-term indexes
+            subject_idx
+                .entry(triple.subject().clone())
+                .or_insert_with(Vec::new)
+                .push(Arc::clone(triple));
+            predicate_idx
+                .entry(triple.predicate().clone())
+                .or_insert_with(Vec::new)
+                .push(Arc::clone(triple));
+            if self.config.index_objects {
+                object_idx_map
+                    .entry(triple.object().clone())
+                    .or_insert_with(Vec::new)
+                    .push(Arc::clone(triple));
+            }
+
+            // Composite indexes
+            sp_idx
+                .entry((triple.subject().clone(), triple.predicate().clone()))
+                .or_insert_with(Vec::new)
+                .push(Arc::clone(triple));
+            po_idx
+                .entry((triple.predicate().clone(), triple.object().clone()))
+                .or_insert_with(Vec::new)
+                .push(Arc::clone(triple));
+            os_idx
+                .entry((triple.object().clone(), triple.subject().clone()))
+                .or_insert_with(Vec::new)
+                .push(Arc::clone(triple));
+
+            // Collect statistics in the same pass
+            stats_collector.record_triple(
+                &triple.subject().to_string(),
+                &triple.predicate().to_string(),
+                &triple.object().to_string(),
+            );
+        }
+
+        // Swap indexes into the store (one lock acquisition per index)
+        let primary: FxHashSet<Arc<Triple>> = arcs.into_iter().collect();
+        *self.triples.write() = primary;
+        *self.subject_index.write() = subject_idx;
+        *self.predicate_index.write() = predicate_idx;
+        *self.object_index.write() = if self.config.index_objects {
+            Some(object_idx_map)
+        } else {
+            None
+        };
+        *self.sp_index.write() = sp_idx;
+        *self.po_index.write() = po_idx;
+        *self.os_index.write() = os_idx;
+
+        BulkLoadResult {
+            triple_count: count,
+            statistics: stats_collector.build(),
+        }
+    }
+
+    /// Parses and loads an N-Triples document, replacing all existing data.
+    ///
+    /// Each line is parsed as `<subject> <predicate> <object> .` per the
+    /// [N-Triples spec](https://www.w3.org/TR/n-triples/). Empty lines and
+    /// comment lines (starting with `#`) are skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on I/O failure or if a line cannot be parsed.
+    pub fn load_ntriples(
+        &self,
+        reader: impl std::io::BufRead,
+    ) -> Result<BulkLoadResult, NTriplesError> {
+        let mut triples = Vec::new();
+        for (line_no, line) in reader.lines().enumerate() {
+            let line = line.map_err(NTriplesError::Io)?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let triple = parse_ntriples_line(trimmed).ok_or_else(|| NTriplesError::Parse {
+                line: line_no + 1,
+                content: line.clone(),
+            })?;
+            triples.push(triple);
+        }
+        Ok(self.bulk_load(triples))
+    }
+
+    // =========================================================================
     // Named graph support
     // =========================================================================
 
@@ -891,6 +1016,111 @@ pub struct RdfStoreStats {
     pub object_count: usize,
     /// Number of named graphs.
     pub graph_count: usize,
+}
+
+/// Result of a bulk load operation.
+#[derive(Debug, Clone)]
+pub struct BulkLoadResult {
+    /// Number of triples loaded.
+    pub triple_count: usize,
+    /// Statistics computed during the load pass.
+    pub statistics: crate::statistics::RdfStatistics,
+}
+
+/// Error from parsing an N-Triples document.
+#[derive(Debug)]
+pub enum NTriplesError {
+    /// I/O error while reading.
+    Io(std::io::Error),
+    /// A line could not be parsed as a valid N-Triples triple.
+    Parse {
+        /// 1-based line number.
+        line: usize,
+        /// The raw line content.
+        content: String,
+    },
+}
+
+impl std::fmt::Display for NTriplesError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(err) => write!(f, "I/O error: {err}"),
+            Self::Parse { line, content } => {
+                write!(f, "parse error at line {line}: {content}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NTriplesError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            Self::Parse { .. } => None,
+        }
+    }
+}
+
+/// Extracts the next N-Triples term from a string, returning `(term_str, rest)`.
+fn next_ntriples_term(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim_start();
+    if let Some(rest) = s.strip_prefix('<') {
+        // IRI: find closing >
+        let end = rest.find('>')?;
+        Some((&s[..end + 2], &rest[end + 1..]))
+    } else if s.starts_with("_:") {
+        // Blank node: until whitespace or end
+        let end = s.find(|c: char| c.is_whitespace()).unwrap_or(s.len());
+        Some((&s[..end], &s[end..]))
+    } else if s.starts_with('"') {
+        // Literal: find closing quote (handling escapes), then optional suffix
+        let bytes = s.as_bytes();
+        let mut pos = 1;
+        while pos < bytes.len() {
+            if bytes[pos] == b'\\' {
+                pos += 2; // skip escape sequence
+            } else if bytes[pos] == b'"' {
+                pos += 1;
+                // Check for datatype or language suffix
+                if s[pos..].starts_with("^^<") {
+                    if let Some(end) = s[pos..].find('>') {
+                        pos += end + 1;
+                    }
+                } else if s[pos..].starts_with('@') {
+                    let lang_end = s[pos..]
+                        .find(|c: char| c.is_whitespace())
+                        .unwrap_or(s.len() - pos);
+                    pos += lang_end;
+                }
+                break;
+            } else {
+                pos += 1;
+            }
+        }
+        Some((&s[..pos], &s[pos..]))
+    } else {
+        None
+    }
+}
+
+/// Parses a single N-Triples line into a `Triple`.
+///
+/// Expected format: `<subject> <predicate> <object> .`
+fn parse_ntriples_line(line: &str) -> Option<Triple> {
+    let (subj_str, rest) = next_ntriples_term(line)?;
+    let (pred_str, rest) = next_ntriples_term(rest)?;
+    let (obj_str, rest) = next_ntriples_term(rest)?;
+
+    // Expect trailing ` .`
+    let rest = rest.trim();
+    if !rest.starts_with('.') {
+        return None;
+    }
+
+    let subject = Term::from_ntriples(subj_str)?;
+    let predicate = Term::from_ntriples(pred_str)?;
+    let object = Term::from_ntriples(obj_str)?;
+    Some(Triple::new(subject, predicate, object))
 }
 
 #[cfg(test)]
@@ -1447,5 +1677,155 @@ mod tests {
         };
         let results = store.find(&pattern);
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_bulk_load() {
+        let store = RdfStore::new();
+
+        // Insert some existing data that should be replaced
+        store.insert(Triple::new(
+            Term::iri("http://example.org/old"),
+            Term::iri("http://example.org/p"),
+            Term::literal("old"),
+        ));
+
+        let result = store.bulk_load(sample_triples());
+        assert_eq!(result.triple_count, 4);
+        assert_eq!(store.len(), 4);
+
+        // Old data should be gone
+        assert!(!store.contains(&Triple::new(
+            Term::iri("http://example.org/old"),
+            Term::iri("http://example.org/p"),
+            Term::literal("old"),
+        )));
+
+        // All indexes should work (single-term)
+        let alix = Term::iri("http://example.org/alix");
+        assert_eq!(store.triples_with_subject(&alix).len(), 3);
+
+        // Composite indexes should work
+        let pattern = TriplePattern {
+            subject: Some(Term::iri("http://example.org/alix")),
+            predicate: Some(Term::iri("http://xmlns.com/foaf/0.1/name")),
+            object: None,
+        };
+        assert_eq!(store.find(&pattern).len(), 1);
+
+        // Statistics should be computed
+        assert_eq!(result.statistics.total_triples, 4);
+        assert_eq!(result.statistics.subject_count, 2);
+        assert_eq!(result.statistics.predicate_count, 3);
+    }
+
+    #[test]
+    fn test_bulk_load_empty() {
+        let store = RdfStore::new();
+        store.insert(Triple::new(
+            Term::iri("http://example.org/s"),
+            Term::iri("http://example.org/p"),
+            Term::literal("v"),
+        ));
+
+        let result = store.bulk_load(Vec::<Triple>::new());
+        assert_eq!(result.triple_count, 0);
+        assert_eq!(store.len(), 0);
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ntriples_line() {
+        // Simple IRI triple
+        let triple = parse_ntriples_line(
+            r#"<http://example.org/alix> <http://xmlns.com/foaf/0.1/name> "Alix" ."#,
+        );
+        assert!(triple.is_some());
+        let triple = triple.unwrap();
+        assert_eq!(triple.subject(), &Term::iri("http://example.org/alix"));
+        assert_eq!(
+            triple.predicate(),
+            &Term::iri("http://xmlns.com/foaf/0.1/name")
+        );
+        assert_eq!(triple.object(), &Term::literal("Alix"));
+
+        // Typed literal
+        let triple = parse_ntriples_line(
+            r#"<http://example.org/alix> <http://xmlns.com/foaf/0.1/age> "30"^^<http://www.w3.org/2001/XMLSchema#integer> ."#,
+        );
+        assert!(triple.is_some());
+        let triple = triple.unwrap();
+        assert_eq!(
+            triple.object(),
+            &Term::typed_literal("30", "http://www.w3.org/2001/XMLSchema#integer")
+        );
+
+        // Language-tagged literal
+        let triple = parse_ntriples_line(
+            r#"<http://example.org/alix> <http://xmlns.com/foaf/0.1/name> "Alix"@en ."#,
+        );
+        assert!(triple.is_some());
+        assert_eq!(triple.unwrap().object(), &Term::lang_literal("Alix", "en"));
+
+        // Blank node subject
+        let triple = parse_ntriples_line(r#"_:b0 <http://xmlns.com/foaf/0.1/name> "Gus" ."#);
+        assert!(triple.is_some());
+        assert_eq!(triple.unwrap().subject(), &Term::blank("b0"));
+
+        // IRI object
+        let triple = parse_ntriples_line(
+            r#"<http://example.org/alix> <http://xmlns.com/foaf/0.1/knows> <http://example.org/gus> ."#,
+        );
+        assert!(triple.is_some());
+        assert_eq!(
+            triple.unwrap().object(),
+            &Term::iri("http://example.org/gus")
+        );
+
+        // Invalid line (no dot)
+        assert!(
+            parse_ntriples_line(r#"<http://example.org/s> <http://example.org/p> "v""#,).is_none()
+        );
+    }
+
+    #[test]
+    fn test_load_ntriples() {
+        let ntriples = "\
+<http://example.org/alix> <http://xmlns.com/foaf/0.1/name> \"Alix\" .
+# This is a comment
+<http://example.org/alix> <http://xmlns.com/foaf/0.1/knows> <http://example.org/gus> .
+
+<http://example.org/gus> <http://xmlns.com/foaf/0.1/name> \"Gus\" .
+";
+        let store = RdfStore::new();
+        let result = store.load_ntriples(ntriples.as_bytes()).unwrap();
+        assert_eq!(result.triple_count, 3);
+        assert_eq!(store.len(), 3);
+        assert_eq!(result.statistics.total_triples, 3);
+
+        // Verify composite index works after load
+        let pattern = TriplePattern {
+            subject: None,
+            predicate: Some(Term::iri("http://xmlns.com/foaf/0.1/name")),
+            object: Some(Term::literal("Gus")),
+        };
+        assert_eq!(store.find(&pattern).len(), 1);
+    }
+
+    #[test]
+    fn test_load_ntriples_parse_error() {
+        let bad_ntriples = "\
+<http://example.org/s> <http://example.org/p> \"ok\" .
+this is not valid ntriples
+<http://example.org/s2> <http://example.org/p2> \"ok2\" .
+";
+        let store = RdfStore::new();
+        let result = store.load_ntriples(bad_ntriples.as_bytes());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        match err {
+            NTriplesError::Parse { line, .. } => assert_eq!(line, 2),
+            _ => panic!("expected Parse error"),
+        }
     }
 }

@@ -4203,7 +4203,66 @@ impl Drop for Session {
 
 #[cfg(test)]
 mod tests {
+    use super::parse_default_literal;
     use crate::database::GrafeoDB;
+    use grafeo_common::types::Value;
+
+    // -----------------------------------------------------------------------
+    // parse_default_literal
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_default_literal_null() {
+        assert_eq!(parse_default_literal("null"), Value::Null);
+        assert_eq!(parse_default_literal("NULL"), Value::Null);
+        assert_eq!(parse_default_literal("Null"), Value::Null);
+    }
+
+    #[test]
+    fn parse_default_literal_bool() {
+        assert_eq!(parse_default_literal("true"), Value::Bool(true));
+        assert_eq!(parse_default_literal("TRUE"), Value::Bool(true));
+        assert_eq!(parse_default_literal("false"), Value::Bool(false));
+        assert_eq!(parse_default_literal("FALSE"), Value::Bool(false));
+    }
+
+    #[test]
+    fn parse_default_literal_string_single_quoted() {
+        assert_eq!(
+            parse_default_literal("'hello'"),
+            Value::String("hello".into())
+        );
+    }
+
+    #[test]
+    fn parse_default_literal_string_double_quoted() {
+        assert_eq!(
+            parse_default_literal("\"world\""),
+            Value::String("world".into())
+        );
+    }
+
+    #[test]
+    fn parse_default_literal_integer() {
+        assert_eq!(parse_default_literal("42"), Value::Int64(42));
+        assert_eq!(parse_default_literal("-7"), Value::Int64(-7));
+        assert_eq!(parse_default_literal("0"), Value::Int64(0));
+    }
+
+    #[test]
+    fn parse_default_literal_float() {
+        assert_eq!(parse_default_literal("9.81"), Value::Float64(9.81_f64));
+        assert_eq!(parse_default_literal("-0.5"), Value::Float64(-0.5));
+    }
+
+    #[test]
+    fn parse_default_literal_fallback_string() {
+        // Not a recognized literal, not quoted, not a number
+        assert_eq!(
+            parse_default_literal("some_identifier"),
+            Value::String("some_identifier".into())
+        );
+    }
 
     #[test]
     fn test_session_create_node() {

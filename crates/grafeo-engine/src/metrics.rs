@@ -681,4 +681,131 @@ mod tests {
         record_metric!(registry, rows_returned, add 10u64);
         record_metric!(registry, query_latency, observe 1.0);
     }
+
+    #[test]
+    fn histogram_snapshot_captures_state() {
+        let h = AtomicHistogram::new(LATENCY_BUCKETS);
+        h.observe(1.0);
+        h.observe(5.0);
+        h.observe(100.0);
+
+        let snap = h.snapshot();
+        assert_eq!(snap.count, 3);
+        assert!((snap.sum - 106.0).abs() < f64::EPSILON);
+        assert_eq!(snap.boundaries.len(), LATENCY_BUCKETS.len());
+        assert_eq!(snap.bucket_counts.len(), LATENCY_BUCKETS.len() + 1);
+
+        // Bucket for 1.0 (index 3) should have 1 observation
+        assert_eq!(snap.bucket_counts[3], 1);
+        // Bucket for 5.0 (index 5) should have 1 observation
+        assert_eq!(snap.bucket_counts[5], 1);
+        // Bucket for 100.0 (index 9) should have 1 observation
+        assert_eq!(snap.bucket_counts[9], 1);
+    }
+
+    #[test]
+    fn histogram_snapshot_serde_roundtrip() {
+        let h = AtomicHistogram::new(LATENCY_BUCKETS);
+        h.observe(2.5);
+        h.observe(50.0);
+
+        let snap = h.snapshot();
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let deserialized: HistogramSnapshot = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(deserialized.count, snap.count);
+        assert!((deserialized.sum - snap.sum).abs() < f64::EPSILON);
+        assert_eq!(deserialized.bucket_counts, snap.bucket_counts);
+    }
+
+    #[test]
+    fn registry_default_is_zeroed() {
+        let registry = MetricsRegistry::default();
+        let snap = registry.snapshot();
+        assert_eq!(snap.query_count, 0);
+        assert_eq!(snap.tx_committed, 0);
+        assert_eq!(snap.session_created, 0);
+        assert_eq!(snap.gc_runs, 0);
+        assert!((snap.query_latency_mean_ms).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn registry_snapshot_captures_all_fields() {
+        let registry = MetricsRegistry::new();
+        registry.query_count.fetch_add(100, Ordering::Relaxed);
+        registry.query_errors.fetch_add(5, Ordering::Relaxed);
+        registry.query_timeouts.fetch_add(2, Ordering::Relaxed);
+        registry.rows_returned.fetch_add(1000, Ordering::Relaxed);
+        registry.rows_scanned.fetch_add(5000, Ordering::Relaxed);
+        registry.tx_active.fetch_add(3, Ordering::Relaxed);
+        registry.tx_committed.fetch_add(50, Ordering::Relaxed);
+        registry.tx_rolled_back.fetch_add(2, Ordering::Relaxed);
+        registry.tx_conflicts.fetch_add(1, Ordering::Relaxed);
+        registry.session_active.fetch_add(4, Ordering::Relaxed);
+        registry.session_created.fetch_add(10, Ordering::Relaxed);
+        registry.gc_runs.fetch_add(7, Ordering::Relaxed);
+        registry.query_latency.observe(10.0);
+        registry.tx_duration.observe(5.0);
+        registry.query_count_by_language.increment("gql");
+        registry.query_count_by_language.increment("cypher");
+        registry.query_count_by_language.increment("sparql");
+        registry.query_count_by_language.increment("gremlin");
+        registry.query_count_by_language.increment("graphql");
+        registry.query_count_by_language.increment("sql-pgq");
+
+        let snap = registry.snapshot();
+        assert_eq!(snap.query_count, 100);
+        assert_eq!(snap.query_errors, 5);
+        assert_eq!(snap.query_timeouts, 2);
+        assert_eq!(snap.rows_returned, 1000);
+        assert_eq!(snap.rows_scanned, 5000);
+        assert_eq!(snap.tx_active, 3);
+        assert_eq!(snap.tx_committed, 50);
+        assert_eq!(snap.tx_rolled_back, 2);
+        assert_eq!(snap.tx_conflicts, 1);
+        assert_eq!(snap.session_active, 4);
+        assert_eq!(snap.session_created, 10);
+        assert_eq!(snap.gc_runs, 7);
+        assert_eq!(snap.queries_gql, 1);
+        assert_eq!(snap.queries_cypher, 1);
+        assert_eq!(snap.queries_sparql, 1);
+        assert_eq!(snap.queries_gremlin, 1);
+        assert_eq!(snap.queries_graphql, 1);
+        assert_eq!(snap.queries_sql_pgq, 1);
+        assert!((snap.query_latency_mean_ms - 10.0).abs() < f64::EPSILON);
+        assert!((snap.tx_duration_mean_ms - 5.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn histogram_overflow_percentile() {
+        let h = AtomicHistogram::new(LATENCY_BUCKETS);
+        // All observations above the highest boundary (10000.0)
+        h.observe(20000.0);
+        h.observe(50000.0);
+
+        // p50 should return the last boundary as a lower-bound estimate
+        let p50 = h.percentile(0.50);
+        assert!(
+            (p50 - 10000.0).abs() < f64::EPSILON,
+            "overflow bucket should return last boundary, got {p50}"
+        );
+    }
+
+    #[test]
+    fn language_counters_reset() {
+        let lc = LanguageCounters::new();
+        lc.increment("gql");
+        lc.increment("cypher");
+        lc.increment("sparql");
+
+        lc.reset();
+
+        let snap = lc.snapshot();
+        assert_eq!(snap.gql, 0);
+        assert_eq!(snap.cypher, 0);
+        assert_eq!(snap.sparql, 0);
+        assert_eq!(snap.gremlin, 0);
+        assert_eq!(snap.graphql, 0);
+        assert_eq!(snap.sql_pgq, 0);
+    }
 }

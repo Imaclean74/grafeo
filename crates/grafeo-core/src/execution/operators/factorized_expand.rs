@@ -843,6 +843,38 @@ mod tests {
     }
 
     #[test]
+    fn test_factorized_expand_multi_edge_type_filter() {
+        let store = Arc::new(LpgStore::new().unwrap());
+
+        let alix = store.create_node(&["Person"]);
+        let gus = store.create_node(&["Person"]);
+        let vincent = store.create_node(&["City"]);
+
+        // Mixed edge types
+        store.create_edge(alix, gus, "KNOWS");
+        store.create_edge(alix, vincent, "LIVES_IN");
+        store.create_edge(gus, vincent, "WORKS_AT");
+
+        let scan = Box::new(ScanOperator::with_label(store.clone(), "Person"));
+
+        // Filter for KNOWS and LIVES_IN (case-insensitive)
+        let mut expand = FactorizedExpandOperator::new(
+            store.clone(),
+            scan,
+            0,
+            Direction::Outgoing,
+            vec!["knows".to_string(), "lives_in".to_string()],
+        );
+
+        let result = expand.next_factorized().unwrap().unwrap();
+        let flat = result.flatten();
+
+        // From Alix: KNOWS (to Gus) and LIVES_IN (to Vincent) = 2 rows
+        // From Gus: WORKS_AT is filtered out = 0 rows
+        assert_eq!(flat.row_count(), 2);
+    }
+
+    #[test]
     fn test_factorized_memory_savings() {
         let store = Arc::new(LpgStore::new().unwrap());
 

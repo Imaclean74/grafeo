@@ -1700,6 +1700,56 @@ mod tests {
     }
 
     #[test]
+    fn test_with_store_external_backend() {
+        use grafeo_core::graph::lpg::LpgStore;
+
+        let external = Arc::new(LpgStore::new().unwrap());
+
+        // Seed data on the external store directly
+        let n1 = external.create_node(&["Person"]);
+        external.set_node_property(n1, "name", grafeo_common::types::Value::from("Alix"));
+
+        let db = GrafeoDB::with_store(
+            Arc::clone(&external) as Arc<dyn GraphStoreMut>,
+            Config::in_memory(),
+        )
+        .unwrap();
+
+        let session = db.session();
+
+        // Session should see data from the external store via execute
+        #[cfg(feature = "gql")]
+        {
+            let result = session.execute("MATCH (p:Person) RETURN p.name").unwrap();
+            assert_eq!(result.rows.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_with_config_custom_memory_limit() {
+        let config = Config::in_memory().with_memory_limit(64 * 1024 * 1024); // 64 MB
+
+        let db = GrafeoDB::with_config(config).unwrap();
+        assert_eq!(db.config().memory_limit, Some(64 * 1024 * 1024));
+        assert_eq!(db.node_count(), 0);
+    }
+
+    #[cfg(feature = "metrics")]
+    #[test]
+    fn test_database_metrics_registry() {
+        let db = GrafeoDB::new_in_memory();
+
+        // Perform some operations
+        db.create_node(&["Person"]);
+        db.create_node(&["Person"]);
+
+        // Check that metrics snapshot returns data
+        let snap = db.metrics();
+        // Session created counter should reflect at least 0 (metrics is initialized)
+        assert_eq!(snap.query_count, 0); // No queries executed yet
+    }
+
+    #[test]
     fn test_query_result_has_metrics() {
         // Verifies that query results include execution metrics
         let db = GrafeoDB::new_in_memory();
