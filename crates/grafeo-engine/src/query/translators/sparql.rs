@@ -1242,12 +1242,21 @@ impl SparqlTranslator {
                 ast::AggregateExpression::Count {
                     distinct,
                     expression,
-                } => (
-                    AggregateFunction::Count,
-                    expression.as_ref().map(|e| e.as_ref()),
-                    *distinct,
-                    None,
-                ),
+                } => {
+                    // COUNT(?expr) uses CountNonNull to skip NULLs;
+                    // COUNT(*) (no expression) uses Count to count all rows.
+                    let func = if expression.is_some() {
+                        AggregateFunction::CountNonNull
+                    } else {
+                        AggregateFunction::Count
+                    };
+                    (
+                        func,
+                        expression.as_ref().map(|e| e.as_ref()),
+                        *distinct,
+                        None,
+                    )
+                }
                 ast::AggregateExpression::Sum {
                     distinct,
                     expression,

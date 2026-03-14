@@ -668,7 +668,9 @@ impl RdfPlanner {
             // For RDF, numeric values are strings that get converted to floats
             // So SUM should also output Float64 (since SumFloat returns Float64)
             let result_type = match agg_expr.function {
-                LogicalAggregateFunction::Count => LogicalType::Int64,
+                LogicalAggregateFunction::Count | LogicalAggregateFunction::CountNonNull => {
+                    LogicalType::Int64
+                }
                 LogicalAggregateFunction::Sum => LogicalType::Float64,
                 LogicalAggregateFunction::Avg => LogicalType::Float64,
                 _ => LogicalType::String,
