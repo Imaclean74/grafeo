@@ -1526,6 +1526,7 @@ fn test_stddev_pop_alias() {
     }
 }
 
+// ISO: GF20
 #[test]
 fn test_aggregate_in_order_by() {
     // GF20: Aggregate functions in ORDER BY
@@ -1542,6 +1543,7 @@ fn test_aggregate_in_order_by() {
     assert!(!result.rows.is_empty());
 }
 
+// ISO: GF20
 #[test]
 fn test_aggregate_order_by_alias() {
     // GF20: ORDER BY using alias of aggregate result
@@ -2206,9 +2208,10 @@ fn test_count_subquery_equals_zero_in_where() {
 }
 
 // -----------------------------------------------------------------------
-// Catalog introspection procedures
+// Catalog introspection procedures (require algos feature for CALL)
 // -----------------------------------------------------------------------
 
+#[cfg(feature = "algos")]
 #[test]
 fn test_db_labels() {
     let db = setup_db();
@@ -2228,6 +2231,7 @@ fn test_db_labels() {
     assert!(labels.contains(&"Person".to_string()), "labels: {labels:?}");
 }
 
+#[cfg(feature = "algos")]
 #[test]
 fn test_db_relationship_types() {
     let db = setup_db();
@@ -2246,6 +2250,7 @@ fn test_db_relationship_types() {
     assert!(types.contains(&"KNOWS".to_string()), "types: {types:?}");
 }
 
+#[cfg(feature = "algos")]
 #[test]
 fn test_db_property_keys() {
     let db = setup_db();
@@ -2266,6 +2271,7 @@ fn test_db_property_keys() {
     assert!(keys.contains(&"age".to_string()), "keys: {keys:?}");
 }
 
+#[cfg(feature = "algos")]
 #[test]
 fn test_db_labels_with_yield() {
     let db = setup_db();

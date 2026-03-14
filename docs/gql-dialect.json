@@ -7,13 +7,13 @@
     "homepage": "https://grafeo.dev",
     "repository": "https://github.com/GrafeoDB/grafeo"
   },
-  "generated": "2026-03-14T15:28:32Z",
+  "generated": "2026-03-14T15:38:27Z",
   "summary": {
-    "total_features": 150,
-    "supported": 124,
+    "total_features": 151,
+    "supported": 126,
     "partial": 1,
-    "not_supported": 25,
-    "tested": 29
+    "not_supported": 24,
+    "tested": 30
   },
   "features": [
     {
@@ -700,7 +700,7 @@
       "id": "GF11",
       "name": "Advanced aggregates: binary set functions",
       "category": "Function Features",
-      "status": "not_supported",
+      "status": "supported",
       "tested": true,
       "test_count": 10
     },
@@ -719,6 +719,14 @@
       "status": "supported",
       "tested": false,
       "test_count": 0
+    },
+    {
+      "id": "GF20",
+      "name": "Aggregate functions in sort keys",
+      "category": "Function Features",
+      "status": "supported",
+      "tested": true,
+      "test_count": 2
     },
     {
       "id": "GG01",
