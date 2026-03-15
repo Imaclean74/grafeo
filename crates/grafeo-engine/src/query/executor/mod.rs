@@ -84,6 +84,7 @@ impl Executor {
     ///
     /// Returns an error if operator execution fails or the query timeout is exceeded.
     pub fn execute(&self, operator: &mut dyn Operator) -> Result<QueryResult> {
+        let _span = tracing::debug_span!("grafeo::query::execute").entered();
         let mut result = QueryResult::with_types(self.columns.clone(), self.column_types.clone());
         let mut types_captured = !result.column_types.iter().all(|t| *t == LogicalType::Any);
 

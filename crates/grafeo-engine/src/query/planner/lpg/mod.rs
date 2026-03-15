@@ -275,6 +275,7 @@ impl Planner {
 
     /// Plans a logical plan into a physical operator.
     pub fn plan(&self, logical_plan: &LogicalPlan) -> Result<PhysicalPlan> {
+        let _span = tracing::debug_span!("grafeo::query::plan").entered();
         let (operator, columns) = self.plan_operator(&logical_plan.root)?;
         Ok(PhysicalPlan {
             operator,

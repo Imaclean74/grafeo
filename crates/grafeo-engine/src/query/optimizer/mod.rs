@@ -223,6 +223,7 @@ impl Optimizer {
     ///
     /// Returns an error if optimization fails.
     pub fn optimize(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
+        let _span = tracing::debug_span!("grafeo::query::optimize").entered();
         let mut root = plan.root;
 
         // Apply optimization rules

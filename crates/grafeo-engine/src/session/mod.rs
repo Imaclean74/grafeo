@@ -2059,6 +2059,13 @@ impl Session {
             processor::QueryLanguage, translators::gql,
         };
 
+        let _span = tracing::info_span!(
+            "grafeo::session::execute",
+            language = "gql",
+            query_len = query.len(),
+        )
+        .entered();
+
         #[cfg(not(target_arch = "wasm32"))]
         let start_time = std::time::Instant::now();
 
@@ -2966,6 +2973,7 @@ impl Session {
         read_only: bool,
         isolation_level: Option<crate::transaction::IsolationLevel>,
     ) -> Result<()> {
+        let _span = tracing::debug_span!("grafeo::tx::begin", read_only).entered();
         let mut current = self.current_transaction.lock();
         if current.is_some() {
             // Nested transaction: create an auto-savepoint instead of a new tx.
@@ -3022,6 +3030,7 @@ impl Session {
 
     /// Core commit logic, usable from both `&mut self` and `&self` paths.
     fn commit_inner(&self) -> Result<()> {
+        let _span = tracing::debug_span!("grafeo::tx::commit").entered();
         // Nested transaction: release the auto-savepoint (changes are preserved).
         {
             let mut depth = self.transaction_nesting_depth.lock();
