@@ -644,8 +644,8 @@ impl LazyFactorizedChainOperator {
         };
 
         // Build and execute the chain
-        let mut chain =
-            FactorizedExpandChain::new(Arc::clone(&self.store), source).with_read_only(self.read_only);
+        let mut chain = FactorizedExpandChain::new(Arc::clone(&self.store), source)
+            .with_read_only(self.read_only);
 
         if let Some(epoch) = self.viewing_epoch {
             chain = chain.with_transaction_context(epoch, self.transaction_id);

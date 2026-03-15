@@ -3598,12 +3598,7 @@ impl Session {
         viewing_epoch: EpochId,
         transaction_id: Option<TransactionId>,
     ) -> crate::query::Planner {
-        self.create_planner_for_store_with_read_only(
-            store,
-            viewing_epoch,
-            transaction_id,
-            false,
-        )
+        self.create_planner_for_store_with_read_only(store, viewing_epoch, transaction_id, false)
     }
 
     fn create_planner_for_store_with_read_only(
