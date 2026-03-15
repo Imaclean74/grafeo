@@ -273,6 +273,10 @@ impl QueryProcessor {
         }
 
         // 5. Convert to physical plan with transaction context
+        // Read-only fast path: safe when no mutations AND no active transaction
+        // (an active transaction may have prior uncommitted writes from earlier statements)
+        let is_read_only =
+            !optimized_plan.root.has_mutations() && self.transaction_context.is_none();
         let planner = if let Some((epoch, transaction_id)) = self.transaction_context {
             Planner::with_context(
                 Arc::clone(&self.graph_store),
@@ -287,7 +291,8 @@ impl QueryProcessor {
                 None,
                 self.transaction_manager.current_epoch(),
             )
-        };
+        }
+        .with_read_only(is_read_only);
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // 6. Execute and collect results
@@ -308,6 +313,7 @@ impl QueryProcessor {
 
     /// Translates an LPG query to a logical plan.
     fn translate_lpg(&self, query: &str, language: QueryLanguage) -> Result<LogicalPlan> {
+        let _span = tracing::debug_span!("grafeo::query::parse", ?language).entered();
         match language {
             #[cfg(feature = "gql")]
             QueryLanguage::Gql => {

@@ -2059,6 +2059,13 @@ impl Session {
             processor::QueryLanguage, translators::gql,
         };
 
+        let _span = tracing::info_span!(
+            "grafeo::session::execute",
+            language = "gql",
+            query_len = query.len(),
+        )
+        .entered();
+
         #[cfg(not(target_arch = "wasm32"))]
         let start_time = std::time::Instant::now();
 
@@ -2166,8 +2173,16 @@ impl Session {
 
             // Convert to physical plan with transaction context
             // (Physical planning cannot be cached as it depends on transaction state)
-            let planner =
-                self.create_planner_for_store(Arc::clone(&active), viewing_epoch, transaction_id);
+            // Safe to use read-only fast path when: this query has no mutations AND
+            // there is no active transaction that may have prior uncommitted writes.
+            let has_active_tx = self.current_transaction.lock().is_some();
+            let read_only = !has_mutations && !has_active_tx;
+            let planner = self.create_planner_for_store_with_read_only(
+                Arc::clone(&active),
+                viewing_epoch,
+                transaction_id,
+                read_only,
+            );
             let mut physical_plan = planner.plan(&optimized_plan)?;
 
             // Execute the plan
@@ -2802,6 +2817,12 @@ impl Session {
         language: &str,
         params: Option<std::collections::HashMap<String, Value>>,
     ) -> Result<QueryResult> {
+        let _span = tracing::info_span!(
+            "grafeo::session::execute",
+            language,
+            query_len = query.len(),
+        )
+        .entered();
         match language {
             "gql" => {
                 if let Some(p) = params {
@@ -2958,6 +2979,7 @@ impl Session {
         read_only: bool,
         isolation_level: Option<crate::transaction::IsolationLevel>,
     ) -> Result<()> {
+        let _span = tracing::debug_span!("grafeo::tx::begin", read_only).entered();
         let mut current = self.current_transaction.lock();
         if current.is_some() {
             // Nested transaction: create an auto-savepoint instead of a new tx.
@@ -3014,6 +3036,7 @@ impl Session {
 
     /// Core commit logic, usable from both `&mut self` and `&self` paths.
     fn commit_inner(&self) -> Result<()> {
+        let _span = tracing::debug_span!("grafeo::tx::commit").entered();
         // Nested transaction: release the auto-savepoint (changes are preserved).
         {
             let mut depth = self.transaction_nesting_depth.lock();
@@ -3153,6 +3176,7 @@ impl Session {
 
     /// Core rollback logic, usable from both `&mut self` and `&self` paths.
     fn rollback_inner(&self) -> Result<()> {
+        let _span = tracing::debug_span!("grafeo::tx::rollback").entered();
         // Nested transaction: rollback to the auto-savepoint.
         {
             let mut depth = self.transaction_nesting_depth.lock();
@@ -3594,6 +3618,16 @@ impl Session {
         viewing_epoch: EpochId,
         transaction_id: Option<TransactionId>,
     ) -> crate::query::Planner {
+        self.create_planner_for_store_with_read_only(store, viewing_epoch, transaction_id, false)
+    }
+
+    fn create_planner_for_store_with_read_only(
+        &self,
+        store: Arc<dyn GraphStoreMut>,
+        viewing_epoch: EpochId,
+        transaction_id: Option<TransactionId>,
+        read_only: bool,
+    ) -> crate::query::Planner {
         use crate::query::Planner;
         use grafeo_core::execution::operators::{LazyValue, SessionContext};
 
@@ -3616,7 +3650,8 @@ impl Session {
         )
         .with_factorized_execution(self.factorized_execution)
         .with_catalog(Arc::clone(&self.catalog))
-        .with_session_context(session_context);
+        .with_session_context(session_context)
+        .with_read_only(read_only);
 
         // Attach the constraint validator for schema enforcement
         let validator =

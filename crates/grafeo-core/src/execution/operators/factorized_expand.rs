@@ -62,6 +62,8 @@ pub struct FactorizedExpandOperator {
     transaction_id: Option<TransactionId>,
     /// Epoch for version visibility.
     viewing_epoch: Option<EpochId>,
+    /// When true, skip versioned MVCC lookups (fast path for read-only queries).
+    read_only: bool,
     /// Whether the operator is exhausted.
     exhausted: bool,
     /// Column names for the input (for tracking).
@@ -85,6 +87,7 @@ impl FactorizedExpandOperator {
             edge_types,
             transaction_id: None,
             viewing_epoch: None,
+            read_only: false,
             exhausted: false,
             input_column_names: Vec::new(),
         }
@@ -101,6 +104,12 @@ impl FactorizedExpandOperator {
         self
     }
 
+    /// Marks this expand as read-only, enabling fast-path lookups.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
     /// Sets the input column names for schema tracking.
     pub fn with_column_names(mut self, names: Vec<String>) -> Self {
         self.input_column_names = names;
@@ -111,6 +120,7 @@ impl FactorizedExpandOperator {
     fn get_neighbors(&self, source_id: NodeId) -> Vec<(NodeId, EdgeId)> {
         let epoch = self.viewing_epoch;
         let transaction_id = self.transaction_id;
+        let use_versioned = !self.read_only;
 
         self.store
             .edges_from(source_id, self.direction)
@@ -133,7 +143,7 @@ impl FactorizedExpandOperator {
 
                 // Filter by visibility
                 if let Some(epoch) = epoch {
-                    if let Some(tx) = transaction_id {
+                    if use_versioned && let Some(tx) = transaction_id {
                         self.store.is_edge_visible_versioned(*edge_id, epoch, tx)
                             && self.store.is_node_visible_versioned(*target_id, epoch, tx)
                     } else {
@@ -266,6 +276,8 @@ pub struct FactorizedExpandChain {
     /// Transaction context.
     transaction_id: Option<TransactionId>,
     viewing_epoch: Option<EpochId>,
+    /// When true, skip versioned MVCC lookups (fast path for read-only queries).
+    read_only: bool,
 }
 
 impl FactorizedExpandChain {
@@ -277,6 +289,7 @@ impl FactorizedExpandChain {
             current_result: None,
             transaction_id: None,
             viewing_epoch: None,
+            read_only: false,
         }
     }
 
@@ -288,6 +301,12 @@ impl FactorizedExpandChain {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Marks this chain as read-only, enabling fast-path lookups.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
         self
     }
 
@@ -314,7 +333,8 @@ impl FactorizedExpandChain {
                         source_column,
                         direction,
                         edge_types,
-                    );
+                    )
+                    .with_read_only(self.read_only);
 
                     if let Some(epoch) = self.viewing_epoch {
                         expand = expand.with_transaction_context(epoch, self.transaction_id);
@@ -411,6 +431,7 @@ impl FactorizedExpandChain {
     ) -> Result<(), OperatorError> {
         let epoch = self.viewing_epoch;
         let transaction_id = self.transaction_id;
+        let use_versioned = !self.read_only;
 
         // Get the deepest level to find source nodes
         let deepest_level = chunk.level_count() - 1;
@@ -463,7 +484,7 @@ impl FactorizedExpandChain {
 
                     // Filter by visibility
                     if let Some(e) = epoch {
-                        if let Some(tx) = transaction_id {
+                        if use_versioned && let Some(tx) = transaction_id {
                             self.store.is_edge_visible_versioned(*edge_id, e, tx)
                                 && self.store.is_node_visible_versioned(*target_id, e, tx)
                         } else {
@@ -565,6 +586,8 @@ pub struct LazyFactorizedChainOperator {
     transaction_id: Option<TransactionId>,
     /// Epoch for version visibility.
     viewing_epoch: Option<EpochId>,
+    /// When true, skip versioned MVCC lookups (fast path for read-only queries).
+    read_only: bool,
     /// Cached flat result after execution.
     result: Option<DataChunk>,
     /// Cached factorized result after execution.
@@ -586,6 +609,7 @@ impl LazyFactorizedChainOperator {
             steps,
             transaction_id: None,
             viewing_epoch: None,
+            read_only: false,
             result: None,
             factorized_result: None,
             executed: false,
@@ -603,6 +627,12 @@ impl LazyFactorizedChainOperator {
         self
     }
 
+    /// Marks this operator as read-only, enabling fast-path lookups.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
     /// Executes the chain and returns the factorized result.
     ///
     /// This is the key method for factorized aggregation - it returns the
@@ -614,7 +644,8 @@ impl LazyFactorizedChainOperator {
         };
 
         // Build and execute the chain
-        let mut chain = FactorizedExpandChain::new(Arc::clone(&self.store), source);
+        let mut chain = FactorizedExpandChain::new(Arc::clone(&self.store), source)
+            .with_read_only(self.read_only);
 
         if let Some(epoch) = self.viewing_epoch {
             chain = chain.with_transaction_context(epoch, self.transaction_id);

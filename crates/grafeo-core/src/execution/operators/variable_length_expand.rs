@@ -27,6 +27,7 @@ pub enum PathMode {
 ///
 /// For each input row containing a source node, this operator produces
 /// output rows for each neighbor reachable within the hop range.
+#[allow(clippy::struct_excessive_bools)]
 pub struct VariableLengthExpandOperator {
     /// The store to traverse.
     store: Arc<dyn GraphStore>,
@@ -48,6 +49,8 @@ pub struct VariableLengthExpandOperator {
     transaction_id: Option<TransactionId>,
     /// Epoch for version visibility.
     viewing_epoch: Option<EpochId>,
+    /// When true, skip versioned MVCC lookups (fast path for read-only queries).
+    read_only: bool,
     /// Materialized input rows.
     input_rows: Option<Vec<InputRow>>,
     /// Current input row index.
@@ -187,6 +190,7 @@ impl VariableLengthExpandOperator {
             chunk_capacity: 2048,
             transaction_id: None,
             viewing_epoch: None,
+            read_only: false,
             input_rows: None,
             current_input_idx: 0,
             output_buffer: Vec::new(),
@@ -229,6 +233,12 @@ impl VariableLengthExpandOperator {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Marks this expand as read-only, enabling fast-path lookups.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
         self
     }
 
@@ -286,6 +296,7 @@ impl VariableLengthExpandOperator {
     fn get_edges(&self, node_id: NodeId) -> Vec<(NodeId, EdgeId)> {
         let epoch = self.viewing_epoch;
         let transaction_id = self.transaction_id;
+        let use_versioned = !self.read_only;
 
         self.store
             .edges_from(node_id, self.direction)
@@ -308,7 +319,7 @@ impl VariableLengthExpandOperator {
 
                 // Filter by visibility
                 if let Some(epoch) = epoch {
-                    if let Some(tx) = transaction_id {
+                    if use_versioned && let Some(tx) = transaction_id {
                         self.store.is_edge_visible_versioned(*edge_id, epoch, tx)
                             && self.store.is_node_visible_versioned(*target_id, epoch, tx)
                     } else {
