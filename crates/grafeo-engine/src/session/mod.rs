@@ -2166,8 +2166,12 @@ impl Session {
 
             // Convert to physical plan with transaction context
             // (Physical planning cannot be cached as it depends on transaction state)
-            let planner =
-                self.create_planner_for_store(Arc::clone(&active), viewing_epoch, transaction_id);
+            let planner = self.create_planner_for_store_with_read_only(
+                Arc::clone(&active),
+                viewing_epoch,
+                transaction_id,
+                !has_mutations,
+            );
             let mut physical_plan = planner.plan(&optimized_plan)?;
 
             // Execute the plan
@@ -3594,6 +3598,21 @@ impl Session {
         viewing_epoch: EpochId,
         transaction_id: Option<TransactionId>,
     ) -> crate::query::Planner {
+        self.create_planner_for_store_with_read_only(
+            store,
+            viewing_epoch,
+            transaction_id,
+            false,
+        )
+    }
+
+    fn create_planner_for_store_with_read_only(
+        &self,
+        store: Arc<dyn GraphStoreMut>,
+        viewing_epoch: EpochId,
+        transaction_id: Option<TransactionId>,
+        read_only: bool,
+    ) -> crate::query::Planner {
         use crate::query::Planner;
         use grafeo_core::execution::operators::{LazyValue, SessionContext};
 
@@ -3616,7 +3635,8 @@ impl Session {
         )
         .with_factorized_execution(self.factorized_execution)
         .with_catalog(Arc::clone(&self.catalog))
-        .with_session_context(session_context);
+        .with_session_context(session_context)
+        .with_read_only(read_only);
 
         // Attach the constraint validator for schema enforcement
         let validator =

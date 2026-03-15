@@ -38,6 +38,10 @@ pub struct ExpandOperator {
     transaction_id: Option<TransactionId>,
     /// Epoch for version visibility.
     viewing_epoch: Option<EpochId>,
+    /// When true, skip versioned (MVCC) lookups even if a transaction ID is
+    /// present.  Safe for read-only queries where the transaction has no
+    /// pending writes, avoiding the cost of walking version chains.
+    read_only: bool,
 }
 
 impl ExpandOperator {
@@ -63,6 +67,7 @@ impl ExpandOperator {
             exhausted: false,
             transaction_id: None,
             viewing_epoch: None,
+            read_only: false,
         }
     }
 
@@ -82,6 +87,16 @@ impl ExpandOperator {
     ) -> Self {
         self.viewing_epoch = Some(epoch);
         self.transaction_id = transaction_id;
+        self
+    }
+
+    /// Marks this expand as read-only, enabling fast-path lookups.
+    ///
+    /// When the query has no mutations, versioned MVCC lookups (which walk
+    /// version chains to find PENDING writes) can be skipped in favour of
+    /// cheaper epoch-only visibility checks.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
         self
     }
 
@@ -123,9 +138,13 @@ impl ExpandOperator {
             .get_node_id(self.current_row)
             .ok_or_else(|| OperatorError::Execution("Expected node ID in source column".into()))?;
 
-        // Get visibility context
+        // Get visibility context.  When `read_only` is true we can skip the
+        // more expensive versioned lookups because the transaction has no
+        // pending writes: epoch-only visibility is sufficient and avoids
+        // walking MVCC version chains.
         let epoch = self.viewing_epoch;
         let transaction_id = self.transaction_id;
+        let use_versioned = !self.read_only;
 
         // Get edges from this node
         let edges: Vec<(NodeId, EdgeId)> = self
@@ -137,13 +156,14 @@ impl ExpandOperator {
                 let type_matches = if self.edge_types.is_empty() {
                     true
                 } else {
-                    // Use versioned type lookup when in a transaction context so
-                    // PENDING (uncommitted) edges created by this transaction are visible.
-                    let actual_type = if let (Some(ep), Some(tx)) = (epoch, transaction_id) {
-                        self.store.edge_type_versioned(*edge_id, ep, tx)
-                    } else {
-                        self.store.edge_type(*edge_id)
-                    };
+                    // Use versioned type lookup only when we need to see
+                    // PENDING (uncommitted) edges created by this transaction.
+                    let actual_type =
+                        if use_versioned && let (Some(ep), Some(tx)) = (epoch, transaction_id) {
+                            self.store.edge_type_versioned(*edge_id, ep, tx)
+                        } else {
+                            self.store.edge_type(*edge_id)
+                        };
                     actual_type.is_some_and(|t| {
                         self.edge_types
                             .iter()
@@ -157,7 +177,7 @@ impl ExpandOperator {
 
                 // Filter by visibility if we have epoch context
                 if let Some(epoch) = epoch {
-                    if let Some(tx) = transaction_id {
+                    if use_versioned && let Some(tx) = transaction_id {
                         self.store.is_edge_visible_versioned(*edge_id, epoch, tx)
                             && self.store.is_node_visible_versioned(*target_id, epoch, tx)
                     } else {

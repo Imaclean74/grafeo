@@ -101,6 +101,10 @@ pub struct Planner {
     write_tracker: Option<grafeo_core::execution::operators::SharedWriteTracker>,
     /// Session context for introspection functions (info, schema, current_schema, etc.).
     pub(super) session_context: grafeo_core::execution::operators::SessionContext,
+    /// When true, expand operators use epoch-only visibility (no MVCC version
+    /// chain walks).  Set when the plan contains no mutations, so PENDING
+    /// writes are impossible to observe.
+    pub(super) read_only: bool,
 }
 
 impl Planner {
@@ -128,6 +132,7 @@ impl Planner {
             profile_entries: std::cell::RefCell::new(Vec::new()),
             write_tracker: None,
             session_context: grafeo_core::execution::operators::SessionContext::default(),
+            read_only: false,
         }
     }
 
@@ -168,7 +173,16 @@ impl Planner {
             profile_entries: std::cell::RefCell::new(Vec::new()),
             write_tracker,
             session_context: grafeo_core::execution::operators::SessionContext::default(),
+            read_only: false,
         }
+    }
+
+    /// Marks this planner as planning a read-only query (no mutations),
+    /// enabling fast-path visibility checks in expand operators.
+    #[must_use]
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
     }
 
     /// Returns the viewing epoch for this planner.

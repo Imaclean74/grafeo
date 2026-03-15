@@ -273,6 +273,7 @@ impl QueryProcessor {
         }
 
         // 5. Convert to physical plan with transaction context
+        let is_read_only = !optimized_plan.root.has_mutations();
         let planner = if let Some((epoch, transaction_id)) = self.transaction_context {
             Planner::with_context(
                 Arc::clone(&self.graph_store),
@@ -287,7 +288,8 @@ impl QueryProcessor {
                 None,
                 self.transaction_manager.current_epoch(),
             )
-        };
+        }
+        .with_read_only(is_read_only);
         let mut physical_plan = planner.plan(&optimized_plan)?;
 
         // 6. Execute and collect results
