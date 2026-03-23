@@ -2,7 +2,7 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.23] - Unreleased
+## [0.5.23] - 2026-03-23
 
 ### Added
 
@@ -17,6 +17,7 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 ### Fixed
 
 - **Questioned edge (`->?`) row preservation**: `pre_expand_plan` was saved after the expand instead of before, causing the LeftJoin to collapse source rows instead of preserving them with NULLs; all unmatched source rows now correctly appear with NULL target columns
+- **Negative numeric literals in INSERT/CREATE property maps**: unary negation (e.g. `{lat: -6.248}`) was not folded at plan time, causing an "unsupported expression" error for both GQL and Cypher (#160)
 
 ## [0.5.22] - 2026-03-14
 
