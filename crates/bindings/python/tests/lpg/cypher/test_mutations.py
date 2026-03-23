@@ -163,3 +163,22 @@ class TestCypherSpecificMutations:
         result = db.execute_cypher("MATCH (n:Node {name: 'B'}) RETURN n")
         rows = list(result)
         assert len(rows) == 1
+
+    def test_cypher_create_negative_float(self, db):
+        """Test CREATE with negative float property (issue #160)."""
+        db.execute_cypher("CREATE (:Point {lat: -6.248, lon: 106.845})")
+
+        result = db.execute_cypher("MATCH (n:Point) RETURN n.lat, n.lon")
+        rows = list(result)
+        assert len(rows) == 1
+        assert rows[0]["n.lat"] == -6.248
+        assert rows[0]["n.lon"] == 106.845
+
+    def test_cypher_create_negative_integer(self, db):
+        """Test CREATE with negative integer property (issue #160)."""
+        db.execute_cypher("CREATE (:Floor {level: -3})")
+
+        result = db.execute_cypher("MATCH (n:Floor) RETURN n.level")
+        rows = list(result)
+        assert len(rows) == 1
+        assert rows[0]["n.level"] == -3

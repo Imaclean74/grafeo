@@ -201,3 +201,22 @@ class TestGQLSpecificMutations:
         result = db.execute("MATCH (n:Person) WHERE n.name = 'MergeExisting' RETURN n.age")
         rows = list(result)
         assert rows[0]["n.age"] == 31
+
+    def test_gql_insert_negative_float(self, db):
+        """Test INSERT with negative float property (issue #160)."""
+        db.execute("INSERT (:Point {lat: -6.248, lon: 106.845})")
+
+        result = db.execute("MATCH (n:Point) RETURN n.lat, n.lon")
+        rows = list(result)
+        assert len(rows) == 1
+        assert rows[0]["n.lat"] == -6.248
+        assert rows[0]["n.lon"] == 106.845
+
+    def test_gql_insert_negative_integer(self, db):
+        """Test INSERT with negative integer property (issue #160)."""
+        db.execute("INSERT (:Floor {level: -3})")
+
+        result = db.execute("MATCH (n:Floor) RETURN n.level")
+        rows = list(result)
+        assert len(rows) == 1
+        assert rows[0]["n.level"] == -3
