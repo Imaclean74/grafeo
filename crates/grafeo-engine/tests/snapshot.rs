@@ -13,6 +13,7 @@ struct TestSnapshot {
     rdf_triples: Vec<()>,
     rdf_named_graphs: Vec<()>,
     schema: TestSnapshotSchema,
+    indexes: TestSnapshotIndexes,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -25,6 +26,13 @@ struct TestSnapshotSchema {
     graph_type_bindings: Vec<()>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct TestSnapshotIndexes {
+    property_indexes: Vec<()>,
+    vector_indexes: Vec<()>,
+    text_indexes: Vec<()>,
+}
+
 impl TestSnapshot {
     fn new(version: u8, nodes: Vec<TestNode>, edges: Vec<TestEdge>) -> Self {
         Self {
@@ -35,6 +43,7 @@ impl TestSnapshot {
             rdf_triples: vec![],
             rdf_named_graphs: vec![],
             schema: TestSnapshotSchema::default(),
+            indexes: TestSnapshotIndexes::default(),
         }
     }
 }
@@ -518,7 +527,7 @@ fn import_rejects_dangling_edge_destination() {
 #[test]
 fn import_rejects_duplicate_node_ids() {
     let snap = TestSnapshot::new(
-        3,
+        4,
         vec![
             TestNode {
                 id: NodeId::new(0),
@@ -550,7 +559,7 @@ fn import_rejects_duplicate_node_ids() {
 #[test]
 fn import_rejects_duplicate_edge_ids() {
     let snap = TestSnapshot::new(
-        3,
+        4,
         vec![
             TestNode {
                 id: NodeId::new(0),
@@ -696,7 +705,7 @@ fn restore_snapshot_includes_named_graphs() {
 
 #[test]
 fn import_v1_snapshot_is_rejected() {
-    // V1 snapshots are no longer supported after consolidation to V3.
+    // V1 snapshots are no longer supported (current version is V4).
     let snap = TestSnapshot::new(
         1,
         vec![TestNode {

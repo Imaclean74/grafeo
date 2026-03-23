@@ -75,6 +75,16 @@ impl LpgStore {
         self.property_indexes.read().contains_key(&key)
     }
 
+    /// Returns the names of all indexed properties.
+    #[must_use]
+    pub fn property_index_keys(&self) -> Vec<String> {
+        self.property_indexes
+            .read()
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
+    }
+
     /// Updates property indexes when a property is set.
     pub(super) fn update_property_index_on_set(
         &self,

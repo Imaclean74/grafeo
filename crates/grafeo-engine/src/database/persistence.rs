@@ -17,9 +17,9 @@ use crate::catalog::{
 };
 
 /// Current snapshot version.
-const SNAPSHOT_VERSION: u8 = 3;
+const SNAPSHOT_VERSION: u8 = 4;
 
-/// Binary snapshot format (v3: graph data, named graphs, RDF, and schema).
+/// Binary snapshot format (v4: graph data, named graphs, RDF, schema, and index metadata).
 #[derive(serde::Serialize, serde::Deserialize)]
 struct Snapshot {
     version: u8,
@@ -29,6 +29,7 @@ struct Snapshot {
     rdf_triples: Vec<SnapshotTriple>,
     rdf_named_graphs: Vec<RdfNamedGraphSnapshot>,
     schema: SnapshotSchema,
+    indexes: SnapshotIndexes,
 }
 
 /// Schema metadata within a snapshot.
@@ -40,6 +41,32 @@ struct SnapshotSchema {
     procedures: Vec<ProcedureDefinition>,
     schemas: Vec<String>,
     graph_type_bindings: Vec<(String, String)>,
+}
+
+/// Index metadata within a snapshot (definitions only, not index data).
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct SnapshotIndexes {
+    property_indexes: Vec<String>,
+    vector_indexes: Vec<SnapshotVectorIndex>,
+    text_indexes: Vec<SnapshotTextIndex>,
+}
+
+/// Vector index definition for snapshot persistence.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SnapshotVectorIndex {
+    label: String,
+    property: String,
+    dimensions: usize,
+    metric: grafeo_core::index::vector::DistanceMetric,
+    m: usize,
+    ef_construction: usize,
+}
+
+/// Text index definition for snapshot persistence.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SnapshotTextIndex {
+    label: String,
+    property: String,
 }
 
 /// A named graph partition within a v2 snapshot.
@@ -304,6 +331,91 @@ fn collect_schema(catalog: &std::sync::Arc<crate::catalog::Catalog>) -> Snapshot
         procedures: catalog.all_procedure_defs(),
         schemas: catalog.schema_names(),
         graph_type_bindings: catalog.all_graph_type_bindings(),
+    }
+}
+
+/// Restores indexes from snapshot metadata by rebuilding them from existing data.
+///
+/// Must be called after all nodes/edges have been populated, since index
+/// creation scans existing data.
+fn restore_indexes_from_snapshot(db: &super::GrafeoDB, indexes: &SnapshotIndexes) {
+    for name in &indexes.property_indexes {
+        db.store.create_property_index(name);
+    }
+
+    #[cfg(feature = "vector-index")]
+    for vi in &indexes.vector_indexes {
+        if let Err(err) = db.create_vector_index(
+            &vi.label,
+            &vi.property,
+            Some(vi.dimensions),
+            Some(vi.metric.name()),
+            Some(vi.m),
+            Some(vi.ef_construction),
+        ) {
+            tracing::warn!(
+                "Failed to restore vector index :{label}({property}): {err}",
+                label = vi.label,
+                property = vi.property,
+            );
+        }
+    }
+
+    #[cfg(feature = "text-index")]
+    for ti in &indexes.text_indexes {
+        if let Err(err) = db.create_text_index(&ti.label, &ti.property) {
+            tracing::warn!(
+                "Failed to restore text index :{label}({property}): {err}",
+                label = ti.label,
+                property = ti.property,
+            );
+        }
+    }
+}
+
+/// Collects index metadata from a store into snapshot format.
+fn collect_index_metadata(store: &grafeo_core::graph::lpg::LpgStore) -> SnapshotIndexes {
+    let property_indexes = store.property_index_keys();
+
+    #[cfg(feature = "vector-index")]
+    let vector_indexes: Vec<SnapshotVectorIndex> = store
+        .vector_index_entries()
+        .into_iter()
+        .filter_map(|(key, index)| {
+            let (label, property) = key.split_once(':')?;
+            let config = index.config();
+            Some(SnapshotVectorIndex {
+                label: label.to_string(),
+                property: property.to_string(),
+                dimensions: config.dimensions,
+                metric: config.metric,
+                m: config.m,
+                ef_construction: config.ef_construction,
+            })
+        })
+        .collect();
+    #[cfg(not(feature = "vector-index"))]
+    let vector_indexes = Vec::new();
+
+    #[cfg(feature = "text-index")]
+    let text_indexes: Vec<SnapshotTextIndex> = store
+        .text_index_entries()
+        .into_iter()
+        .filter_map(|(key, _)| {
+            let (label, property) = key.split_once(':')?;
+            Some(SnapshotTextIndex {
+                label: label.to_string(),
+                property: property.to_string(),
+            })
+        })
+        .collect();
+    #[cfg(not(feature = "text-index"))]
+    let text_indexes = Vec::new();
+
+    SnapshotIndexes {
+        property_indexes,
+        vector_indexes,
+        text_indexes,
     }
 }
 
@@ -626,7 +738,7 @@ impl super::GrafeoDB {
     // ADMIN API: Snapshot Export/Import
     // =========================================================================
 
-    /// Exports the entire database to a binary snapshot (v2 format).
+    /// Exports the entire database to a binary snapshot (v4 format).
     ///
     /// The returned bytes can be stored (e.g. in IndexedDB) and later
     /// restored with [`import_snapshot()`](Self::import_snapshot).
@@ -679,6 +791,7 @@ impl super::GrafeoDB {
         let rdf_named_graphs = Vec::new();
 
         let schema = collect_schema(&self.catalog);
+        let indexes = collect_index_metadata(&self.store);
 
         let snapshot = Snapshot {
             version: SNAPSHOT_VERSION,
@@ -688,6 +801,7 @@ impl super::GrafeoDB {
             rdf_triples,
             rdf_named_graphs,
             schema,
+            indexes,
         };
 
         let config = bincode::config::standard();
@@ -697,7 +811,6 @@ impl super::GrafeoDB {
 
     /// Creates a new in-memory database from a binary snapshot.
     ///
-    /// Accepts both v1 (no named graphs) and v2 (with named graphs) formats.
     /// The `data` must have been produced by [`export_snapshot()`](Self::export_snapshot).
     ///
     /// All edge references are validated before any data is inserted: every
@@ -760,13 +873,16 @@ impl super::GrafeoDB {
         // Restore schema
         restore_schema_from_snapshot(&db.catalog, &snapshot.schema);
 
+        // Restore indexes (must come after data population)
+        restore_indexes_from_snapshot(&db, &snapshot.indexes);
+
         Ok(db)
     }
 
     /// Replaces the current database contents with data from a binary snapshot.
     ///
-    /// Accepts both v1 and v2 snapshot formats. The `data` must have been
-    /// produced by [`export_snapshot()`](Self::export_snapshot).
+    /// The `data` must have been produced by
+    /// [`export_snapshot()`](Self::export_snapshot).
     ///
     /// All validation (duplicate IDs, dangling edge references) is performed
     /// before any data is modified. If validation fails, the current database
@@ -836,6 +952,9 @@ impl super::GrafeoDB {
         // Restore schema
         restore_schema_from_snapshot(&self.catalog, &snapshot.schema);
 
+        // Restore indexes (must come after data population)
+        restore_indexes_from_snapshot(self, &snapshot.indexes);
+
         Ok(())
     }
 
@@ -863,7 +982,9 @@ mod tests {
     use grafeo_common::types::{EdgeId, NodeId, Value};
 
     use super::super::GrafeoDB;
-    use super::{SNAPSHOT_VERSION, Snapshot, SnapshotEdge, SnapshotNode, SnapshotSchema};
+    use super::{
+        SNAPSHOT_VERSION, Snapshot, SnapshotEdge, SnapshotIndexes, SnapshotNode, SnapshotSchema,
+    };
 
     #[test]
     fn test_restore_snapshot_basic() {
@@ -1111,6 +1232,7 @@ mod tests {
             rdf_triples: vec![],
             rdf_named_graphs: vec![],
             schema: SnapshotSchema::default(),
+            indexes: SnapshotIndexes::default(),
         };
         bincode::serde::encode_to_vec(&snap, bincode::config::standard()).unwrap()
     }
@@ -1254,5 +1376,110 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("non-existent destination node"), "got: {err}");
+    }
+
+    // --- index metadata roundtrip ---
+
+    #[test]
+    fn test_snapshot_roundtrip_property_index() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        session
+            .execute("INSERT (:Person {name: 'Alix', email: 'alix@example.com'})")
+            .unwrap();
+        db.create_property_index("email");
+        assert!(db.has_property_index("email"));
+
+        let snapshot = db.export_snapshot().unwrap();
+        let db2 = GrafeoDB::import_snapshot(&snapshot).unwrap();
+
+        assert!(db2.has_property_index("email"));
+
+        // Verify the index actually works for O(1) lookups
+        let found = db2.find_nodes_by_property("email", &Value::String("alix@example.com".into()));
+        assert_eq!(found.len(), 1);
+    }
+
+    #[cfg(feature = "vector-index")]
+    #[test]
+    fn test_snapshot_roundtrip_vector_index() {
+        use std::sync::Arc;
+
+        let db = GrafeoDB::new_in_memory();
+
+        let n1 = db.create_node(&["Doc"]);
+        db.set_node_property(
+            n1,
+            "embedding",
+            Value::Vector(Arc::from([1.0_f32, 0.0, 0.0])),
+        );
+        let n2 = db.create_node(&["Doc"]);
+        db.set_node_property(
+            n2,
+            "embedding",
+            Value::Vector(Arc::from([0.0_f32, 1.0, 0.0])),
+        );
+
+        db.create_vector_index("Doc", "embedding", None, Some("cosine"), Some(4), Some(32))
+            .unwrap();
+
+        let snapshot = db.export_snapshot().unwrap();
+        let db2 = GrafeoDB::import_snapshot(&snapshot).unwrap();
+
+        // Vector search should work on the restored database
+        let results = db2
+            .vector_search("Doc", "embedding", &[1.0, 0.0, 0.0], 2, None, None)
+            .unwrap();
+        assert_eq!(results.len(), 2);
+        // Closest to [1,0,0] should be n1
+        assert_eq!(results[0].0, n1);
+    }
+
+    #[cfg(feature = "text-index")]
+    #[test]
+    fn test_snapshot_roundtrip_text_index() {
+        let db = GrafeoDB::new_in_memory();
+
+        let n1 = db.create_node(&["Article"]);
+        db.set_node_property(n1, "body", Value::String("rust graph database".into()));
+        let n2 = db.create_node(&["Article"]);
+        db.set_node_property(n2, "body", Value::String("python web framework".into()));
+
+        db.create_text_index("Article", "body").unwrap();
+
+        let snapshot = db.export_snapshot().unwrap();
+        let db2 = GrafeoDB::import_snapshot(&snapshot).unwrap();
+
+        // Text search should work on the restored database
+        let results = db2
+            .text_search("Article", "body", "graph database", 10)
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, n1);
+    }
+
+    #[test]
+    fn test_snapshot_roundtrip_property_index_via_restore() {
+        let db = GrafeoDB::new_in_memory();
+        let session = db.session();
+
+        session
+            .execute("INSERT (:Person {name: 'Alix', email: 'alix@example.com'})")
+            .unwrap();
+        db.create_property_index("email");
+
+        let snapshot = db.export_snapshot().unwrap();
+
+        // Mutate the database
+        session
+            .execute("INSERT (:Person {name: 'Gus', email: 'gus@example.com'})")
+            .unwrap();
+        db.drop_property_index("email");
+        assert!(!db.has_property_index("email"));
+
+        // Restore should bring back the index
+        db.restore_snapshot(&snapshot).unwrap();
+        assert!(db.has_property_index("email"));
     }
 }

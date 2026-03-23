@@ -261,6 +261,27 @@ impl PyGrafeoDB {
         })
     }
 
+    /// Open an existing database in read-only mode.
+    ///
+    /// Uses a shared file lock, so multiple processes can read the same
+    /// .grafeo file concurrently. Mutations will raise an error.
+    ///
+    /// Args:
+    ///     path: Path to the .grafeo database file.
+    ///
+    /// Examples:
+    ///     db = GrafeoDB.open_read_only("./my_graph.grafeo")
+    ///     result = db.execute("MATCH (n) RETURN n LIMIT 10")
+    #[staticmethod]
+    fn open_read_only(path: String) -> PyResult<Self> {
+        let config = Config::read_only(path);
+        let db = GrafeoDB::with_config(config).map_err(PyGrafeoError::from)?;
+
+        Ok(Self {
+            inner: Arc::new(RwLock::new(db)),
+        })
+    }
+
     /// Runs a GQL query and returns the results.
     ///
     /// Use params for parameterized queries to avoid injection:
