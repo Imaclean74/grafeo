@@ -317,7 +317,13 @@ impl LpgStore {
         }
         #[cfg(feature = "temporal")]
         {
-            Some(self.build_node_at(id, epoch))
+            // Fast path: current-epoch reads use latest() instead of at(epoch).
+            // Safe because non-transactional reads have no PENDING entries.
+            if epoch >= self.current_epoch() {
+                Some(self.build_node(id))
+            } else {
+                Some(self.build_node_at(id, epoch))
+            }
         }
     }
 
@@ -341,7 +347,11 @@ impl LpgStore {
         }
         #[cfg(feature = "temporal")]
         {
-            Some(self.build_node_at(id, epoch))
+            if epoch >= self.current_epoch() {
+                Some(self.build_node(id))
+            } else {
+                Some(self.build_node_at(id, epoch))
+            }
         }
     }
 

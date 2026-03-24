@@ -188,7 +188,11 @@ impl LpgStore {
         }
         #[cfg(feature = "temporal")]
         {
-            self.build_edge_at(id, &record, epoch)
+            if epoch >= self.current_epoch() {
+                self.build_edge(id, &record)
+            } else {
+                self.build_edge_at(id, &record, epoch)
+            }
         }
     }
 
@@ -212,7 +216,11 @@ impl LpgStore {
         }
         #[cfg(feature = "temporal")]
         {
-            self.build_edge_at(id, &record, epoch)
+            if epoch >= self.current_epoch() {
+                self.build_edge(id, &record)
+            } else {
+                self.build_edge_at(id, &record, epoch)
+            }
         }
     }
 
