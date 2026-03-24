@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The kind of mutation that occurred.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChangeKind {
     /// A new entity was created.
     Create,
@@ -40,7 +40,7 @@ pub enum ChangeKind {
 }
 
 /// A unique identifier for a graph entity (node or edge).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EntityId {
     /// A node identifier.
     Node(NodeId),
@@ -78,7 +78,7 @@ impl EntityId {
 }
 
 /// A recorded change event with before/after property snapshots.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChangeEvent {
     /// The entity that was changed.
     pub entity_id: EntityId,
@@ -92,6 +92,18 @@ pub struct ChangeEvent {
     pub before: Option<HashMap<String, Value>>,
     /// Properties after the change (None for Delete).
     pub after: Option<HashMap<String, Value>>,
+    /// Node labels. Present only on node Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    /// Edge relationship type. Present only on edge Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_type: Option<String>,
+    /// Edge source node ID. Present only on edge Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src_id: Option<u64>,
+    /// Edge destination node ID. Present only on edge Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dst_id: Option<u64>,
 }
 
 /// The CDC log that records entity mutations.
@@ -126,6 +138,7 @@ impl CdcLog {
         id: NodeId,
         epoch: EpochId,
         props: Option<HashMap<String, Value>>,
+        labels: Option<Vec<String>>,
     ) {
         self.record(ChangeEvent {
             entity_id: EntityId::Node(id),
@@ -134,6 +147,10 @@ impl CdcLog {
             timestamp: now_millis(),
             before: None,
             after: props,
+            labels,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
         });
     }
 
@@ -143,6 +160,9 @@ impl CdcLog {
         id: EdgeId,
         epoch: EpochId,
         props: Option<HashMap<String, Value>>,
+        src_id: u64,
+        dst_id: u64,
+        edge_type: String,
     ) {
         self.record(ChangeEvent {
             entity_id: EntityId::Edge(id),
@@ -151,6 +171,10 @@ impl CdcLog {
             timestamp: now_millis(),
             before: None,
             after: props,
+            labels: None,
+            edge_type: Some(edge_type),
+            src_id: Some(src_id),
+            dst_id: Some(dst_id),
         });
     }
 
@@ -178,6 +202,10 @@ impl CdcLog {
             timestamp: now_millis(),
             before,
             after: Some(after_map),
+            labels: None,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
         });
     }
 
@@ -195,6 +223,10 @@ impl CdcLog {
             timestamp: now_millis(),
             before: props,
             after: None,
+            labels: None,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
         });
     }
 
@@ -269,7 +301,7 @@ mod tests {
         let log = CdcLog::new();
         let node_id = NodeId::new(1);
 
-        log.record_create_node(node_id, EpochId(1), None);
+        log.record_create_node(node_id, EpochId(1), None, None);
         log.record_update(
             EntityId::Node(node_id),
             EpochId(2),
@@ -297,7 +329,7 @@ mod tests {
         let log = CdcLog::new();
         let node_id = NodeId::new(1);
 
-        log.record_create_node(node_id, EpochId(1), None);
+        log.record_create_node(node_id, EpochId(1), None, None);
         log.record_update(
             EntityId::Node(node_id),
             EpochId(5),
@@ -322,8 +354,8 @@ mod tests {
     fn test_changes_between() {
         let log = CdcLog::new();
 
-        log.record_create_node(NodeId::new(1), EpochId(1), None);
-        log.record_create_node(NodeId::new(2), EpochId(3), None);
+        log.record_create_node(NodeId::new(1), EpochId(1), None, None);
+        log.record_create_node(NodeId::new(2), EpochId(3), None, None);
         log.record_update(
             EntityId::Node(NodeId::new(1)),
             EpochId(5),
@@ -344,7 +376,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("name".to_string(), Value::from("Alix"));
 
-        log.record_create_node(node_id, EpochId(1), Some(props.clone()));
+        log.record_create_node(node_id, EpochId(1), Some(props.clone()), None);
         log.record_delete(EntityId::Node(node_id), EpochId(2), Some(props));
 
         let history = log.history(EntityId::Node(node_id));
@@ -366,8 +398,8 @@ mod tests {
         let log = CdcLog::new();
         assert_eq!(log.event_count(), 0);
 
-        log.record_create_node(NodeId::new(1), EpochId(1), None);
-        log.record_create_node(NodeId::new(2), EpochId(2), None);
+        log.record_create_node(NodeId::new(1), EpochId(1), None, None);
+        log.record_create_node(NodeId::new(2), EpochId(2), None, None);
         assert_eq!(log.event_count(), 2);
     }
 

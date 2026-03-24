@@ -259,3 +259,119 @@ fn alter_type_respects_schema() {
         "altered schema type should not leak to default"
     );
 }
+
+// ---------------------------------------------------------------------------
+// CREATE GRAPH TYPED — schema-aware binding (regression from #167 fix)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn create_graph_typed_respects_schema() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    session.execute("CREATE SCHEMA IF NOT EXISTS s1").unwrap();
+    session.execute("SESSION SET SCHEMA s1").unwrap();
+    session
+        .execute(
+            "CREATE GRAPH TYPE social_network (
+                NODE TYPE Person (name STRING NOT NULL),
+                EDGE TYPE KNOWS
+            )",
+        )
+        .unwrap();
+
+    // Unqualified TYPED should resolve against the current schema (s1)
+    let result = session.execute("CREATE GRAPH IF NOT EXISTS my_social TYPED social_network");
+    assert!(
+        result.is_ok(),
+        "CREATE GRAPH TYPED should succeed when type is in current schema: {result:?}"
+    );
+}
+
+#[test]
+fn create_graph_typed_wrong_schema_fails() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // Create type in s1
+    session.execute("CREATE SCHEMA IF NOT EXISTS s1").unwrap();
+    session.execute("SESSION SET SCHEMA s1").unwrap();
+    session
+        .execute("CREATE GRAPH TYPE org_type (NODE TYPE Dept (name STRING))")
+        .unwrap();
+
+    // Switch to s2 — unqualified name should NOT resolve to s1's type
+    session.execute("CREATE SCHEMA IF NOT EXISTS s2").unwrap();
+    session.execute("SESSION SET SCHEMA s2").unwrap();
+
+    let result = session.execute("CREATE GRAPH IF NOT EXISTS g TYPED org_type");
+    assert!(
+        result.is_err(),
+        "CREATE GRAPH TYPED with unqualified name from wrong schema must fail"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// CREATE GRAPH TYPED — cross-schema qualified references (schema.type syntax)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cross_schema_typed_graph() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // Define type in s1
+    session.execute("CREATE SCHEMA IF NOT EXISTS s1").unwrap();
+    session.execute("SESSION SET SCHEMA s1").unwrap();
+    session
+        .execute(
+            "CREATE GRAPH TYPE social_network (
+                NODE TYPE Person (name STRING NOT NULL),
+                EDGE TYPE KNOWS (since INTEGER)
+            )",
+        )
+        .unwrap();
+
+    // Switch to s2 and reference s1's type with qualified syntax
+    session.execute("CREATE SCHEMA IF NOT EXISTS s2").unwrap();
+    session.execute("SESSION SET SCHEMA s2").unwrap();
+
+    let result = session.execute("CREATE GRAPH IF NOT EXISTS my_social TYPED s1.social_network");
+    assert!(
+        result.is_ok(),
+        "CREATE GRAPH TYPED with qualified schema.type should succeed: {result:?}"
+    );
+}
+
+#[test]
+fn qualified_type_not_found() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    let result = session.execute("CREATE GRAPH g TYPED nonexistent.some_type");
+    assert!(
+        result.is_err(),
+        "Qualified reference to nonexistent schema/type must fail"
+    );
+}
+
+#[test]
+fn unqualified_type_no_schema_set() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // No schema set: works just like before schema isolation
+    session
+        .execute(
+            "CREATE GRAPH TYPE flat_type (
+                NODE TYPE Item (value INTEGER)
+            )",
+        )
+        .unwrap();
+
+    let result = session.execute("CREATE GRAPH g TYPED flat_type");
+    assert!(
+        result.is_ok(),
+        "Unqualified TYPED with no session schema should resolve in default namespace: {result:?}"
+    );
+}

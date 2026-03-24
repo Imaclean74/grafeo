@@ -33,8 +33,12 @@ impl super::GrafeoDB {
         }
 
         #[cfg(feature = "cdc")]
-        self.cdc_log
-            .record_create_node(id, self.store.current_epoch(), None);
+        self.cdc_log.record_create_node(
+            id,
+            self.store.current_epoch(),
+            None,
+            Some(labels.iter().map(|s| (*s).to_string()).collect()),
+        );
 
         id
     }
@@ -103,6 +107,7 @@ impl super::GrafeoDB {
             } else {
                 Some(cdc_props)
             },
+            Some(labels.iter().map(|s| (*s).to_string()).collect()),
         );
 
         // Auto-insert into matching text indexes for the new node
@@ -550,8 +555,14 @@ impl super::GrafeoDB {
         }
 
         #[cfg(feature = "cdc")]
-        self.cdc_log
-            .record_create_edge(id, self.store.current_epoch(), None);
+        self.cdc_log.record_create_edge(
+            id,
+            self.store.current_epoch(),
+            None,
+            src.as_u64(),
+            dst.as_u64(),
+            edge_type.to_string(),
+        );
 
         id
     }
@@ -627,6 +638,9 @@ impl super::GrafeoDB {
             } else {
                 Some(cdc_props)
             },
+            src.as_u64(),
+            dst.as_u64(),
+            edge_type.to_string(),
         );
 
         id

@@ -2374,6 +2374,38 @@ impl PyGrafeoDB {
                 .collect())
         })
     }
+
+    // -----------------------------------------------------------------
+    // Schema context
+    // -----------------------------------------------------------------
+
+    /// Sets the current schema for subsequent `execute()` calls.
+    ///
+    /// Equivalent to running `SESSION SET SCHEMA <name>` but persists across
+    /// calls. Use `reset_schema()` to clear it.
+    ///
+    /// Example:
+    ///     db.set_schema("reporting")
+    ///     result = db.execute("SHOW GRAPH TYPES")  # only sees types in 'reporting'
+    fn set_schema(&self, name: String) {
+        self.inner.read().set_current_schema(Some(&name));
+    }
+
+    /// Clears the current schema context.
+    ///
+    /// Subsequent `execute()` calls will use the default (no-schema) namespace.
+    fn reset_schema(&self) {
+        self.inner.read().set_current_schema(None);
+    }
+
+    /// Returns the current schema name, or `None` if no schema is set.
+    ///
+    /// Example:
+    ///     db.set_schema("reporting")
+    ///     assert db.current_schema() == "reporting"
+    fn current_schema(&self) -> Option<String> {
+        self.inner.read().current_schema()
+    }
 }
 
 /// Groups multiple operations into an atomic unit.

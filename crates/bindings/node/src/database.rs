@@ -801,6 +801,31 @@ impl JsGrafeoDB {
         .await
         .map_err(|e| napi::Error::from_reason(e.to_string()))?
     }
+
+    // ── Schema context ───────────────────────────────────────────────────
+
+    /// Sets the current schema for subsequent `execute()` calls.
+    ///
+    /// Equivalent to running `SESSION SET SCHEMA <name>` but persists across
+    /// calls. Use `resetSchema()` to clear it.
+    #[napi(js_name = "setSchema")]
+    pub fn set_schema(&self, name: String) {
+        self.inner.read().set_current_schema(Some(&name));
+    }
+
+    /// Clears the current schema context.
+    ///
+    /// Subsequent `execute()` calls will use the default (no-schema) namespace.
+    #[napi(js_name = "resetSchema")]
+    pub fn reset_schema(&self) {
+        self.inner.read().set_current_schema(None);
+    }
+
+    /// Returns the current schema name, or `null` if no schema is set.
+    #[napi(js_name = "currentSchema")]
+    pub fn current_schema(&self) -> Option<String> {
+        self.inner.read().current_schema()
+    }
 }
 
 // Embed methods live in a separate impl block so the entire block can be

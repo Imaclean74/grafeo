@@ -632,11 +632,18 @@ impl Session {
                         .map_err(|e| Error::Internal(e.to_string()))?;
                 }
 
-                // Bind to graph type if specified
+                // Bind to graph type if specified.
+                // If the parser produced a '/' in the name it is already a qualified
+                // "schema/type" key; otherwise resolve against the current schema.
                 if let Some(type_name) = typed
-                    && let Err(e) = self
-                        .catalog
-                        .bind_graph_type(&storage_key, type_name.clone())
+                    && let Err(e) = self.catalog.bind_graph_type(
+                        &storage_key,
+                        if type_name.contains('/') {
+                            type_name.clone()
+                        } else {
+                            self.effective_type_key(&type_name)
+                        },
+                    )
                 {
                     return Err(Error::Query(QueryError::new(
                         QueryErrorKind::Semantic,

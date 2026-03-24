@@ -90,6 +90,22 @@ internal static partial class NativeMethods
     internal static partial void grafeo_free_result(nint result);
 
     // =========================================================================
+    // Schema context
+    // =========================================================================
+
+    /// <summary>Set the current schema for subsequent execute calls.</summary>
+    [LibraryImport(LibName, StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int grafeo_set_schema(nint db, string name);
+
+    /// <summary>Clear the current schema context.</summary>
+    [LibraryImport(LibName)]
+    internal static partial int grafeo_reset_schema(nint db);
+
+    /// <summary>Returns the current schema name as a UTF-8 string pointer, or null if none is set.</summary>
+    [LibraryImport(LibName)]
+    internal static partial nint grafeo_current_schema(nint db);
+
+    // =========================================================================
     // Node CRUD
     // =========================================================================
 

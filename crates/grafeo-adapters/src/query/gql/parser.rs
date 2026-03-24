@@ -5842,9 +5842,21 @@ impl<'a> Parser<'a> {
                 open = true;
                 None // ANY GRAPH = open/schema-free (no type binding)
             } else if self.is_identifier() {
-                let type_name = self.get_identifier_name();
+                let first = self.get_identifier_name();
                 self.advance();
-                Some(type_name)
+                // Support qualified names: schema.type_name
+                // Internally stored with '/' separator to match storage keys.
+                if self.current.kind == TokenKind::Dot {
+                    self.advance(); // consume '.'
+                    if !self.is_identifier() {
+                        return Err(self.error("Expected type name after '.'"));
+                    }
+                    let type_part = self.get_identifier_name();
+                    self.advance();
+                    Some(format!("{first}/{type_part}"))
+                } else {
+                    Some(first)
+                }
             } else {
                 return Err(self.error("Expected graph type name or ANY after TYPED"));
             }

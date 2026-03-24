@@ -77,6 +77,12 @@ double      grafeo_result_execution_time_ms(const GrafeoResult* result);
 uint64_t    grafeo_result_rows_scanned(const GrafeoResult* result);
 void        grafeo_free_result(GrafeoResult* result);
 
+/* ---- Schema context ------------------------------------------------------ */
+
+GrafeoStatus    grafeo_set_schema(GrafeoDatabase* db, const char* name);
+GrafeoStatus    grafeo_reset_schema(GrafeoDatabase* db);
+const char*     grafeo_current_schema(const GrafeoDatabase* db);
+
 /* ---- Node CRUD ----------------------------------------------------------- */
 
 uint64_t     grafeo_create_node(GrafeoDatabase* db, const char* labels_json, const char* properties_json);
