@@ -355,3 +355,72 @@ All bindings expose a `clear_plan_cache()` method:
 ### Auto-Invalidation
 
 The plan cache is automatically invalidated after DDL operations such as `CREATE INDEX`, `DROP INDEX` and `DROP TYPE`. This ensures that queries are re-optimized to take advantage of new indexes or reflect schema changes. Manual clearing is only needed after external schema modifications or when you want to force re-optimization after a bulk data import.
+
+## Change Data Capture
+
+Change Data Capture (CDC, since 0.5.19) tracks every mutation to nodes and edges as an append-only event log. Enable it with the `cdc` feature flag:
+
+```toml
+[dependencies]
+grafeo = { version = "0.5", features = ["cdc"] }
+```
+
+!!! note
+    The `cdc` feature is included in the `ai`, `embedded`, `server` and `full` profiles, so it is enabled by default for most use cases.
+
+### Change Events
+
+Each event is a dictionary (Python) / struct (Rust) with the following fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `entity_id` | `int` | ID of the affected node or edge |
+| `entity_type` | `str` | `"node"` or `"edge"` |
+| `kind` | `str` | `"create"`, `"update"`, or `"delete"` |
+| `epoch` | `int` | MVCC epoch when the change was committed |
+| `timestamp` | `int` | Wall-clock time in milliseconds since Unix epoch |
+| `before` | `dict or None` | Property snapshot before the change (`None` for creates) |
+| `after` | `dict or None` | Property snapshot after the change (`None` for deletes) |
+
+### Per-Entity History
+
+```python
+from grafeo import GrafeoDB
+
+db = GrafeoDB()
+session = db.session()
+
+session.execute("INSERT (:Server {name: 'web-01', status: 'active'})")
+session.commit()
+
+session.execute("MATCH (s:Server {name: 'web-01'}) SET s.status = 'retired'")
+session.commit()
+
+node_id = db.execute("MATCH (s:Server) RETURN id(s)")[0][0]
+
+# Full history for a single node
+events = db.node_history(node_id)
+for e in events:
+    print(f"epoch={e['epoch']}  kind={e['kind']}  after={e['after']}")
+# epoch=1  kind=create  after={'name': 'web-01', 'status': 'active'}
+# epoch=2  kind=update  after={'status': 'retired'}
+
+# History since a known epoch (incremental polling)
+recent = db.node_history_since(node_id, since_epoch=2)
+
+# Edge history
+edge_events = db.edge_history(edge_id)
+```
+
+### Range Queries
+
+`changes_between(start_epoch, end_epoch)` returns all change events across all entities within an epoch range. This is the foundation for replication and offline sync:
+
+```python
+# Collect everything that changed between epoch 10 and 20
+events = db.changes_between(start_epoch=10, end_epoch=20)
+for e in events:
+    print(f"{e['entity_type']} {e['entity_id']}: {e['kind']} at epoch {e['epoch']}")
+```
+
+The grafeo-server HTTP API exposes this as `GET /db/{name}/changes?since={epoch}`. See [Offline Sync](offline-sync.md) for the full pull/push protocol.
