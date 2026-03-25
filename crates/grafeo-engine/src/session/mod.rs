@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use grafeo_common::types::{EdgeId, EpochId, NodeId, TransactionId, Value};
 use grafeo_common::utils::error::Result;
+use grafeo_common::{grafeo_debug_span, grafeo_info_span, grafeo_warn};
 use grafeo_core::graph::Direction;
 use grafeo_core::graph::GraphStoreMut;
 use grafeo_core::graph::lpg::{Edge, LpgStore, Node};
@@ -818,7 +819,7 @@ impl Session {
         if let Some(ref wal) = self.wal
             && let Err(e) = wal.log(record)
         {
-            tracing::warn!("Failed to log schema change to WAL: {}", e);
+            grafeo_warn!("Failed to log schema change to WAL: {}", e);
         }
     }
 
@@ -2189,12 +2190,11 @@ impl Session {
             processor::QueryLanguage, translators::gql,
         };
 
-        let _span = tracing::info_span!(
+        let _span = grafeo_info_span!(
             "grafeo::session::execute",
             language = "gql",
             query_len = query.len(),
-        )
-        .entered();
+        );
 
         #[cfg(not(target_arch = "wasm32"))]
         let start_time = std::time::Instant::now();
@@ -2971,12 +2971,11 @@ impl Session {
         language: &str,
         params: Option<std::collections::HashMap<String, Value>>,
     ) -> Result<QueryResult> {
-        let _span = tracing::info_span!(
+        let _span = grafeo_info_span!(
             "grafeo::session::execute",
             language,
             query_len = query.len(),
-        )
-        .entered();
+        );
         match language {
             "gql" => {
                 if let Some(p) = params {
@@ -3133,7 +3132,7 @@ impl Session {
         read_only: bool,
         isolation_level: Option<crate::transaction::IsolationLevel>,
     ) -> Result<()> {
-        let _span = tracing::debug_span!("grafeo::tx::begin", read_only).entered();
+        let _span = grafeo_debug_span!("grafeo::tx::begin", read_only);
         let mut current = self.current_transaction.lock();
         if current.is_some() {
             // Nested transaction: create an auto-savepoint instead of a new tx.
@@ -3190,7 +3189,7 @@ impl Session {
 
     /// Core commit logic, usable from both `&mut self` and `&self` paths.
     fn commit_inner(&self) -> Result<()> {
-        let _span = tracing::debug_span!("grafeo::tx::commit").entered();
+        let _span = grafeo_debug_span!("grafeo::tx::commit");
         // Nested transaction: release the auto-savepoint (changes are preserved).
         {
             let mut depth = self.transaction_nesting_depth.lock();
@@ -3330,7 +3329,7 @@ impl Session {
 
     /// Core rollback logic, usable from both `&mut self` and `&self` paths.
     fn rollback_inner(&self) -> Result<()> {
-        let _span = tracing::debug_span!("grafeo::tx::rollback").entered();
+        let _span = grafeo_debug_span!("grafeo::tx::rollback");
         // Nested transaction: rollback to the auto-savepoint.
         {
             let mut depth = self.transaction_nesting_depth.lock();

@@ -3,6 +3,7 @@
 use super::record::WalEntry;
 use super::{CheckpointMetadata, WalManager, WalRecord};
 use grafeo_common::utils::error::{Error, Result, StorageError};
+use grafeo_common::{grafeo_debug, grafeo_info, grafeo_warn};
 use std::fs::File;
 use std::io::{BufReader, Read};
 use std::path::Path;
@@ -118,7 +119,7 @@ impl WalRecovery {
         let min_sequence = checkpoint.as_ref().map_or(0, |cp| cp.log_sequence);
 
         if checkpoint.is_some() {
-            tracing::info!(
+            grafeo_info!(
                 "Recovering from checkpoint at epoch {:?}, starting from log sequence {}",
                 checkpoint.as_ref().map(|c| c.epoch),
                 min_sequence
@@ -134,7 +135,7 @@ impl WalRecovery {
             // We include the checkpoint sequence file because it may contain
             // records after the checkpoint record itself
             if sequence < min_sequence {
-                tracing::debug!(
+                grafeo_debug!(
                     "Skipping log file {:?} (sequence {} < checkpoint {})",
                     log_file,
                     sequence,
@@ -170,7 +171,7 @@ impl WalRecovery {
                     Err(e) => {
                         // Log corruption - stop reading this file but continue
                         // with remaining files (best-effort recovery)
-                        tracing::warn!("WAL corruption detected in {:?}: {}", log_file, e);
+                        grafeo_warn!("WAL corruption detected in {:?}: {}", log_file, e);
                         break;
                     }
                 }
@@ -225,7 +226,7 @@ impl WalRecovery {
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    tracing::warn!("WAL corruption detected: {}", e);
+                    grafeo_warn!("WAL corruption detected: {}", e);
                     break;
                 }
             }

@@ -19,6 +19,8 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use grafeo_common::{grafeo_debug, grafeo_warn};
+
 use super::WalManager;
 
 /// Statistics tracked by the adaptive flusher.
@@ -150,7 +152,7 @@ impl AdaptiveFlusher {
                 Ok(ack_tx) => {
                     // Graceful shutdown requested - do final flush
                     if let Err(e) = wal.sync() {
-                        tracing::warn!("Final WAL flush failed: {e}");
+                        grafeo_warn!("Final WAL flush failed: {e}");
                     }
                     // Send stats back to acknowledge shutdown
                     let _ = ack_tx.send(stats);
@@ -161,7 +163,7 @@ impl AdaptiveFlusher {
                     let start = Instant::now();
 
                     if let Err(e) = wal.sync() {
-                        tracing::warn!("WAL flush failed: {e}");
+                        grafeo_warn!("WAL flush failed: {e}");
                         // Still update timing to avoid spin loop on persistent errors
                         last_flush_duration = Duration::from_millis(10);
                         continue;
@@ -177,7 +179,7 @@ impl AdaptiveFlusher {
 
                     if last_flush_duration > target_interval {
                         stats.exceeded_target_count += 1;
-                        tracing::debug!(
+                        grafeo_debug!(
                             "WAL flush took {:?}, exceeds target {:?}",
                             last_flush_duration,
                             target_interval
@@ -186,7 +188,7 @@ impl AdaptiveFlusher {
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     // Channel closed without shutdown signal - exit gracefully
-                    tracing::debug!("Flusher shutdown channel disconnected");
+                    grafeo_debug!("Flusher shutdown channel disconnected");
                     return;
                 }
             }
@@ -199,7 +201,7 @@ impl Drop for AdaptiveFlusher {
         if self.shutdown_tx.is_some()
             && let Err(e) = self.shutdown()
         {
-            tracing::warn!("Error during flusher drop: {e}");
+            grafeo_warn!("Error during flusher drop: {e}");
         }
     }
 }

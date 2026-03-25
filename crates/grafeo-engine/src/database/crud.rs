@@ -2,6 +2,7 @@
 
 #[cfg(feature = "wal")]
 use grafeo_adapters::storage::wal::WalRecord;
+use grafeo_common::grafeo_warn;
 
 impl super::GrafeoDB {
     // === Node Operations ===
@@ -29,7 +30,7 @@ impl super::GrafeoDB {
             id,
             labels: labels.iter().map(|s| (*s).to_string()).collect(),
         }) {
-            tracing::warn!("Failed to log CreateNode to WAL: {}", e);
+            grafeo_warn!("Failed to log CreateNode to WAL: {}", e);
         }
 
         #[cfg(feature = "cdc")]
@@ -83,7 +84,7 @@ impl super::GrafeoDB {
                 id,
                 labels: labels.iter().map(|s| (*s).to_string()).collect(),
             }) {
-                tracing::warn!("Failed to log CreateNode to WAL: {}", e);
+                grafeo_warn!("Failed to log CreateNode to WAL: {}", e);
             }
 
             // Log each property to WAL for full durability
@@ -93,7 +94,7 @@ impl super::GrafeoDB {
                     key: key.to_string(),
                     value,
                 }) {
-                    tracing::warn!("Failed to log SetNodeProperty to WAL: {}", e);
+                    grafeo_warn!("Failed to log SetNodeProperty to WAL: {}", e);
                 }
             }
         }
@@ -272,7 +273,7 @@ impl super::GrafeoDB {
 
         #[cfg(feature = "wal")]
         if result && let Err(e) = self.log_wal(&WalRecord::DeleteNode { id }) {
-            tracing::warn!("Failed to log DeleteNode to WAL: {}", e);
+            grafeo_warn!("Failed to log DeleteNode to WAL: {}", e);
         }
 
         #[cfg(feature = "cdc")]
@@ -310,7 +311,7 @@ impl super::GrafeoDB {
             key: key.to_string(),
             value: value.clone(),
         }) {
-            tracing::warn!("Failed to log SetNodeProperty to WAL: {}", e);
+            grafeo_warn!("Failed to log SetNodeProperty to WAL: {}", e);
         }
 
         // Capture old value for CDC before the store write
@@ -396,7 +397,7 @@ impl super::GrafeoDB {
                 id,
                 label: label.to_string(),
             }) {
-                tracing::warn!("Failed to log AddNodeLabel to WAL: {}", e);
+                grafeo_warn!("Failed to log AddNodeLabel to WAL: {}", e);
             }
         }
 
@@ -478,7 +479,7 @@ impl super::GrafeoDB {
                 id,
                 label: label.to_string(),
             }) {
-                tracing::warn!("Failed to log RemoveNodeLabel to WAL: {}", e);
+                grafeo_warn!("Failed to log RemoveNodeLabel to WAL: {}", e);
             }
         }
 
@@ -551,7 +552,7 @@ impl super::GrafeoDB {
             dst,
             edge_type: edge_type.to_string(),
         }) {
-            tracing::warn!("Failed to log CreateEdge to WAL: {}", e);
+            grafeo_warn!("Failed to log CreateEdge to WAL: {}", e);
         }
 
         #[cfg(feature = "cdc")]
@@ -614,7 +615,7 @@ impl super::GrafeoDB {
                 dst,
                 edge_type: edge_type.to_string(),
             }) {
-                tracing::warn!("Failed to log CreateEdge to WAL: {}", e);
+                grafeo_warn!("Failed to log CreateEdge to WAL: {}", e);
             }
 
             // Log each property to WAL for full durability
@@ -624,7 +625,7 @@ impl super::GrafeoDB {
                     key: key.to_string(),
                     value,
                 }) {
-                    tracing::warn!("Failed to log SetEdgeProperty to WAL: {}", e);
+                    grafeo_warn!("Failed to log SetEdgeProperty to WAL: {}", e);
                 }
             }
         }
@@ -672,7 +673,7 @@ impl super::GrafeoDB {
 
         #[cfg(feature = "wal")]
         if result && let Err(e) = self.log_wal(&WalRecord::DeleteEdge { id }) {
-            tracing::warn!("Failed to log DeleteEdge to WAL: {}", e);
+            grafeo_warn!("Failed to log DeleteEdge to WAL: {}", e);
         }
 
         #[cfg(feature = "cdc")]
@@ -703,7 +704,7 @@ impl super::GrafeoDB {
             key: key.to_string(),
             value: value.clone(),
         }) {
-            tracing::warn!("Failed to log SetEdgeProperty to WAL: {}", e);
+            grafeo_warn!("Failed to log SetEdgeProperty to WAL: {}", e);
         }
 
         // Capture old value for CDC before the store write
@@ -739,7 +740,7 @@ impl super::GrafeoDB {
                 key: key.to_string(),
             })
         {
-            tracing::warn!("WAL log for RemoveNodeProperty failed: {e}");
+            grafeo_warn!("WAL log for RemoveNodeProperty failed: {e}");
         }
 
         // Remove from matching text indexes
@@ -768,7 +769,7 @@ impl super::GrafeoDB {
                 key: key.to_string(),
             })
         {
-            tracing::warn!("WAL log for RemoveEdgeProperty failed: {e}");
+            grafeo_warn!("WAL log for RemoveEdgeProperty failed: {e}");
         }
 
         removed
@@ -816,14 +817,14 @@ impl super::GrafeoDB {
                         id,
                         labels: labels.iter().map(|s| (*s).to_string()).collect(),
                     }) {
-                        tracing::warn!("Failed to log CreateNode to WAL: {}", e);
+                        grafeo_warn!("Failed to log CreateNode to WAL: {}", e);
                     }
                     if let Err(e) = self.log_wal(&WalRecord::SetNodeProperty {
                         id,
                         key: property.to_string(),
                         value,
                     }) {
-                        tracing::warn!("Failed to log SetNodeProperty to WAL: {}", e);
+                        grafeo_warn!("Failed to log SetNodeProperty to WAL: {}", e);
                     }
                 }
 

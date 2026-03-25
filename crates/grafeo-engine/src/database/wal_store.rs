@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use grafeo_adapters::storage::wal::{LpgWal, WalRecord};
+use grafeo_common::grafeo_warn;
 use grafeo_common::types::{EdgeId, EpochId, NodeId, PropertyKey, TransactionId, Value};
 use grafeo_common::utils::hash::FxHashMap;
 use grafeo_core::graph::lpg::{CompareOp, Edge, LpgStore, Node};
@@ -79,7 +80,7 @@ impl WalGraphStore {
             (*ctx).clone_from(&self.graph_name);
         }
         if let Err(e) = self.wal.log(record) {
-            tracing::warn!("WAL log failed: {e}");
+            grafeo_warn!("WAL log failed: {e}");
         }
     }
 }

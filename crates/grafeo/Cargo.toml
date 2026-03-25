@@ -48,11 +48,12 @@ rdf = ["grafeo-engine/rdf"]  # RDF triple store
 regex = ["grafeo-engine/regex"]  # Full regex (default for non-WASM)
 regex-lite = ["grafeo-engine/regex-lite"]  # Lightweight regex (for WASM)
 metrics = ["grafeo-engine/metrics"]  # Lock-free query, transaction, and session metrics
+tracing = ["grafeo-engine/tracing"]  # Observability spans and events
 
 # Named profiles (ecosystem-aligned)
 embedded = ["gql", "ai", "algos", "parallel", "regex"]  # Python libs, MCP, in-process (default)
 browser = ["gql", "regex-lite"]  # WASM / grafeo-web
-server = ["embedded", "languages", "storage", "rdf", "cdc"]  # grafeo-server
+server = ["embedded", "languages", "storage", "rdf", "cdc", "tracing"]  # grafeo-server
 full = ["server"]  # Everything (except embed)
 
 # Platform capabilities

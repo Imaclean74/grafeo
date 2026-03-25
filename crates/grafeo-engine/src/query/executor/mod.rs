@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::config::AdaptiveConfig;
 use crate::database::QueryResult;
+use grafeo_common::grafeo_debug_span;
 use grafeo_common::types::{LogicalType, Value};
 use grafeo_common::utils::error::{Error, QueryError, Result};
 use grafeo_core::execution::operators::{Operator, OperatorError};
@@ -84,7 +85,7 @@ impl Executor {
     ///
     /// Returns an error if operator execution fails or the query timeout is exceeded.
     pub fn execute(&self, operator: &mut dyn Operator) -> Result<QueryResult> {
-        let _span = tracing::debug_span!("grafeo::query::execute").entered();
+        let _span = grafeo_debug_span!("grafeo::query::execute");
         let mut result = QueryResult::with_types(self.columns.clone(), self.column_types.clone());
         let mut types_captured = !result.column_types.iter().all(|t| *t == LogicalType::Any);
 

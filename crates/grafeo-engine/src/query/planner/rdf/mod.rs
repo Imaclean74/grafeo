@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use grafeo_common::grafeo_warn;
 use grafeo_common::types::{LogicalType, TransactionId, Value};
 use grafeo_common::utils::error::{Error, Result};
 use grafeo_core::execution::DataChunk;
@@ -41,7 +42,7 @@ fn log_rdf_wal(wal: &Option<Arc<RdfWal>>, record: &grafeo_adapters::storage::wal
     if let Some(wal) = wal
         && let Err(err) = wal.log(record)
     {
-        tracing::warn!("RDF WAL log failed: {err}");
+        grafeo_warn!("RDF WAL log failed: {err}");
     }
 }
 

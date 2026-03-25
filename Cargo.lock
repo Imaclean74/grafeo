@@ -1225,6 +1225,7 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

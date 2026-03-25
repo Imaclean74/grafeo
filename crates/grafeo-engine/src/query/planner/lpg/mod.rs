@@ -23,6 +23,7 @@ use crate::query::plan::{
     NodeScanOp, OtherwiseOp, PathMode, RemoveLabelOp, ReturnOp, SetPropertyOp, ShortestPathOp,
     SkipOp, SortOp, SortOrder, UnaryOp, UnionOp, UnwindOp,
 };
+use grafeo_common::grafeo_debug_span;
 use grafeo_common::types::{EpochId, TransactionId};
 use grafeo_common::types::{LogicalType, Value};
 use grafeo_common::utils::error::{Error, Result};
@@ -275,7 +276,7 @@ impl Planner {
 
     /// Plans a logical plan into a physical operator.
     pub fn plan(&self, logical_plan: &LogicalPlan) -> Result<PhysicalPlan> {
-        let _span = tracing::debug_span!("grafeo::query::plan").entered();
+        let _span = grafeo_debug_span!("grafeo::query::plan");
         let (operator, columns) = self.plan_operator(&logical_plan.root)?;
         Ok(PhysicalPlan {
             operator,

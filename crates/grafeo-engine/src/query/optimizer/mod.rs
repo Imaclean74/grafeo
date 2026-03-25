@@ -24,6 +24,7 @@ pub use join_order::{BitSet, DPccp, JoinGraph, JoinGraphBuilder, JoinPlan};
 use crate::query::plan::{
     FilterOp, JoinCondition, LogicalExpression, LogicalOperator, LogicalPlan, MultiWayJoinOp,
 };
+use grafeo_common::grafeo_debug_span;
 use grafeo_common::utils::error::Result;
 use std::collections::HashSet;
 
@@ -223,7 +224,7 @@ impl Optimizer {
     ///
     /// Returns an error if optimization fails.
     pub fn optimize(&self, plan: LogicalPlan) -> Result<LogicalPlan> {
-        let _span = tracing::debug_span!("grafeo::query::optimize").entered();
+        let _span = grafeo_debug_span!("grafeo::query::optimize");
         let mut root = plan.root;
 
         // Apply optimization rules

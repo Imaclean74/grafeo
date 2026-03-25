@@ -24,6 +24,7 @@ mod search;
 #[cfg(feature = "wal")]
 pub(crate) mod wal_store;
 
+use grafeo_common::grafeo_error;
 #[cfg(feature = "wal")]
 use std::path::Path;
 use std::sync::Arc;
@@ -1319,7 +1320,7 @@ impl GrafeoDB {
 impl Drop for GrafeoDB {
     fn drop(&mut self) {
         if let Err(e) = self.close() {
-            tracing::error!("Error closing database: {}", e);
+            grafeo_error!("Error closing database: {}", e);
         }
     }
 }

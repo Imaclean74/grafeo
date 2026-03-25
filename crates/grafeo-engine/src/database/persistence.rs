@@ -3,6 +3,8 @@
 #[cfg(feature = "wal")]
 use std::path::Path;
 
+#[cfg(any(feature = "vector-index", feature = "text-index"))]
+use grafeo_common::grafeo_warn;
 use grafeo_common::types::{EdgeId, EpochId, NodeId, Value};
 use grafeo_common::utils::error::{Error, Result};
 use hashbrown::HashSet;
@@ -427,7 +429,7 @@ fn restore_indexes_from_snapshot(db: &super::GrafeoDB, indexes: &SnapshotIndexes
             Some(vi.m),
             Some(vi.ef_construction),
         ) {
-            tracing::warn!(
+            grafeo_warn!(
                 "Failed to restore vector index :{label}({property}): {err}",
                 label = vi.label,
                 property = vi.property,
@@ -438,7 +440,7 @@ fn restore_indexes_from_snapshot(db: &super::GrafeoDB, indexes: &SnapshotIndexes
     #[cfg(feature = "text-index")]
     for ti in &indexes.text_indexes {
         if let Err(err) = db.create_text_index(&ti.label, &ti.property) {
-            tracing::warn!(
+            grafeo_warn!(
                 "Failed to restore text index :{label}({property}): {err}",
                 label = ti.label,
                 property = ti.property,
