@@ -1624,4 +1624,165 @@ mod tests {
         let decoded = Value::deserialize(&bytes).unwrap();
         assert_eq!(list, decoded);
     }
+
+    #[test]
+    fn test_property_key_borrow_str() {
+        use std::collections::HashMap;
+        let mut map: HashMap<PropertyKey, i32> = HashMap::new();
+        map.insert(PropertyKey::new("name"), 42);
+        map.insert(PropertyKey::new("age"), 30);
+        assert_eq!(map.get("name"), Some(&42));
+        assert_eq!(map.get("age"), Some(&30));
+        assert_eq!(map.get("missing"), None);
+        assert!(map.contains_key("name"));
+        assert!(!map.contains_key("nope"));
+    }
+
+    #[test]
+    fn test_gcounter_type_name() {
+        let v = Value::GCounter(Arc::new(std::collections::HashMap::new()));
+        assert_eq!(v.type_name(), "GCOUNTER");
+    }
+
+    #[test]
+    fn test_oncounter_type_name() {
+        let v = Value::OnCounter {
+            pos: Arc::new(std::collections::HashMap::new()),
+            neg: Arc::new(std::collections::HashMap::new()),
+        };
+        assert_eq!(v.type_name(), "PNCOUNTER");
+    }
+
+    #[test]
+    fn test_gcounter_display() {
+        let mut counts = std::collections::HashMap::new();
+        counts.insert("node-a".to_string(), 10u64);
+        counts.insert("node-b".to_string(), 5u64);
+        let v = Value::GCounter(Arc::new(counts));
+        assert_eq!(format!("{v}"), "GCounter(15)");
+    }
+
+    #[test]
+    fn test_gcounter_debug() {
+        let mut counts = std::collections::HashMap::new();
+        counts.insert("node-a".to_string(), 3u64);
+        let v = Value::GCounter(Arc::new(counts));
+        let debug = format!("{v:?}");
+        assert!(debug.contains("GCounter"));
+        assert!(debug.contains("total=3"));
+    }
+
+    #[test]
+    fn test_oncounter_display() {
+        let mut pos = std::collections::HashMap::new();
+        pos.insert("node-a".to_string(), 10u64);
+        pos.insert("node-b".to_string(), 3u64);
+        let mut neg = std::collections::HashMap::new();
+        neg.insert("node-a".to_string(), 4u64);
+        let v = Value::OnCounter {
+            pos: Arc::new(pos),
+            neg: Arc::new(neg),
+        };
+        // pos_sum = 13, neg_sum = 4, net = 9
+        assert_eq!(format!("{v}"), "OnCounter(9)");
+    }
+
+    #[test]
+    fn test_oncounter_debug() {
+        let v = Value::OnCounter {
+            pos: Arc::new(std::collections::HashMap::new()),
+            neg: Arc::new(std::collections::HashMap::new()),
+        };
+        let debug = format!("{v:?}");
+        assert!(debug.contains("OnCounter"));
+        assert!(debug.contains("net=0"));
+    }
+
+    #[test]
+    fn test_gcounter_hash_is_insertion_order_independent() {
+        use std::hash::{Hash, Hasher};
+        let mut counts1 = std::collections::HashMap::new();
+        counts1.insert("b".to_string(), 2u64);
+        counts1.insert("a".to_string(), 1u64);
+        let mut counts2 = std::collections::HashMap::new();
+        counts2.insert("a".to_string(), 1u64);
+        counts2.insert("b".to_string(), 2u64);
+        let v1 = HashableValue(Value::GCounter(Arc::new(counts1)));
+        let v2 = HashableValue(Value::GCounter(Arc::new(counts2)));
+        let mut h1 = std::collections::hash_map::DefaultHasher::new();
+        let mut h2 = std::collections::hash_map::DefaultHasher::new();
+        v1.hash(&mut h1);
+        v2.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+    }
+
+    #[test]
+    fn test_oncounter_hash_is_insertion_order_independent() {
+        use std::hash::{Hash, Hasher};
+        let mut pos1 = std::collections::HashMap::new();
+        pos1.insert("b".to_string(), 5u64);
+        pos1.insert("a".to_string(), 3u64);
+        let mut pos2 = std::collections::HashMap::new();
+        pos2.insert("a".to_string(), 3u64);
+        pos2.insert("b".to_string(), 5u64);
+        let neg = Arc::new(std::collections::HashMap::new());
+        let v1 = HashableValue(Value::OnCounter {
+            pos: Arc::new(pos1),
+            neg: neg.clone(),
+        });
+        let v2 = HashableValue(Value::OnCounter {
+            pos: Arc::new(pos2),
+            neg: neg.clone(),
+        });
+        let mut h1 = std::collections::hash_map::DefaultHasher::new();
+        let mut h2 = std::collections::hash_map::DefaultHasher::new();
+        v1.hash(&mut h1);
+        v2.hash(&mut h2);
+        assert_eq!(h1.finish(), h2.finish());
+    }
+
+    #[test]
+    fn test_gcounter_serialize_roundtrip() {
+        let mut counts = std::collections::HashMap::new();
+        counts.insert("replica-1".to_string(), 42u64);
+        counts.insert("replica-2".to_string(), 7u64);
+        let v = Value::GCounter(Arc::new(counts));
+        let bytes = v.serialize().unwrap();
+        let decoded = Value::deserialize(&bytes).unwrap();
+        assert_eq!(v, decoded);
+    }
+
+    #[test]
+    fn test_oncounter_serialize_roundtrip() {
+        let mut pos = std::collections::HashMap::new();
+        pos.insert("node-a".to_string(), 10u64);
+        let mut neg = std::collections::HashMap::new();
+        neg.insert("node-a".to_string(), 3u64);
+        let v = Value::OnCounter {
+            pos: Arc::new(pos),
+            neg: Arc::new(neg),
+        };
+        let bytes = v.serialize().unwrap();
+        let decoded = Value::deserialize(&bytes).unwrap();
+        assert_eq!(v, decoded);
+    }
+
+    #[test]
+    fn test_gcounter_empty_display() {
+        let v = Value::GCounter(Arc::new(std::collections::HashMap::new()));
+        assert_eq!(format!("{v}"), "GCounter(0)");
+    }
+
+    #[test]
+    fn test_oncounter_zero_net() {
+        let mut pos = std::collections::HashMap::new();
+        pos.insert("r".to_string(), 5u64);
+        let mut neg = std::collections::HashMap::new();
+        neg.insert("r".to_string(), 5u64);
+        let v = Value::OnCounter {
+            pos: Arc::new(pos),
+            neg: Arc::new(neg),
+        };
+        assert_eq!(format!("{v}"), "OnCounter(0)");
+    }
 }

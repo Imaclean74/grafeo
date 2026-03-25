@@ -1531,4 +1531,35 @@ mod tests {
             "When cardinality matches label size, costs should be similar"
         );
     }
+
+    #[test]
+    fn test_leapfrog_join_cost_unit_min_cardinality() {
+        let model = CostModel::new();
+        // min_card == 1.0 exercises the else branch in seek_cost (output * cpu_tuple_cost)
+        let cost = model.leapfrog_join_cost(3, &[1.0, 100.0, 200.0], 50.0);
+        assert!(cost.cpu > 0.0);
+        assert!(cost.memory > 0.0);
+    }
+
+    #[test]
+    fn test_prefer_leapfrog_join_cardinalities_below_three() {
+        let model = CostModel::new();
+        // num_relations >= 3 but fewer cardinality entries: second guard fires
+        assert!(!model.prefer_leapfrog_join(3, &[100.0, 200.0], 50.0));
+        assert!(!model.prefer_leapfrog_join(5, &[], 10.0));
+    }
+
+    #[test]
+    fn test_factorized_benefit_zero_hops() {
+        let model = CostModel::new();
+        // Zero hops falls through the `num_hops <= 1` guard
+        assert_eq!(model.factorized_benefit(10.0, 0), 1.0);
+    }
+
+    #[test]
+    fn test_factorized_benefit_unit_fanout_guard() {
+        let model = CostModel::new();
+        // fanout exactly 1.0: no benefit regardless of hop count
+        assert_eq!(model.factorized_benefit(1.0, 5), 1.0);
+    }
 }
