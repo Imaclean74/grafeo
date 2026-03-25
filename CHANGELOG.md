@@ -12,6 +12,7 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ### Fixed
 
+- **Cypher target node property filter ignored**: `MATCH ()-[r]->(o {name: 'X'})` and similar patterns with inline property maps on the target node returned unfiltered results, ignoring the property constraint. The Cypher translator now applies target node property predicates and edge property predicates after the expand operator, matching GQL behavior (Discussion #155)
 - **Schema isolation for types**: `SHOW GRAPH TYPES`, `SHOW NODE TYPES` and `SHOW EDGE TYPES` now respect `SESSION SET SCHEMA`, returning only types belonging to the current schema. `CREATE`, `DROP` and `ALTER` type commands also scope to the active schema. `DROP SCHEMA` now rejects non-empty schemas that still contain types (#167)
 - **`CREATE GRAPH TYPED` regression**: fixed `CREATE GRAPH foo TYPED bar` failing with `TypeNotFound` when a session schema is set; the type name now resolves relative to the current schema as expected
 - **Cross-schema type references**: `CREATE GRAPH foo TYPED my_schema.type_name` now works from any session schema, allowing graphs to be bound to types defined in a different schema
