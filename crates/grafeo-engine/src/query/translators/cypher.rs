@@ -785,7 +785,7 @@ impl CypherTranslator {
                 LogicalExpression::FunctionCall {
                     name: "hasLabel".into(),
                     args: vec![
-                        LogicalExpression::Variable(to_variable),
+                        LogicalExpression::Variable(to_variable.clone()),
                         LogicalExpression::Literal(Value::from(label)),
                     ],
                     distinct: false,
@@ -795,9 +795,23 @@ impl CypherTranslator {
             expand
         };
 
+        // Apply property filters on the edge: -[r {since: 2020}]->
+        if !rel.properties.is_empty()
+            && let Some(ref ev) = rel.variable
+        {
+            let predicate = self.build_property_predicate(ev, &rel.properties)?;
+            result = wrap_filter(result, predicate);
+        }
+
         // Apply inline WHERE clause from relationship pattern: -[r WHERE expr]->
         if let Some(where_expr) = &rel.where_clause {
             let predicate = self.translate_expression(where_expr)?;
+            result = wrap_filter(result, predicate);
+        }
+
+        // Apply property filters on the target node: ()-[r]->(o {id: "X"})
+        if !rel.target.properties.is_empty() {
+            let predicate = self.build_property_predicate(&to_variable, &rel.target.properties)?;
             result = wrap_filter(result, predicate);
         }
 
