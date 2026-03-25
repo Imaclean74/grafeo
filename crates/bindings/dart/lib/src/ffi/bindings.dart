@@ -146,6 +146,28 @@ final class GrafeoBindings {
   >('grafeo_free_result');
 
   // ===========================================================================
+  // Schema context
+  // ===========================================================================
+
+  /// Set the current schema for subsequent execute calls.
+  late final grafeoSetSchema = library.lookupFunction<
+    Int32 Function(Pointer<Void>, Pointer<Utf8>),
+    int Function(Pointer<Void>, Pointer<Utf8>)
+  >('grafeo_set_schema');
+
+  /// Clear the current schema context.
+  late final grafeoResetSchema = library.lookupFunction<
+    Int32 Function(Pointer<Void>),
+    int Function(Pointer<Void>)
+  >('grafeo_reset_schema');
+
+  /// Returns the current schema name, or null if none is set.
+  late final grafeoCurrentSchema = library.lookupFunction<
+    Pointer<Utf8> Function(Pointer<Void>),
+    Pointer<Utf8> Function(Pointer<Void>)
+  >('grafeo_current_schema');
+
+  // ===========================================================================
   // Node CRUD
   // ===========================================================================
 

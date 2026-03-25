@@ -73,18 +73,25 @@ impl<T> VersionLog<T> {
         self.entries.last().map(|(e, _)| *e)
     }
 
-    /// Returns the value at the given epoch via binary search.
+    /// Returns the value at the given epoch.
     ///
     /// Finds the latest entry whose epoch is <= the target epoch.
     /// Returns `None` if the log is empty or all entries are after the target.
     ///
-    /// O(log N) via `partition_point`.
+    /// O(1) when the target epoch is at or after the latest entry (the common
+    /// case for current-epoch reads). Falls back to O(log N) binary search
+    /// for historical queries.
     #[must_use]
     pub fn at(&self, epoch: EpochId) -> Option<&T> {
-        if self.entries.is_empty() {
-            return None;
+        let last = self.entries.last()?;
+        // Fast path: target epoch is at or after the latest entry.
+        // This covers the common case of reading at the current epoch,
+        // while correctly skipping PENDING entries (epoch = u64::MAX)
+        // when the target is a real epoch.
+        if last.0 <= epoch {
+            return Some(&last.1);
         }
-        // partition_point returns the first index where epoch > target
+        // Slow path: historical read, binary search
         let idx = self.entries.partition_point(|(e, _)| *e <= epoch);
         if idx == 0 {
             None

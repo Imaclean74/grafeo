@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The kind of mutation that occurred.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ChangeKind {
     /// A new entity was created.
     Create,
@@ -39,13 +39,15 @@ pub enum ChangeKind {
     Delete,
 }
 
-/// A unique identifier for a graph entity (node or edge).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A unique identifier for a graph entity (node, edge, or RDF triple).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum EntityId {
     /// A node identifier.
     Node(NodeId),
     /// An edge identifier.
     Edge(EdgeId),
+    /// An RDF triple, identified by a content hash of its terms.
+    Triple(u64),
 }
 
 impl From<NodeId> for EntityId {
@@ -67,6 +69,7 @@ impl EntityId {
         match self {
             Self::Node(id) => id.as_u64(),
             Self::Edge(id) => id.as_u64(),
+            Self::Triple(h) => *h,
         }
     }
 
@@ -75,10 +78,17 @@ impl EntityId {
     pub fn is_node(&self) -> bool {
         matches!(self, Self::Node(_))
     }
+
+    /// Returns `true` if this is an RDF triple identifier.
+    #[must_use]
+    pub fn is_triple(&self) -> bool {
+        matches!(self, Self::Triple(_))
+    }
 }
 
-/// A recorded change event with before/after property snapshots.
-#[derive(Debug, Clone)]
+/// A recorded change event with before/after property snapshots, or an RDF
+/// triple insert/delete.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChangeEvent {
     /// The entity that was changed.
     pub entity_id: EntityId,
@@ -88,10 +98,35 @@ pub struct ChangeEvent {
     pub epoch: EpochId,
     /// Wall-clock timestamp (milliseconds since Unix epoch).
     pub timestamp: u64,
-    /// Properties before the change (None for Create).
+    /// Properties before the change (None for Create and for triple events).
     pub before: Option<HashMap<String, Value>>,
-    /// Properties after the change (None for Delete).
+    /// Properties after the change (None for Delete and for triple events).
     pub after: Option<HashMap<String, Value>>,
+    /// Node labels. Present only on node Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Vec<String>>,
+    /// Edge relationship type. Present only on edge Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edge_type: Option<String>,
+    /// Edge source node ID. Present only on edge Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src_id: Option<u64>,
+    /// Edge destination node ID. Present only on edge Create events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dst_id: Option<u64>,
+    /// RDF triple subject (N-Triples encoded). Present only on triple events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triple_subject: Option<String>,
+    /// RDF triple predicate (N-Triples encoded). Present only on triple events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triple_predicate: Option<String>,
+    /// RDF triple object (N-Triples encoded). Present only on triple events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triple_object: Option<String>,
+    /// Named graph containing the triple. `None` means the default graph.
+    /// Present only on triple events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub triple_graph: Option<String>,
 }
 
 /// The CDC log that records entity mutations.
@@ -126,6 +161,7 @@ impl CdcLog {
         id: NodeId,
         epoch: EpochId,
         props: Option<HashMap<String, Value>>,
+        labels: Option<Vec<String>>,
     ) {
         self.record(ChangeEvent {
             entity_id: EntityId::Node(id),
@@ -134,6 +170,14 @@ impl CdcLog {
             timestamp: now_millis(),
             before: None,
             after: props,
+            labels,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
+            triple_subject: None,
+            triple_predicate: None,
+            triple_object: None,
+            triple_graph: None,
         });
     }
 
@@ -143,6 +187,9 @@ impl CdcLog {
         id: EdgeId,
         epoch: EpochId,
         props: Option<HashMap<String, Value>>,
+        src_id: u64,
+        dst_id: u64,
+        edge_type: String,
     ) {
         self.record(ChangeEvent {
             entity_id: EntityId::Edge(id),
@@ -151,6 +198,75 @@ impl CdcLog {
             timestamp: now_millis(),
             before: None,
             after: props,
+            labels: None,
+            edge_type: Some(edge_type),
+            src_id: Some(src_id),
+            dst_id: Some(dst_id),
+            triple_subject: None,
+            triple_predicate: None,
+            triple_object: None,
+            triple_graph: None,
+        });
+    }
+
+    /// Records an RDF triple insertion.
+    ///
+    /// The terms must be N-Triples encoded (e.g. `<http://example.org/s>`,
+    /// `"hello"`, `"42"^^<http://www.w3.org/2001/XMLSchema#integer>`).
+    pub fn record_triple_insert(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        graph: Option<&str>,
+        epoch: EpochId,
+    ) {
+        let id = triple_hash(subject, predicate, object, graph);
+        self.record(ChangeEvent {
+            entity_id: EntityId::Triple(id),
+            kind: ChangeKind::Create,
+            epoch,
+            timestamp: now_millis(),
+            before: None,
+            after: None,
+            labels: None,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
+            triple_subject: Some(subject.to_string()),
+            triple_predicate: Some(predicate.to_string()),
+            triple_object: Some(object.to_string()),
+            triple_graph: graph.map(ToString::to_string),
+        });
+    }
+
+    /// Records an RDF triple deletion.
+    ///
+    /// The terms must be N-Triples encoded.
+    pub fn record_triple_delete(
+        &self,
+        subject: &str,
+        predicate: &str,
+        object: &str,
+        graph: Option<&str>,
+        epoch: EpochId,
+    ) {
+        let id = triple_hash(subject, predicate, object, graph);
+        self.record(ChangeEvent {
+            entity_id: EntityId::Triple(id),
+            kind: ChangeKind::Delete,
+            epoch,
+            timestamp: now_millis(),
+            before: None,
+            after: None,
+            labels: None,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
+            triple_subject: Some(subject.to_string()),
+            triple_predicate: Some(predicate.to_string()),
+            triple_object: Some(object.to_string()),
+            triple_graph: graph.map(ToString::to_string),
         });
     }
 
@@ -178,6 +294,14 @@ impl CdcLog {
             timestamp: now_millis(),
             before,
             after: Some(after_map),
+            labels: None,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
+            triple_subject: None,
+            triple_predicate: None,
+            triple_object: None,
+            triple_graph: None,
         });
     }
 
@@ -195,6 +319,14 @@ impl CdcLog {
             timestamp: now_millis(),
             before: props,
             after: None,
+            labels: None,
+            edge_type: None,
+            src_id: None,
+            dst_id: None,
+            triple_subject: None,
+            triple_predicate: None,
+            triple_object: None,
+            triple_graph: None,
         });
     }
 
@@ -253,6 +385,20 @@ impl Default for CdcLog {
     }
 }
 
+/// Computes a stable-within-process content hash for an RDF triple.
+///
+/// Used as the raw `u64` in `EntityId::Triple` so the CDC log can key events
+/// by triple content without storing a separate ID registry.
+fn triple_hash(subject: &str, predicate: &str, object: &str, graph: Option<&str>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    subject.hash(&mut h);
+    predicate.hash(&mut h);
+    object.hash(&mut h);
+    graph.hash(&mut h);
+    h.finish()
+}
+
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -269,7 +415,7 @@ mod tests {
         let log = CdcLog::new();
         let node_id = NodeId::new(1);
 
-        log.record_create_node(node_id, EpochId(1), None);
+        log.record_create_node(node_id, EpochId(1), None, None);
         log.record_update(
             EntityId::Node(node_id),
             EpochId(2),
@@ -297,7 +443,7 @@ mod tests {
         let log = CdcLog::new();
         let node_id = NodeId::new(1);
 
-        log.record_create_node(node_id, EpochId(1), None);
+        log.record_create_node(node_id, EpochId(1), None, None);
         log.record_update(
             EntityId::Node(node_id),
             EpochId(5),
@@ -322,8 +468,8 @@ mod tests {
     fn test_changes_between() {
         let log = CdcLog::new();
 
-        log.record_create_node(NodeId::new(1), EpochId(1), None);
-        log.record_create_node(NodeId::new(2), EpochId(3), None);
+        log.record_create_node(NodeId::new(1), EpochId(1), None, None);
+        log.record_create_node(NodeId::new(2), EpochId(3), None, None);
         log.record_update(
             EntityId::Node(NodeId::new(1)),
             EpochId(5),
@@ -344,7 +490,7 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("name".to_string(), Value::from("Alix"));
 
-        log.record_create_node(node_id, EpochId(1), Some(props.clone()));
+        log.record_create_node(node_id, EpochId(1), Some(props.clone()), None);
         log.record_delete(EntityId::Node(node_id), EpochId(2), Some(props));
 
         let history = log.history(EntityId::Node(node_id));
@@ -366,8 +512,8 @@ mod tests {
         let log = CdcLog::new();
         assert_eq!(log.event_count(), 0);
 
-        log.record_create_node(NodeId::new(1), EpochId(1), None);
-        log.record_create_node(NodeId::new(2), EpochId(2), None);
+        log.record_create_node(NodeId::new(1), EpochId(1), None, None);
+        log.record_create_node(NodeId::new(2), EpochId(2), None, None);
         assert_eq!(log.event_count(), 2);
     }
 

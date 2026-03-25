@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use grafeo_common::grafeo_debug_span;
 use grafeo_common::types::{EpochId, TransactionId, Value};
 use grafeo_common::utils::error::{Error, Result};
 use grafeo_core::graph::GraphStoreMut;
@@ -313,7 +314,7 @@ impl QueryProcessor {
 
     /// Translates an LPG query to a logical plan.
     fn translate_lpg(&self, query: &str, language: QueryLanguage) -> Result<LogicalPlan> {
-        let _span = tracing::debug_span!("grafeo::query::parse", ?language).entered();
+        let _span = grafeo_debug_span!("grafeo::query::parse", ?language);
         match language {
             #[cfg(feature = "gql")]
             QueryLanguage::Gql => {

@@ -1,7 +1,8 @@
 """Cypher-specific regression tests.
 
 Covers correlated EXISTS subqueries, CASE WHEN inside aggregates,
-any() with IN lists, and CASE WHEN inside reduce().
+any() with IN lists, CASE WHEN inside reduce(), and target node
+property filters on edge patterns.
 """
 
 
@@ -181,3 +182,95 @@ class TestCaseWhenInReduce:
         assert len(result) == 1
         # Only 3+4+5 = 12
         assert result[0]["big_sum"] == 12
+
+
+# =============================================================================
+# Bug 5: Target node property filter ignored in edge patterns (#155)
+# =============================================================================
+
+
+class TestTargetNodePropertyFilter:
+    """Target node property filters like ()-[r]->(o {name: 'X'}) must filter results."""
+
+    def test_outgoing_target_property_filter(self, db):
+        """MATCH (a)-[r]->(b {name: 'Gus'}) should only return edges to Gus."""
+        db.execute_cypher(
+            "CREATE (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}), "
+            "(c:Person {name: 'Vincent'})"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}) CREATE (a)-[:KNOWS]->(b)"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Vincent'}) CREATE (a)-[:KNOWS]->(c)"
+        )
+
+        result = list(db.execute_cypher("MATCH (a)-[r]->(b {name: 'Gus'}) RETURN a.name, b.name"))
+        assert len(result) == 1
+        assert result[0]["a.name"] == "Alix"
+        assert result[0]["b.name"] == "Gus"
+
+    def test_incoming_target_property_filter(self, db):
+        """MATCH (a)-[r]->(b {name: 'Gus'}) from the target's perspective via incoming."""
+        db.execute_cypher(
+            "CREATE (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}), "
+            "(c:Person {name: 'Vincent'})"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}) CREATE (a)-[:KNOWS]->(b)"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Vincent'}) CREATE (a)-[:KNOWS]->(c)"
+        )
+
+        result = list(db.execute_cypher("MATCH (b {name: 'Gus'})<-[r]-(a) RETURN a.name, b.name"))
+        assert len(result) == 1
+        assert result[0]["a.name"] == "Alix"
+        assert result[0]["b.name"] == "Gus"
+
+    def test_target_property_filter_count(self, db):
+        """count(r) with target property filter must not return ALL edges."""
+        db.execute_cypher(
+            "CREATE (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}), "
+            "(c:Person {name: 'Vincent'})"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}) CREATE (a)-[:KNOWS]->(b)"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Vincent'}) CREATE (a)-[:KNOWS]->(c)"
+        )
+
+        result = list(db.execute_cypher("MATCH ()-[r]->(o {name: 'Gus'}) RETURN count(r) AS cnt"))
+        assert len(result) == 1
+        assert result[0]["cnt"] == 1
+
+    def test_target_property_filter_no_match(self, db):
+        """Target property filter that matches nothing should return 0 rows."""
+        db.execute_cypher("CREATE (:Person {name: 'Alix'})-[:KNOWS]->(:Person {name: 'Gus'})")
+
+        result = list(
+            db.execute_cypher("MATCH ()-[r]->(o {name: 'Nobody'}) RETURN count(r) AS cnt")
+        )
+        assert len(result) == 1
+        assert result[0]["cnt"] == 0
+
+    def test_edge_property_filter(self, db):
+        """Edge property filter -[r {since: 2020}]-> should filter by edge properties."""
+        db.execute_cypher(
+            "CREATE (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}), "
+            "(c:Person {name: 'Vincent'})"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (b:Person {name: 'Gus'}) "
+            "CREATE (a)-[:KNOWS {since: 2020}]->(b)"
+        )
+        db.execute_cypher(
+            "MATCH (a:Person {name: 'Alix'}), (c:Person {name: 'Vincent'}) "
+            "CREATE (a)-[:KNOWS {since: 2023}]->(c)"
+        )
+
+        result = list(db.execute_cypher("MATCH (a)-[r {since: 2020}]->(b) RETURN a.name, b.name"))
+        assert len(result) == 1
+        assert result[0]["a.name"] == "Alix"
+        assert result[0]["b.name"] == "Gus"

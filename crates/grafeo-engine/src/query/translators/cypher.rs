@@ -10,11 +10,12 @@ use super::common::{
 };
 use crate::query::plan::{
     AddLabelOp, AggregateExpr, AggregateFunction, AggregateOp, ApplyOp, BinaryOp, CallProcedureOp,
-    CountExpr, CreateEdgeOp, CreateNodeOp, DeleteNodeOp, ExpandDirection, ExpandOp, JoinCondition,
-    JoinOp, JoinType, LeftJoinOp, ListPredicateKind, LoadDataFormat, LoadDataOp, LogicalExpression,
-    LogicalOperator, LogicalPlan, MapProjectionEntry, MergeOp, MergeRelationshipOp, NodeScanOp,
-    ParameterScanOp, PathMode, ProcedureYield, ProjectOp, Projection, RemoveLabelOp, ReturnItem,
-    SetPropertyOp, ShortestPathOp, SortKey, SortOrder, UnaryOp, UnionOp, UnwindOp,
+    CountExpr, CreateEdgeOp, CreateNodeOp, DeleteEdgeOp, DeleteNodeOp, ExpandDirection, ExpandOp,
+    JoinCondition, JoinOp, JoinType, LeftJoinOp, ListPredicateKind, LoadDataFormat, LoadDataOp,
+    LogicalExpression, LogicalOperator, LogicalPlan, MapProjectionEntry, MergeOp,
+    MergeRelationshipOp, NodeScanOp, ParameterScanOp, PathMode, ProcedureYield, ProjectOp,
+    Projection, RemoveLabelOp, ReturnItem, SetPropertyOp, ShortestPathOp, SortKey, SortOrder,
+    UnaryOp, UnionOp, UnwindOp,
 };
 use grafeo_adapters::query::cypher::{self, ast};
 use grafeo_common::types::Value;
@@ -784,7 +785,7 @@ impl CypherTranslator {
                 LogicalExpression::FunctionCall {
                     name: "hasLabel".into(),
                     args: vec![
-                        LogicalExpression::Variable(to_variable),
+                        LogicalExpression::Variable(to_variable.clone()),
                         LogicalExpression::Literal(Value::from(label)),
                     ],
                     distinct: false,
@@ -794,9 +795,23 @@ impl CypherTranslator {
             expand
         };
 
+        // Apply property filters on the edge: -[r {since: 2020}]->
+        if !rel.properties.is_empty()
+            && let Some(ref ev) = rel.variable
+        {
+            let predicate = self.build_property_predicate(ev, &rel.properties)?;
+            result = wrap_filter(result, predicate);
+        }
+
         // Apply inline WHERE clause from relationship pattern: -[r WHERE expr]->
         if let Some(where_expr) = &rel.where_clause {
             let predicate = self.translate_expression(where_expr)?;
+            result = wrap_filter(result, predicate);
+        }
+
+        // Apply property filters on the target node: ()-[r]->(o {id: "X"})
+        if !rel.target.properties.is_empty() {
+            let predicate = self.build_property_predicate(&to_variable, &rel.target.properties)?;
             result = wrap_filter(result, predicate);
         }
 
@@ -1800,12 +1815,18 @@ impl CypherTranslator {
         // Delete each expression (typically variables)
         for expr in &delete_clause.expressions {
             if let ast::Expression::Variable(var) = expr {
-                // Check if it's a node or edge - for simplicity, try node first
-                plan = LogicalOperator::DeleteNode(DeleteNodeOp {
-                    variable: var.clone(),
-                    detach: delete_clause.detach,
-                    input: Box::new(plan),
-                });
+                if self.is_edge_variable(var) {
+                    plan = LogicalOperator::DeleteEdge(DeleteEdgeOp {
+                        variable: var.clone(),
+                        input: Box::new(plan),
+                    });
+                } else {
+                    plan = LogicalOperator::DeleteNode(DeleteNodeOp {
+                        variable: var.clone(),
+                        detach: delete_clause.detach,
+                        input: Box::new(plan),
+                    });
+                }
             } else {
                 return Err(Error::Query(QueryError::new(
                     QueryErrorKind::Semantic,

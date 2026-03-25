@@ -41,8 +41,8 @@ md5 = { workspace = true, optional = true }
 sha1 = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 
-# Tracing
-tracing.workspace = true
+# Tracing (optional, zero-cost when disabled)
+tracing = { workspace = true, optional = true }
 
 # Embedding (optional, for ONNX embedding generation)
 ort = { version = "2.0.0-rc.12", optional = true, default-features = false, features = ["std", "ndarray", "load-dynamic", "api-24"] }
@@ -81,7 +81,7 @@ storage = ["wal", "grafeo-file", "spill", "mmap"]  # Persistent storage (WAL, si
 # Named profiles (ecosystem-aligned)
 embedded = ["gql", "ai", "algos", "parallel", "regex", "jsonl-import"]  # Python libs, MCP, in-process
 browser = ["gql", "regex-lite"]  # WASM / grafeo-web
-server = ["full", "metrics"]  # grafeo-server
+server = ["full", "metrics", "tracing"]  # grafeo-server
 full = ["languages", "ai", "rdf", "parallel", "algos", "storage", "jsonl-import", "parquet-import"]
 
 # Data import
@@ -95,6 +95,7 @@ hybrid-search = ["grafeo-core/hybrid-search", "text-index", "vector-index"]  # C
 cdc = []  # Change data capture with history API
 metrics = []  # Lock-free query, transaction, and session metrics
 embed = ["ort", "tokenizers", "hf-hub"]  # ONNX embedding generation (opt-in, adds ~17MB)
+tracing = ["dep:tracing", "grafeo-common/tracing", "grafeo-adapters/tracing"]  # Observability spans and events
 
 # Testing utilities (zero overhead when disabled)
 testing-crash-injection = ["grafeo-core/testing-crash-injection"]  # Crash injection for recovery testing

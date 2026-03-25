@@ -105,7 +105,8 @@ impl HashKey {
                 HashKey::Composite(items.iter().map(HashKey::from_value).collect())
             }
             Value::Map(map) => {
-                let mut keys: Vec<_> = map
+                // BTreeMap::iter() visits entries in ascending key order, so no sort needed.
+                let keys: Vec<_> = map
                     .iter()
                     .map(|(k, v)| {
                         HashKey::Composite(vec![
@@ -114,7 +115,6 @@ impl HashKey {
                         ])
                     })
                     .collect();
-                keys.sort();
                 HashKey::Composite(keys)
             }
             Value::Vector(v) => {
@@ -129,6 +129,15 @@ impl HashKey {
                 let mut parts: Vec<_> = nodes.iter().map(HashKey::from_value).collect();
                 parts.extend(edges.iter().map(HashKey::from_value));
                 HashKey::Composite(parts)
+            }
+            // CRDT counters are opaque keys; hash by total logical value.
+            Value::GCounter(counts) => {
+                HashKey::Int64(counts.values().copied().map(|v| v as i64).sum())
+            }
+            Value::OnCounter { pos, neg } => {
+                let p: i64 = pos.values().copied().map(|v| v as i64).sum();
+                let n: i64 = neg.values().copied().map(|v| v as i64).sum();
+                HashKey::Int64(p - n)
             }
         }
     }
@@ -1158,5 +1167,95 @@ mod tests {
 
         results.sort_unstable();
         assert_eq!(results, vec![1, 3]);
+    }
+
+    #[test]
+    fn test_hash_key_from_map() {
+        use grafeo_common::types::{PropertyKey, Value};
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let mut map = BTreeMap::new();
+        map.insert(PropertyKey::new("key"), Value::Int64(42));
+        let v = Value::Map(Arc::new(map));
+        let key = HashKey::from_value(&v);
+        // BTreeMap iterates in ascending key order, result is a Composite
+        assert!(matches!(key, HashKey::Composite(_)));
+
+        // Two maps with the same content produce the same hash key
+        let mut map2 = BTreeMap::new();
+        map2.insert(PropertyKey::new("key"), Value::Int64(42));
+        let v2 = Value::Map(Arc::new(map2));
+        assert_eq!(HashKey::from_value(&v), HashKey::from_value(&v2));
+    }
+
+    #[test]
+    fn test_hash_key_from_map_empty() {
+        use grafeo_common::types::Value;
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+
+        let v = Value::Map(Arc::new(BTreeMap::new()));
+        let key = HashKey::from_value(&v);
+        assert_eq!(key, HashKey::Composite(vec![]));
+    }
+
+    #[test]
+    fn test_hash_key_from_gcounter() {
+        use grafeo_common::types::Value;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let mut counts = HashMap::new();
+        counts.insert("node-a".to_string(), 5u64);
+        counts.insert("node-b".to_string(), 3u64);
+        let v = Value::GCounter(Arc::new(counts));
+        // GCounter hashes to sum of all values (5 + 3 = 8)
+        assert_eq!(HashKey::from_value(&v), HashKey::Int64(8));
+    }
+
+    #[test]
+    fn test_hash_key_from_gcounter_empty() {
+        use grafeo_common::types::Value;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let v = Value::GCounter(Arc::new(HashMap::new()));
+        assert_eq!(HashKey::from_value(&v), HashKey::Int64(0));
+    }
+
+    #[test]
+    fn test_hash_key_from_oncounter() {
+        use grafeo_common::types::Value;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let mut pos = HashMap::new();
+        pos.insert("node-a".to_string(), 10u64);
+        let mut neg = HashMap::new();
+        neg.insert("node-a".to_string(), 3u64);
+        let v = Value::OnCounter {
+            pos: Arc::new(pos),
+            neg: Arc::new(neg),
+        };
+        // OnCounter hashes to pos_sum - neg_sum = 10 - 3 = 7
+        assert_eq!(HashKey::from_value(&v), HashKey::Int64(7));
+    }
+
+    #[test]
+    fn test_hash_key_from_oncounter_balanced() {
+        use grafeo_common::types::Value;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let mut pos = HashMap::new();
+        pos.insert("r".to_string(), 5u64);
+        let mut neg = HashMap::new();
+        neg.insert("r".to_string(), 5u64);
+        let v = Value::OnCounter {
+            pos: Arc::new(pos),
+            neg: Arc::new(neg),
+        };
+        assert_eq!(HashKey::from_value(&v), HashKey::Int64(0));
     }
 }

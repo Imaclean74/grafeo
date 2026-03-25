@@ -14,9 +14,10 @@ impl super::GrafeoDB {
     {
         let session = self.session();
         let result = func(&session);
-        // Sync graph state back, even on error (USE GRAPH may have succeeded
-        // before a subsequent query failed in the same session).
+        // Sync graph and schema state back, even on error (the session command may
+        // have succeeded before a subsequent query failed in the same session).
         *self.current_graph.write() = session.current_graph();
+        *self.current_schema.write() = session.current_schema();
         result
     }
 

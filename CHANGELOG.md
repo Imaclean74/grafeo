@@ -2,7 +2,26 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.25] - Unreleased
+## [0.5.25] - 2026-03-25
+
+### Added
+
+- **RDF CDC bridge** (`cdc` + `rdf` features): SPARQL `INSERT DATA`, `DELETE DATA`, and `DELETE/INSERT WHERE` mutations now emit `ChangeEvent` records to the CDC log alongside LPG mutations. Triple events carry N-Triples-encoded subject/predicate/object/graph terms and appear in `changes_between()` and `history()` with `EntityId::Triple`. Enables `GET /changes` and `POST /sync` to surface RDF mutations to offline-first clients
+- **CDC structural metadata**: `ChangeEvent` now carries `labels` on node Create events and `edge_type`/`src_id`/`dst_id` on edge Create events, giving sync clients the full information needed to replay creates on a remote database
+- **CRDT counter value types**: `Value::GCounter(HashMap<String, u64>)` and `Value::OnCounter { pos, neg }` added as first-class variants. G-Counter merge is per-replica max (grows monotonically); ON-Counter merge is per-replica max over positive and negative maps separately. All bindings surface these as structured objects: `{$gcounter: {...replicas}, $value: total}` and `{$pncounter: true, $value: net}`. Spill serializer encodes them as opaque TAG_STRING for backward compatibility
+
+### Changed
+
+- **Tracing is now opt-in** (`tracing` feature flag): observability spans and events compile to zero-cost no-ops when disabled. Included in the `server` profile, excluded from `embedded`/`browser`/default. Eliminates ~29% overhead on micro-benchmarks like single-node insert
+
+### Fixed
+
+- **Cypher target node property filter ignored**: `MATCH ()-[r]->(o {name: 'X'})` and similar patterns with inline property maps on the target node returned unfiltered results, ignoring the property constraint. The Cypher translator now applies target node property predicates and edge property predicates after the expand operator, matching GQL behavior (Discussion #155)
+- **Schema isolation for types**: `SHOW GRAPH TYPES`, `SHOW NODE TYPES` and `SHOW EDGE TYPES` now respect `SESSION SET SCHEMA`, returning only types belonging to the current schema. `CREATE`, `DROP` and `ALTER` type commands also scope to the active schema. `DROP SCHEMA` now rejects non-empty schemas that still contain types (#167)
+- **`CREATE GRAPH TYPED` regression**: fixed `CREATE GRAPH foo TYPED bar` failing with `TypeNotFound` when a session schema is set; the type name now resolves relative to the current schema as expected
+- **Cross-schema type references**: `CREATE GRAPH foo TYPED my_schema.type_name` now works from any session schema, allowing graphs to be bound to types defined in a different schema
+- **Schema context in bindings**: all language bindings (Python, Node.js, C, WASM) now expose `set_schema` / `reset_schema` / `current_schema` methods that persist across `execute()` calls, mirroring the existing graph context API
+- **Temporal feature benchmark regression**: optimized `VersionLog::at()` with a last-entry fast path (O(1) for current-epoch reads instead of O(log N) binary search), eliminated double HashMap lookup in `TransactionManager::record_write`, and added current-epoch shortcuts in `get_node_at_epoch`/`get_edge_at_epoch` to use `latest()` instead of epoch-based lookup. Reduces temporal feature overhead from ~16% to ~6% on read benchmarks.
 
 ## [0.5.24] - 2026-03-24
 

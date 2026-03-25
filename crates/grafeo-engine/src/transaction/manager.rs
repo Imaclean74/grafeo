@@ -181,23 +181,9 @@ impl TransactionManager {
     ) -> Result<()> {
         let entity = entity.into();
         let mut txns = self.transactions.write();
-        let info = txns.get(&transaction_id).ok_or_else(|| {
-            Error::Transaction(TransactionError::InvalidState(
-                "Transaction not found".to_string(),
-            ))
-        })?;
 
-        if info.state != TransactionState::Active {
-            return Err(Error::Transaction(TransactionError::InvalidState(
-                "Transaction is not active".to_string(),
-            )));
-        }
-
-        // First-writer-wins: reject if another active transaction already
-        // wrote to the same entity. This prevents interleaved PENDING
-        // entries in VersionLogs that cannot be rolled back per-transaction.
-        // Skip the scan when only one transaction is active (common case for
-        // auto-commit): there is nobody to conflict with.
+        // First-writer-wins conflict detection. Skip the scan when only one
+        // transaction is active (common case for auto-commit).
         if self.active_count.load(Ordering::Relaxed) > 1 {
             for (other_tx, other_info) in txns.iter() {
                 if *other_tx != transaction_id
@@ -211,8 +197,19 @@ impl TransactionManager {
             }
         }
 
-        // Safe to record: re-borrow mutably
-        let info = txns.get_mut(&transaction_id).expect("checked above");
+        // Single lookup: get_mut for both state check and write_set insert
+        let info = txns.get_mut(&transaction_id).ok_or_else(|| {
+            Error::Transaction(TransactionError::InvalidState(
+                "Transaction not found".to_string(),
+            ))
+        })?;
+
+        if info.state != TransactionState::Active {
+            return Err(Error::Transaction(TransactionError::InvalidState(
+                "Transaction is not active".to_string(),
+            )));
+        }
+
         info.write_set.insert(entity);
         Ok(())
     }

@@ -268,6 +268,21 @@ impl EquiDepthHistogram {
 }
 
 /// Counts distinct values in a sorted slice.
+/// Counts the number of top-level AND conjuncts in an expression.
+///
+/// For `(A AND B) AND (C AND D)` returns 4; for a single non-AND expression
+/// returns 1. Used to estimate selectivity of multi-predicate join conditions.
+fn count_and_conjuncts(expr: &LogicalExpression) -> usize {
+    match expr {
+        LogicalExpression::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        } => count_and_conjuncts(left) + count_and_conjuncts(right),
+        _ => 1,
+    }
+}
+
 fn count_distinct(sorted_values: &[f64]) -> u64 {
     if sorted_values.is_empty() {
         return 0;
@@ -859,12 +874,24 @@ impl CardinalityEstimator {
     /// A left outer join preserves all left rows, so the output is at least
     /// `left_cardinality`. When the right side matches, the output may be
     /// larger (one left row can match multiple right rows).
+    ///
+    /// When the join carries a cross-side condition (null-safe predicates),
+    /// each AND-conjunct reduces the selectivity estimate.
     fn estimate_left_join(&self, lj: &LeftJoinOp) -> f64 {
         let left_card = self.estimate(&lj.left);
         let right_card = self.estimate(&lj.right);
 
+        // Adjust selectivity based on the number of AND conjuncts in the
+        // cross-side condition: each equality reduces match probability.
+        let condition_selectivity = if let Some(cond) = &lj.condition {
+            let n = count_and_conjuncts(cond);
+            self.default_selectivity.powi(n as i32)
+        } else {
+            self.default_selectivity
+        };
+
         // Estimate as inner join cardinality, but guaranteed at least left_card
-        let inner_estimate = left_card * right_card * self.default_selectivity;
+        let inner_estimate = left_card * right_card * condition_selectivity;
         inner_estimate.max(left_card).max(1.0)
     }
 
@@ -2401,5 +2428,118 @@ mod tests {
         let log = CardinalityEstimator::create_estimation_log();
         assert!(log.entries().is_empty());
         assert!(!log.should_replan());
+    }
+
+    #[test]
+    fn test_equality_selectivity_empty_histogram() {
+        let hist = EquiDepthHistogram::new(vec![]);
+        // Empty histogram returns fixed fallback
+        assert_eq!(hist.equality_selectivity(5.0), 0.01);
+    }
+
+    #[test]
+    fn test_equality_selectivity_value_in_bucket() {
+        let values: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let hist = EquiDepthHistogram::build(&values, 2);
+        let sel = hist.equality_selectivity(3.0);
+        assert!(sel > 0.0);
+        assert!(sel <= 1.0);
+    }
+
+    #[test]
+    fn test_equality_selectivity_value_outside_all_buckets() {
+        let values: Vec<f64> = (1..=10).map(|i| i as f64).collect();
+        let hist = EquiDepthHistogram::build(&values, 2);
+        // Value far outside range
+        let sel = hist.equality_selectivity(9999.0);
+        assert_eq!(sel, 0.001);
+    }
+
+    #[test]
+    fn test_histogram_min_max_empty() {
+        let hist = EquiDepthHistogram::new(vec![]);
+        assert_eq!(hist.min_value(), None);
+        assert_eq!(hist.max_value(), None);
+    }
+
+    #[test]
+    fn test_histogram_min_max_single_bucket() {
+        let hist = EquiDepthHistogram::new(vec![HistogramBucket::new(1.0, 10.0, 5, 5)]);
+        assert_eq!(hist.min_value(), Some(1.0));
+        assert_eq!(hist.max_value(), Some(10.0));
+    }
+
+    #[test]
+    fn test_histogram_min_max_multi_bucket() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0];
+        let hist = EquiDepthHistogram::build(&values, 3);
+        let min = hist.min_value().unwrap();
+        let max = hist.max_value().unwrap();
+        assert!((min - 1.0).abs() < 1e-9, "min should be 1.0, got {min}");
+        assert!(max >= 20.0, "max should be >= last value, got {max}");
+    }
+
+    #[test]
+    fn test_count_and_conjuncts_single_expression() {
+        use crate::query::plan::LogicalExpression;
+        let expr = LogicalExpression::Literal(Value::Bool(true));
+        assert_eq!(count_and_conjuncts(&expr), 1);
+    }
+
+    #[test]
+    fn test_count_and_conjuncts_flat_and() {
+        use crate::query::plan::{BinaryOp, LogicalExpression};
+        let expr = LogicalExpression::Binary {
+            left: Box::new(LogicalExpression::Literal(Value::Bool(true))),
+            op: BinaryOp::And,
+            right: Box::new(LogicalExpression::Literal(Value::Bool(false))),
+        };
+        assert_eq!(count_and_conjuncts(&expr), 2);
+    }
+
+    #[test]
+    fn test_count_and_conjuncts_nested_and() {
+        use crate::query::plan::{BinaryOp, LogicalExpression};
+        let ab = LogicalExpression::Binary {
+            left: Box::new(LogicalExpression::Literal(Value::Bool(true))),
+            op: BinaryOp::And,
+            right: Box::new(LogicalExpression::Literal(Value::Bool(false))),
+        };
+        let cd = LogicalExpression::Binary {
+            left: Box::new(LogicalExpression::Literal(Value::Int64(1))),
+            op: BinaryOp::And,
+            right: Box::new(LogicalExpression::Literal(Value::Int64(2))),
+        };
+        let expr = LogicalExpression::Binary {
+            left: Box::new(ab),
+            op: BinaryOp::And,
+            right: Box::new(cd),
+        };
+        assert_eq!(count_and_conjuncts(&expr), 4);
+    }
+
+    #[test]
+    fn test_count_distinct_empty() {
+        assert_eq!(count_distinct(&[]), 0);
+    }
+
+    #[test]
+    fn test_count_distinct_all_unique() {
+        assert_eq!(count_distinct(&[1.0, 2.0, 3.0, 4.0]), 4);
+    }
+
+    #[test]
+    fn test_count_distinct_with_duplicates() {
+        assert_eq!(count_distinct(&[1.0, 1.0, 2.0, 2.0, 3.0]), 3);
+    }
+
+    #[test]
+    fn test_count_distinct_all_same() {
+        assert_eq!(count_distinct(&[5.0, 5.0, 5.0]), 1);
+    }
+
+    #[test]
+    fn test_count_distinct_single_value() {
+        assert_eq!(count_distinct(&[42.0]), 1);
     }
 }

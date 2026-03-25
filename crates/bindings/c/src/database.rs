@@ -355,6 +355,75 @@ pub extern "C" fn grafeo_free_result(result: *mut GrafeoResult) {
 }
 
 // =========================================================================
+// Schema context
+// =========================================================================
+
+/// Sets the current schema for subsequent execute calls.
+///
+/// Equivalent to `SESSION SET SCHEMA <name>` but persists across calls.
+/// Call `grafeo_reset_schema` to clear it.
+///
+/// # Safety
+/// `db` must be a valid pointer returned by `grafeo_open*`. `name` must be a
+/// valid null-terminated UTF-8 string.
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_set_schema(db: *mut GrafeoDatabase, name: *const c_char) -> GrafeoStatus {
+    if db.is_null() || name.is_null() {
+        set_last_error("Null pointer argument");
+        return GrafeoStatus::ErrorNullPointer;
+    }
+    // SAFETY: Caller guarantees valid pointers.
+    let db = unsafe { &*db };
+    let Ok(name_str) = (unsafe { std::ffi::CStr::from_ptr(name) }).to_str() else {
+        set_last_error("Invalid UTF-8 in schema name");
+        return GrafeoStatus::ErrorInvalidUtf8;
+    };
+    db.inner.read().set_current_schema(Some(name_str));
+    GrafeoStatus::Ok
+}
+
+/// Clears the current schema context.
+///
+/// Subsequent execute calls will use the default (no-schema) namespace.
+///
+/// # Safety
+/// `db` must be a valid pointer returned by `grafeo_open*`.
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_reset_schema(db: *mut GrafeoDatabase) -> GrafeoStatus {
+    if db.is_null() {
+        set_last_error("Null database pointer");
+        return GrafeoStatus::ErrorNullPointer;
+    }
+    // SAFETY: Caller guarantees valid pointer.
+    let db = unsafe { &*db };
+    db.inner.read().set_current_schema(None);
+    GrafeoStatus::Ok
+}
+
+/// Returns the current schema name, or NULL if no schema is set.
+///
+/// The returned string is valid until the next call that modifies schema context
+/// on this database. Copy it if you need it to outlive the call.
+///
+/// # Safety
+/// `db` must be a valid pointer returned by `grafeo_open*`.
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_current_schema(db: *const GrafeoDatabase) -> *const c_char {
+    if db.is_null() {
+        return std::ptr::null();
+    }
+    // SAFETY: Caller guarantees valid pointer.
+    let db = unsafe { &*db };
+    match db.inner.read().current_schema() {
+        Some(name) => match std::ffi::CString::new(name) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null(),
+        },
+        None => std::ptr::null(),
+    }
+}
+
+// =========================================================================
 // Node CRUD
 // =========================================================================
 

@@ -1,5 +1,6 @@
 //! Index management for GrafeoDB (property, vector, and text indexes).
 
+use grafeo_common::grafeo_info;
 #[cfg(any(feature = "vector-index", feature = "text-index"))]
 use std::sync::Arc;
 
@@ -169,7 +170,7 @@ impl super::GrafeoDB {
                 }
 
                 let _ = (m, ef_construction);
-                tracing::info!(
+                grafeo_info!(
                     "Empty vector index created: :{label}({property}) - 0 vectors, {d} dimensions, metric={metric_name}",
                     metric_name = metric.name()
                 );
@@ -208,7 +209,7 @@ impl super::GrafeoDB {
         // Suppress unused variable warnings when vector-index is off
         let _ = (m, ef_construction);
 
-        tracing::info!(
+        grafeo_info!(
             "Vector index created: :{label}({property}) - {vector_count} vectors, {dims} dimensions, metric={metric_name}",
             metric_name = metric.name()
         );
@@ -227,7 +228,7 @@ impl super::GrafeoDB {
     pub fn drop_vector_index(&self, label: &str, property: &str) -> bool {
         let removed = self.store.remove_vector_index(label, property);
         if removed {
-            tracing::info!("Vector index dropped: :{label}({property})");
+            grafeo_info!("Vector index dropped: :{label}({property})");
         }
         removed
     }

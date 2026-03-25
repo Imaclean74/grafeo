@@ -24,6 +24,7 @@ mod search;
 #[cfg(feature = "wal")]
 pub(crate) mod wal_store;
 
+use grafeo_common::grafeo_error;
 #[cfg(feature = "wal")]
 use std::path::Path;
 use std::sync::Arc;
@@ -120,6 +121,10 @@ pub struct GrafeoDB {
     /// When set, each call to `session()` pre-configures the session to this graph.
     /// Updated after every one-shot `execute()` to reflect `USE GRAPH` / `SESSION RESET`.
     current_graph: RwLock<Option<String>>,
+    /// Persistent schema context for one-shot `execute()` calls.
+    /// When set, each call to `session()` pre-configures the session to this schema.
+    /// Updated after every one-shot `execute()` to reflect `SESSION SET SCHEMA` / `SESSION RESET`.
+    current_schema: RwLock<Option<String>>,
     /// Whether this database is open in read-only mode.
     /// When true, sessions automatically enforce read-only transactions.
     read_only: bool,
@@ -439,6 +444,7 @@ impl GrafeoDB {
             #[cfg(feature = "metrics")]
             metrics: Some(Arc::new(crate::metrics::MetricsRegistry::new())),
             current_graph: RwLock::new(None),
+            current_schema: RwLock::new(None),
             read_only: is_read_only,
         })
     }
@@ -511,6 +517,7 @@ impl GrafeoDB {
             #[cfg(feature = "metrics")]
             metrics: Some(Arc::new(crate::metrics::MetricsRegistry::new())),
             current_graph: RwLock::new(None),
+            current_schema: RwLock::new(None),
             read_only: false,
         })
     }
@@ -950,6 +957,11 @@ impl GrafeoDB {
             session.use_graph(graph);
         }
 
+        // Propagate persistent schema context to the new session
+        if let Some(ref schema) = *self.current_schema.read() {
+            session.set_schema(schema);
+        }
+
         // Suppress unused_mut when cdc/wal are disabled
         let _ = &mut session;
 
@@ -972,6 +984,23 @@ impl GrafeoDB {
     /// Pass `None` to reset to the default graph.
     pub fn set_current_graph(&self, name: Option<&str>) {
         *self.current_graph.write() = name.map(ToString::to_string);
+    }
+
+    /// Returns the current schema name, if any.
+    ///
+    /// This is the persistent schema context used by one-shot `execute()` calls.
+    /// It is updated whenever `execute()` encounters `SESSION SET SCHEMA` or `SESSION RESET`.
+    #[must_use]
+    pub fn current_schema(&self) -> Option<String> {
+        self.current_schema.read().clone()
+    }
+
+    /// Sets the current schema context for subsequent one-shot `execute()` calls.
+    ///
+    /// This is equivalent to running `SESSION SET SCHEMA <name>` but without creating
+    /// a session. Pass `None` to clear the schema context.
+    pub fn set_current_schema(&self, name: Option<&str>) {
+        *self.current_schema.write() = name.map(ToString::to_string);
     }
 
     /// Returns the adaptive execution configuration.
@@ -1291,7 +1320,7 @@ impl GrafeoDB {
 impl Drop for GrafeoDB {
     fn drop(&mut self) {
         if let Err(e) = self.close() {
-            tracing::error!("Error closing database: {}", e);
+            grafeo_error!("Error closing database: {}", e);
         }
     }
 }
