@@ -4,6 +4,12 @@
 //! [`tracing`] crate macros. When disabled they compile to nothing, giving
 //! zero overhead for profiles like `embedded` and `browser`.
 
+/// Zero-sized span guard returned when tracing is disabled.
+///
+/// Allows `let _span = grafeo_debug_span!(...)` to compile without
+/// triggering clippy's `let_unit_value` lint.
+pub struct NoopSpan;
+
 /// Enters an info-level span. Returns a guard that keeps the span open.
 #[macro_export]
 macro_rules! grafeo_info_span {
@@ -11,7 +17,7 @@ macro_rules! grafeo_info_span {
         #[cfg(feature = "tracing")]
         { ::tracing::info_span!($($arg)*).entered() }
         #[cfg(not(feature = "tracing"))]
-        { }
+        { $crate::tracing_macros::NoopSpan }
     }};
 }
 
@@ -22,7 +28,7 @@ macro_rules! grafeo_debug_span {
         #[cfg(feature = "tracing")]
         { ::tracing::debug_span!($($arg)*).entered() }
         #[cfg(not(feature = "tracing"))]
-        { }
+        { $crate::tracing_macros::NoopSpan }
     }};
 }
 
