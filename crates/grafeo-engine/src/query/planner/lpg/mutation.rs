@@ -27,6 +27,17 @@ impl super::Planner {
             (None, vec![])
         };
 
+        // If the variable already exists in input columns and no labels/properties
+        // are specified, this is a reference to an existing node (e.g., from MATCH).
+        // Skip creating a new node and just pass through.
+        if columns.contains(&create.variable)
+            && create.labels.is_empty()
+            && create.properties.is_empty()
+            && let Some(op) = input_op
+        {
+            return Ok((op, columns));
+        }
+
         // Output column for the created node
         let output_column = columns.len();
         columns.push(create.variable.clone());
@@ -983,9 +994,11 @@ impl super::Planner {
                 ))
             })?;
 
-        // Output schema for update count
-        let output_schema = vec![LogicalType::Int64];
-        let output_columns = vec!["labels_added".to_string()];
+        // Preserve input columns (like SetPropertyOperator) and append update count
+        let mut output_schema = self.derive_schema_from_columns(&columns);
+        output_schema.push(LogicalType::Int64);
+        let mut output_columns = columns.clone();
+        output_columns.push("labels_added".to_string());
 
         let mut op = AddLabelOperator::new(
             Arc::clone(&self.store),
@@ -1020,9 +1033,11 @@ impl super::Planner {
                 ))
             })?;
 
-        // Output schema for update count
-        let output_schema = vec![LogicalType::Int64];
-        let output_columns = vec!["labels_removed".to_string()];
+        // Preserve input columns (like SetPropertyOperator) and append update count
+        let mut output_schema = self.derive_schema_from_columns(&columns);
+        output_schema.push(LogicalType::Int64);
+        let mut output_columns = columns.clone();
+        output_columns.push("labels_removed".to_string());
 
         let mut op = RemoveLabelOperator::new(
             Arc::clone(&self.store),
@@ -1217,7 +1232,24 @@ impl super::Planner {
                             _ => None,
                         }
                     }
-                    "date" | "todate" => {
+                    "timestamp" => {
+                        if !args.is_empty() {
+                            return None;
+                        }
+                        Some(Value::Int64(
+                            grafeo_common::types::Timestamp::now().as_millis(),
+                        ))
+                    }
+                    "now" | "current_timestamp" | "currenttimestamp" => {
+                        if !args.is_empty() {
+                            return None;
+                        }
+                        Some(Value::Timestamp(grafeo_common::types::Timestamp::now()))
+                    }
+                    "date" | "todate" | "current_date" | "currentdate" => {
+                        if args.is_empty() {
+                            return Some(Value::Date(grafeo_common::types::Date::today()));
+                        }
                         if args.len() != 1 {
                             return None;
                         }
@@ -1229,7 +1261,10 @@ impl super::Planner {
                             _ => None,
                         }
                     }
-                    "time" | "totime" | "local_time" => {
+                    "time" | "totime" | "local_time" | "current_time" | "currenttime" => {
+                        if args.is_empty() {
+                            return Some(Value::Time(grafeo_common::types::Time::now()));
+                        }
                         if args.len() != 1 {
                             return None;
                         }
@@ -1242,6 +1277,9 @@ impl super::Planner {
                         }
                     }
                     "datetime" | "localdatetime" | "local_datetime" | "todatetime" => {
+                        if args.is_empty() {
+                            return Some(Value::Timestamp(grafeo_common::types::Timestamp::now()));
+                        }
                         if args.len() != 1 {
                             return None;
                         }

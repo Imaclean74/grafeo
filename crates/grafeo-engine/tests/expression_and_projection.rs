@@ -1805,3 +1805,70 @@ fn test_gql_profile_returns_metrics() {
         "PROFILE should return execution metrics"
     );
 }
+
+// ── Regression: timestamp() (#179) ──────────────────────────────────────────
+
+#[test]
+fn test_timestamp_returns_millis() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    let r = session.execute("RETURN timestamp() AS ts").unwrap();
+    assert_eq!(r.row_count(), 1);
+    match &r.rows[0][0] {
+        Value::Int64(ts) => assert!(*ts > 1_577_836_800_000, "timestamp too small: {ts}"),
+        other => panic!("expected Int64, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_set_property_to_timestamp() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    session.execute("INSERT (:Event {name: 'launch'})").unwrap();
+    session
+        .execute("MATCH (e:Event) SET e.created_at = timestamp()")
+        .unwrap();
+    let r = session
+        .execute("MATCH (e:Event) RETURN e.created_at")
+        .unwrap();
+    assert_eq!(r.row_count(), 1);
+    match &r.rows[0][0] {
+        Value::Int64(ts) => assert!(*ts > 1_577_836_800_000),
+        other => panic!("expected Int64, got {other:?}"),
+    }
+}
+
+// ── Regression: startNode/endNode (#180) ────────────────────────────────────
+
+#[test]
+fn test_start_node_end_node_gql() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    session
+        .execute("INSERT (:Person {name: 'Alix'})-[:KNOWS]->(:Person {name: 'Gus'})")
+        .unwrap();
+    let r = session
+        .execute("MATCH ()-[r:KNOWS]->() RETURN startNode(r) AS sn, endNode(r) AS en")
+        .unwrap();
+    assert_eq!(r.row_count(), 1);
+    assert!(matches!(&r.rows[0][0], Value::Int64(_)));
+    assert!(matches!(&r.rows[0][1], Value::Int64(_)));
+}
+
+#[test]
+#[cfg(feature = "cypher")]
+fn test_start_node_equals_source_id() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+    session
+        .execute_cypher("CREATE (:Person {name: 'Alix'})-[:KNOWS]->(:Person {name: 'Gus'})")
+        .unwrap();
+    let r = session
+        .execute_cypher(
+            "MATCH (s)-[r:KNOWS]->(t) RETURN startNode(r) = id(s) AS src_match, endNode(r) = id(t) AS dst_match",
+        )
+        .unwrap();
+    assert_eq!(r.row_count(), 1);
+    assert_eq!(r.rows[0][0], Value::Bool(true), "startNode(r) != id(s)");
+    assert_eq!(r.rows[0][1], Value::Bool(true), "endNode(r) != id(t)");
+}

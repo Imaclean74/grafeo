@@ -1768,6 +1768,34 @@ impl ExpressionPredicate {
                 }
                 Some(Value::Bool(false))
             }
+            "startnode" | "start_node" => {
+                // startNode(edge) - returns the source node ID
+                if args.len() != 1 {
+                    return None;
+                }
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    let edge_id = col.get_edge_id(row)?;
+                    let edge = self.resolve_edge(edge_id)?;
+                    return Some(Value::Int64(edge.src.0 as i64));
+                }
+                None
+            }
+            "endnode" | "end_node" => {
+                // endNode(edge) - returns the destination node ID
+                if args.len() != 1 {
+                    return None;
+                }
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    let edge_id = col.get_edge_id(row)?;
+                    let edge = self.resolve_edge(edge_id)?;
+                    return Some(Value::Int64(edge.dst.0 as i64));
+                }
+                None
+            }
             "issource" => {
                 // isSource(node, edge) - checks if node is the source of edge
                 if args.len() != 2 {
@@ -2775,6 +2803,9 @@ impl ExpressionPredicate {
             "now" | "current_timestamp" | "currenttimestamp" => {
                 Some(Value::Timestamp(grafeo_common::types::Timestamp::now()))
             }
+            "timestamp" => Some(Value::Int64(
+                grafeo_common::types::Timestamp::now().as_millis(),
+            )),
             // Component extraction
             "year" => {
                 let val = self.eval_expr(args.first()?, chunk, row)?;
