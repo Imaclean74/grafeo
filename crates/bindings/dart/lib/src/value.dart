@@ -79,10 +79,16 @@ List<Map<String, dynamic>> parseRows(String json) {
   if (decoded is! List) return [];
   return decoded.map<Map<String, dynamic>>((row) {
     if (row is! Map) return <String, dynamic>{};
-    return {
-      for (final entry in row.entries)
-        entry.key.toString(): _decodeValue(entry.value),
-    };
+    // First, check if the row itself is a temporal marker map.
+    // _decodeMap returns a scalar (Duration, DateTime, etc.) for markers.
+    final asDecoded = _decodeMap(row);
+    if (asDecoded is! Map) {
+      // Wrap the decoded scalar so the row stays Map<String, dynamic>.
+      return <String, dynamic>{row.keys.first.toString(): asDecoded};
+    }
+    return (asDecoded as Map).map<String, dynamic>(
+      (key, value) => MapEntry(key.toString(), value),
+    );
   }).toList();
 }
 
