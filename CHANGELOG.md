@@ -2,7 +2,7 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.27] - Unreleased
+## [0.5.27] - 2026-03-27
 
 C FFI overhaul, Dart expansion, binding-wide usability audit, grafeo-memory engine support.
 
@@ -16,7 +16,7 @@ C FFI overhaul, Dart expansion, binding-wide usability audit, grafeo-memory engi
 - **`batch_create_nodes_with_props`**: engine + Python method accepting list of property dicts with mixed types including vectors
 - **Temporal property versioning API** (`temporal` feature): `get_node_property_at_epoch`, `get_node_property_history`, `get_all_node_property_history`
 - **Node.js user guide**: 5 pages covering database, queries, CRUD, transactions, results
-- **C# P/Invoke completeness**: 11 missing native declarations added
+- **C# P/Invoke completeness**: 11 missing native declarations added, `Transaction.ExecuteLanguage()` with async variant
 - **Crash safety testing**: new crash injection point, 6 new recovery/concurrency tests
 - **Python API docs**: 45+ undocumented methods added to API reference (DataFrame, batch, search, algorithms, temporal, admin)
 
@@ -29,7 +29,7 @@ C FFI overhaul, Dart expansion, binding-wide usability audit, grafeo-memory engi
 - **C# double-rollback after commit**: `TransactionHandle` now skips rollback when committed
 - **Go stale `grafeo.h`**: 40+ missing declarations prevented compilation
 - **Go column order random**: replaced map iteration with ordered JSON key parsing
-- **Go thread-local error race**: added `runtime.LockOSThread()` around C calls
+- **Go thread-local error race**: added `runtime.LockOSThread()` around all C calls (including `GetNodeLabels`, `HasPropertyIndex`)
 - **Node.js stale TypeScript definitions**: 6 missing methods, improved `rows()` type
 - **Dart iOS loader**: missing `Platform.isIOS` branch
 - **Dart Duration decoding**: returned raw ISO string instead of `Duration` object
@@ -39,8 +39,9 @@ C FFI overhaul, Dart expansion, binding-wide usability audit, grafeo-memory engi
 - **WASM docs**: `createVectorIndex` wrongly listed as unavailable
 - **Vector search filter optimization**: operator filters ($gt, $lt, etc.) now scan only the narrowed allowlist instead of all nodes
 - **Single-file storage silent failure** (#185): no file created when WAL disabled
-- **C API `batch_create_nodes` missing `out_count`** (#185)
-- **Windows read-only close failure**: skipped `sync_all()` on read-only handles
+- **C API `grafeo_current_schema` memory leak**: returned caller-owned pointer but docs said not to free; now uses thread-local storage
+- **C API `out_count` uninitialized on error**: `vector_search`, `mmr_search`, and `batch_create_nodes` now zero `out_count` before the main operation
+- **Windows read-only file ops failure**: skipped `sync_all()` on read-only handles in both `close()` and `sync()`
 - **Adjacency benchmark regression** (~2x): reduced `SmallVec` inline capacity from 16 to 4
 
 ## [0.5.26] - 2026-03-25
