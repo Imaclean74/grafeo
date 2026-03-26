@@ -7,7 +7,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use grafeo_common::types::{EdgeId, NodeId};
-use grafeo_engine::config::Config;
+use grafeo_engine::config::{Config, StorageFormat};
 use grafeo_engine::database::GrafeoDB;
 
 use crate::error::{GrafeoStatus, set_error, set_last_error, str_from_ptr};
@@ -180,6 +180,32 @@ pub extern "C" fn grafeo_open_read_only(path: *const c_char) -> *mut GrafeoDatab
         return std::ptr::null_mut();
     };
     match GrafeoDB::with_config(Config::read_only(path_str)) {
+        Ok(db) => Box::into_raw(Box::new(GrafeoDatabase {
+            inner: Arc::new(RwLock::new(db)),
+        })),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Open or create a persistent database at `path` using single-file format.
+///
+/// The database is stored as a single `.grafeo` file. This is the recommended
+/// format for embedded use (mobile apps, desktop apps). At rest only the
+/// `.grafeo` file exists; a sidecar `.grafeo.wal/` directory is used during
+/// operation and removed automatically on close.
+///
+/// Returns an opaque pointer, or null on error (check `grafeo_last_error()`).
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_open_single_file(path: *const c_char) -> *mut GrafeoDatabase {
+    let Ok(path_str) = str_from_ptr(path) else {
+        return std::ptr::null_mut();
+    };
+    match GrafeoDB::with_config(
+        Config::persistent(path_str).with_storage_format(StorageFormat::SingleFile),
+    ) {
         Ok(db) => Box::into_raw(Box::new(GrafeoDatabase {
             inner: Arc::new(RwLock::new(db)),
         })),
