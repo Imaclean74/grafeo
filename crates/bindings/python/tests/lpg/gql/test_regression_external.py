@@ -6,6 +6,9 @@ Unicode handling, and query correctness.
 Run: pytest tests/lpg/gql/test_regression_external.py -v
 """
 
+import math
+
+import pytest
 
 # =============================================================================
 # MERGE + UNWIND tuple count
@@ -177,6 +180,30 @@ class TestCollect:
 
 
 # =============================================================================
+# SUM overflow to infinity
+# =============================================================================
+
+
+class TestSumOverflow:
+    """SUM of very large floats must return infinity, not error."""
+
+    def test_sum_overflow(self, db):
+        """Two f64::MAX values should overflow to +Infinity."""
+        max_f64 = 1.7976931348623157e308
+        result = list(
+            db.execute(
+                "UNWIND [$a, $b] AS val RETURN SUM(val) AS total",
+                {"a": max_f64, "b": max_f64},
+            )
+        )
+        assert len(result) == 1
+        total = result[0]["total"]
+        assert math.isinf(total) and total > 0, (
+            f"SUM of two f64::MAX should be +Infinity, got {total}"
+        )
+
+
+# =============================================================================
 # GROUP BY expression order independence
 # =============================================================================
 
@@ -236,6 +263,14 @@ class TestUnicodeEmoji:
         db.execute("INSERT (:City {name: '\u6771\u4eac'})")  # 東京
         result = list(db.execute("MATCH (c:City) RETURN c.name"))
         assert result[0]["c.name"] == "\u6771\u4eac"
+
+    def test_combining_diacritics_roundtrip(self, db):
+        """Combining diacritics (e + U+0301) must survive storage roundtrip."""
+        # "calf" + e + combining acute accent (not the precomposed é)
+        text = "calf\u0065\u0301"
+        db.execute("INSERT (:Word {text: $text})", {"text": text})
+        result = list(db.execute("MATCH (w:Word) RETURN w.text"))
+        assert result[0]["w.text"] == text
 
 
 # =============================================================================
@@ -348,15 +383,11 @@ class TestMergeNullReference:
 
     def test_merge_rel_with_null_source_errors(self, db):
         """OPTIONAL MATCH that matches nothing + MERGE should fail."""
-        import pytest
-
         with pytest.raises(RuntimeError):
             db.execute("OPTIONAL MATCH (n:NonExistent) MERGE (n)-[:R]->(m:Target {name: 'Alix'})")
 
     def test_merge_rel_with_null_target_errors(self, db):
         """NULL target in MERGE relationship should fail."""
-        import pytest
-
         db.execute("INSERT (:Source {name: 'Gus'})")
         with pytest.raises(RuntimeError):
             db.execute(
@@ -368,3 +399,97 @@ class TestMergeNullReference:
         db.execute("MERGE (:Person {name: 'Mia'})")
         result = list(db.execute("MATCH (n:Person {name: 'Mia'}) RETURN n.name"))
         assert len(result) == 1
+
+
+# =============================================================================
+# labels() / type() in aggregation and ORDER BY (#187)
+# =============================================================================
+
+
+class TestIssue187LabelsTypeAggregation:
+    """labels() and type() must work correctly in GROUP BY and ORDER BY."""
+
+    def test_labels_group_by_count(self, db):
+        """GROUP BY labels(n)[0] with COUNT should produce correct groups."""
+        db.create_node(["Person"], {"name": "Alix"})
+        db.create_node(["Person"], {"name": "Gus"})
+        db.create_node(["City"], {"name": "Amsterdam"})
+        result = list(
+            db.execute("MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY label")
+        )
+        assert len(result) == 2
+        assert result[0]["label"] == "City"
+        assert result[0]["cnt"] == 1
+        assert result[1]["label"] == "Person"
+        assert result[1]["cnt"] == 2
+
+    def test_type_group_by_count(self, db):
+        """GROUP BY type(r) with COUNT should produce correct groups."""
+        alix = db.create_node(["Person"], {"name": "Alix"})
+        gus = db.create_node(["Person"], {"name": "Gus"})
+        acme = db.create_node(["Company"], {"name": "Acme"})
+        db.create_edge(alix.id, gus.id, "KNOWS")
+        db.create_edge(alix.id, acme.id, "WORKS_AT")
+        db.create_edge(gus.id, acme.id, "WORKS_AT")
+        result = list(
+            db.execute("MATCH ()-[r]->() RETURN type(r) AS t, count(r) AS cnt ORDER BY t")
+        )
+        assert len(result) == 2
+        assert result[0]["t"] == "KNOWS"
+        assert result[0]["cnt"] == 1
+        assert result[1]["t"] == "WORKS_AT"
+        assert result[1]["cnt"] == 2
+
+    def test_labels_order_by(self, db):
+        """ORDER BY labels(n)[0] sorts by first label alphabetically."""
+        db.create_node(["Person"], {"name": "Alix"})
+        db.create_node(["City"], {"name": "Amsterdam"})
+        result = list(db.execute("MATCH (n) RETURN n.name ORDER BY labels(n)[0]"))
+        assert len(result) == 2
+        # "City" < "Person" alphabetically
+        assert result[0]["n.name"] == "Amsterdam"
+        assert result[1]["n.name"] == "Alix"
+
+    def test_type_order_by(self, db):
+        """ORDER BY type(r) sorts by edge type alphabetically."""
+        alix = db.create_node(["Person"], {"name": "Alix"})
+        gus = db.create_node(["Person"], {"name": "Gus"})
+        acme = db.create_node(["Company"], {"name": "Acme"})
+        db.create_edge(alix.id, gus.id, "KNOWS")
+        db.create_edge(alix.id, acme.id, "WORKS_AT")
+        result = list(db.execute("MATCH ()-[r]->() RETURN type(r) AS t ORDER BY t"))
+        assert len(result) == 2
+        assert result[0]["t"] == "KNOWS"
+        assert result[1]["t"] == "WORKS_AT"
+
+    def test_labels_group_by_sum(self, db):
+        """GROUP BY labels(n)[0] with SUM on a numeric property."""
+        db.create_node(["Person"], {"name": "Alix", "val": 10})
+        db.create_node(["Person"], {"name": "Gus", "val": 20})
+        db.create_node(["City"], {"name": "Amsterdam", "val": 5})
+        result = list(
+            db.execute("MATCH (n) RETURN labels(n)[0] AS label, sum(n.val) AS total ORDER BY label")
+        )
+        assert len(result) == 2
+        assert result[0]["label"] == "City"
+        assert result[0]["total"] == 5
+        assert result[1]["label"] == "Person"
+        assert result[1]["total"] == 30
+
+    def test_combined_group_by_and_order_by(self, db):
+        """Both GROUP BY and ORDER BY use labels(), descending."""
+        db.create_node(["Person"], {"name": "Alix"})
+        db.create_node(["Person"], {"name": "Gus"})
+        db.create_node(["Person"], {"name": "Vincent"})
+        db.create_node(["City"], {"name": "Amsterdam"})
+        db.create_node(["City"], {"name": "Berlin"})
+        result = list(
+            db.execute(
+                "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS cnt ORDER BY labels(n)[0] DESC"
+            )
+        )
+        assert len(result) == 2
+        assert result[0]["label"] == "Person"
+        assert result[0]["cnt"] == 3
+        assert result[1]["label"] == "City"
+        assert result[1]["cnt"] == 2

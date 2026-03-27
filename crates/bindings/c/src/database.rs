@@ -1,5 +1,6 @@
 //! All `#[no_mangle] extern "C"` functions exposed by the Grafeo C API.
 
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::os::raw::c_char;
 use std::sync::Arc;
@@ -7,11 +8,20 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 
 use grafeo_common::types::{EdgeId, NodeId};
-use grafeo_engine::config::Config;
+use grafeo_engine::config::{Config, StorageFormat};
 use grafeo_engine::database::GrafeoDB;
 
 use crate::error::{GrafeoStatus, set_error, set_last_error, str_from_ptr};
 use crate::types::{GrafeoDatabase, GrafeoEdge, GrafeoNode, GrafeoResult, GrafeoTransaction};
+
+// ===== Thread-local storage =====
+
+thread_local! {
+    /// Stores the most recent schema name returned by [`grafeo_current_schema`].
+    /// The pointer is valid until the next call to `grafeo_current_schema`,
+    /// `grafeo_set_schema`, or `grafeo_reset_schema` on this thread.
+    static LAST_SCHEMA: RefCell<Option<CString>> = const { RefCell::new(None) };
+}
 
 // ===== Helpers =====
 
@@ -180,6 +190,32 @@ pub extern "C" fn grafeo_open_read_only(path: *const c_char) -> *mut GrafeoDatab
         return std::ptr::null_mut();
     };
     match GrafeoDB::with_config(Config::read_only(path_str)) {
+        Ok(db) => Box::into_raw(Box::new(GrafeoDatabase {
+            inner: Arc::new(RwLock::new(db)),
+        })),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Open or create a persistent database at `path` using single-file format.
+///
+/// The database is stored as a single `.grafeo` file. This is the recommended
+/// format for embedded use (mobile apps, desktop apps). At rest only the
+/// `.grafeo` file exists; a sidecar `.grafeo.wal/` directory is used during
+/// operation and removed automatically on close.
+///
+/// Returns an opaque pointer, or null on error (check `grafeo_last_error()`).
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_open_single_file(path: *const c_char) -> *mut GrafeoDatabase {
+    let Ok(path_str) = str_from_ptr(path) else {
+        return std::ptr::null_mut();
+    };
+    match GrafeoDB::with_config(
+        Config::persistent(path_str).with_storage_format(StorageFormat::SingleFile),
+    ) {
         Ok(db) => Box::into_raw(Box::new(GrafeoDatabase {
             inner: Arc::new(RwLock::new(db)),
         })),
@@ -368,6 +404,174 @@ pub extern "C" fn grafeo_execute_sql(
 }
 
 // =========================================================================
+// Language-specific _with_params variants
+// =========================================================================
+
+/// Execute a Cypher query with named parameters (JSON object).
+#[cfg(feature = "cypher")]
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_execute_cypher_with_params(
+    db: *mut GrafeoDatabase,
+    query: *const c_char,
+    params_json: *const c_char,
+) -> *mut GrafeoResult {
+    let db = db_ref_or_null!(db);
+    let Ok(query_str) = str_from_ptr(query) else {
+        return std::ptr::null_mut();
+    };
+    let params = crate::types::parse_params(params_json);
+    match db
+        .inner
+        .read()
+        .execute_language(query_str, "cypher", params)
+    {
+        Ok(r) => build_result(&r),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Execute a Gremlin query with named parameters (JSON object).
+#[cfg(feature = "gremlin")]
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_execute_gremlin_with_params(
+    db: *mut GrafeoDatabase,
+    query: *const c_char,
+    params_json: *const c_char,
+) -> *mut GrafeoResult {
+    let db = db_ref_or_null!(db);
+    let Ok(query_str) = str_from_ptr(query) else {
+        return std::ptr::null_mut();
+    };
+    let params = crate::types::parse_params(params_json);
+    match db
+        .inner
+        .read()
+        .execute_language(query_str, "gremlin", params)
+    {
+        Ok(r) => build_result(&r),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Execute a GraphQL query with named parameters (JSON object).
+#[cfg(feature = "graphql")]
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_execute_graphql_with_params(
+    db: *mut GrafeoDatabase,
+    query: *const c_char,
+    params_json: *const c_char,
+) -> *mut GrafeoResult {
+    let db = db_ref_or_null!(db);
+    let Ok(query_str) = str_from_ptr(query) else {
+        return std::ptr::null_mut();
+    };
+    let params = crate::types::parse_params(params_json);
+    match db
+        .inner
+        .read()
+        .execute_language(query_str, "graphql", params)
+    {
+        Ok(r) => build_result(&r),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Execute a SPARQL query with named parameters (JSON object).
+#[cfg(feature = "sparql")]
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_execute_sparql_with_params(
+    db: *mut GrafeoDatabase,
+    query: *const c_char,
+    params_json: *const c_char,
+) -> *mut GrafeoResult {
+    let db = db_ref_or_null!(db);
+    let Ok(query_str) = str_from_ptr(query) else {
+        return std::ptr::null_mut();
+    };
+    let params = crate::types::parse_params(params_json);
+    match db
+        .inner
+        .read()
+        .execute_language(query_str, "sparql", params)
+    {
+        Ok(r) => build_result(&r),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Execute a SQL/PGQ query with named parameters (JSON object).
+#[cfg(feature = "sql-pgq")]
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_execute_sql_with_params(
+    db: *mut GrafeoDatabase,
+    query: *const c_char,
+    params_json: *const c_char,
+) -> *mut GrafeoResult {
+    let db = db_ref_or_null!(db);
+    let Ok(query_str) = str_from_ptr(query) else {
+        return std::ptr::null_mut();
+    };
+    let params = crate::types::parse_params(params_json);
+    match db.inner.read().execute_language(query_str, "sql", params) {
+        Ok(r) => build_result(&r),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+// =========================================================================
+// Unified language dispatcher
+// =========================================================================
+
+/// Execute a query in the given language with optional parameters.
+///
+/// `language` is one of: `"gql"`, `"cypher"`, `"gremlin"`, `"graphql"`,
+/// `"sparql"`, `"sql"`. `params_json` may be null (no parameters).
+///
+/// Returns null on error; call `grafeo_last_error()` for details.
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_execute_language(
+    db: *mut GrafeoDatabase,
+    language: *const c_char,
+    query: *const c_char,
+    params_json: *const c_char,
+) -> *mut GrafeoResult {
+    let db = db_ref_or_null!(db);
+    let Ok(lang_str) = str_from_ptr(language) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(query_str) = str_from_ptr(query) else {
+        return std::ptr::null_mut();
+    };
+    let params = crate::types::parse_params(params_json);
+    match db
+        .inner
+        .read()
+        .execute_language(query_str, lang_str, params)
+    {
+        Ok(r) => build_result(&r),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+// =========================================================================
 // Result Access
 // =========================================================================
 
@@ -501,8 +705,9 @@ pub extern "C" fn grafeo_reset_schema(db: *mut GrafeoDatabase) -> GrafeoStatus {
 
 /// Returns the current schema name, or NULL if no schema is set.
 ///
-/// The returned string is valid until the next call that modifies schema context
-/// on this database. Copy it if you need it to outlive the call.
+/// The returned string is valid until the next call to `grafeo_current_schema`,
+/// `grafeo_set_schema`, or `grafeo_reset_schema` on this thread.
+/// The caller must NOT free this pointer.
 ///
 /// # Safety
 /// `db` must be a valid pointer returned by `grafeo_open*`.
@@ -514,11 +719,16 @@ pub extern "C" fn grafeo_current_schema(db: *const GrafeoDatabase) -> *const c_c
     // SAFETY: Caller guarantees valid pointer.
     let db = unsafe { &*db };
     match db.inner.read().current_schema() {
-        Some(name) => match std::ffi::CString::new(name) {
-            Ok(s) => s.into_raw(),
-            Err(_) => std::ptr::null(),
-        },
-        None => std::ptr::null(),
+        Some(name) => LAST_SCHEMA.with(|cell| {
+            *cell.borrow_mut() = CString::new(name).ok();
+            cell.borrow()
+                .as_ref()
+                .map_or(std::ptr::null(), |s| s.as_ptr())
+        }),
+        None => {
+            LAST_SCHEMA.with(|cell| *cell.borrow_mut() = None);
+            std::ptr::null()
+        }
     }
 }
 
@@ -1009,6 +1219,11 @@ pub extern "C" fn grafeo_find_nodes_by_property(
         set_last_error("Null output pointer");
         return GrafeoStatus::ErrorNullPointer;
     }
+    // Defensively zero so error paths never leave outputs uninitialized.
+    unsafe {
+        *out_count = 0;
+        *out_ids = std::ptr::null_mut();
+    }
     let prop_str = match str_from_ptr(property) {
         Ok(s) => s,
         Err(e) => return e,
@@ -1169,6 +1384,12 @@ pub extern "C" fn grafeo_vector_search(
         set_last_error("Null pointer argument");
         return GrafeoStatus::ErrorNullPointer;
     }
+    // Defensively zero so error paths never leave outputs uninitialized.
+    unsafe {
+        *out_count = 0;
+        *out_ids = std::ptr::null_mut();
+        *out_distances = std::ptr::null_mut();
+    }
     let label_str = match str_from_ptr(label) {
         Ok(s) => s,
         Err(e) => return e,
@@ -1234,6 +1455,12 @@ pub extern "C" fn grafeo_mmr_search(
         set_last_error("Null pointer argument");
         return GrafeoStatus::ErrorNullPointer;
     }
+    // Defensively zero so error paths never leave outputs uninitialized.
+    unsafe {
+        *out_count = 0;
+        *out_ids = std::ptr::null_mut();
+        *out_distances = std::ptr::null_mut();
+    }
     let label_str = match str_from_ptr(label) {
         Ok(s) => s,
         Err(e) => return e,
@@ -1285,9 +1512,10 @@ pub extern "C" fn grafeo_mmr_search(
     }
 }
 
-/// Bulk-insert nodes with vector properties. Returns node IDs in `out_ids`.
+/// Bulk-insert nodes with vector properties. Returns node IDs in `out_ids`
+/// and the number of created nodes in `out_count`.
 /// `vectors` is a flat array of `vector_count * dimensions` f32 values.
-/// Caller must free `*out_ids` with `grafeo_free_node_ids`.
+/// Caller must free `*out_ids` with `grafeo_free_node_ids(*out_ids, *out_count)`.
 #[cfg(feature = "vector-index")]
 #[unsafe(no_mangle)]
 pub extern "C" fn grafeo_batch_create_nodes(
@@ -1298,11 +1526,17 @@ pub extern "C" fn grafeo_batch_create_nodes(
     vector_count: usize,
     dimensions: usize,
     out_ids: *mut *mut u64,
+    out_count: *mut usize,
 ) -> GrafeoStatus {
     let db = db_ref!(db);
-    if vectors.is_null() || out_ids.is_null() {
+    if vectors.is_null() || out_ids.is_null() || out_count.is_null() {
         set_last_error("Null pointer argument");
         return GrafeoStatus::ErrorNullPointer;
+    }
+    // Defensively zero so error paths never leave outputs uninitialized.
+    unsafe {
+        *out_count = 0;
+        *out_ids = std::ptr::null_mut();
     }
     let label_str = match str_from_ptr(label) {
         Ok(s) => s,
@@ -1322,12 +1556,15 @@ pub extern "C" fn grafeo_batch_create_nodes(
         .batch_create_nodes(label_str, prop_str, vecs);
     let mut raw_ids: Vec<u64> = node_ids.iter().map(|id| id.as_u64()).collect();
     raw_ids.shrink_to_fit();
+    let count = raw_ids.len();
     let ptr = raw_ids.as_mut_ptr();
-    let _count = raw_ids.len();
     std::mem::forget(raw_ids);
 
-    // SAFETY: We checked out_ids is not null.
-    unsafe { *out_ids = ptr };
+    // SAFETY: We checked out_ids and out_count are not null.
+    unsafe {
+        *out_ids = ptr;
+        *out_count = count;
+    }
     GrafeoStatus::Ok
 }
 
@@ -1504,6 +1741,48 @@ pub extern "C" fn grafeo_transaction_execute_with_params(
         session.execute(query_str)
     };
     match result {
+        Ok(r) => build_result(&r),
+        Err(e) => {
+            set_error(&e);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Execute a query in the given language within a transaction.
+///
+/// `language` is one of: `"gql"`, `"cypher"`, `"gremlin"`, `"graphql"`,
+/// `"sparql"`, `"sql"`. `params_json` may be null (no parameters).
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_transaction_execute_language(
+    tx: *mut GrafeoTransaction,
+    language: *const c_char,
+    query: *const c_char,
+    params_json: *const c_char,
+) -> *mut GrafeoResult {
+    if tx.is_null() {
+        set_last_error("Null transaction pointer");
+        return std::ptr::null_mut();
+    }
+    // SAFETY: Caller guarantees valid pointer.
+    let tx = unsafe { &*tx };
+    if tx.committed || tx.rolled_back {
+        set_last_error("Transaction is no longer active");
+        return std::ptr::null_mut();
+    }
+    let Ok(lang_str) = str_from_ptr(language) else {
+        return std::ptr::null_mut();
+    };
+    let Ok(query_str) = str_from_ptr(query) else {
+        return std::ptr::null_mut();
+    };
+    let guard = tx.session.lock();
+    let Some(session) = guard.as_ref() else {
+        set_last_error("Transaction is no longer active");
+        return std::ptr::null_mut();
+    };
+    let params = crate::types::parse_params(params_json);
+    match session.execute_language(query_str, lang_str, params) {
         Ok(r) => build_result(&r),
         Err(e) => {
             set_error(&e);

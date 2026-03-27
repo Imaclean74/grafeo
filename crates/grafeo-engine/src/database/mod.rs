@@ -289,50 +289,51 @@ impl GrafeoDB {
                     "read-only mode requires a database path".to_string(),
                 ));
             }
-        } else if config.wal_enabled {
-            if let Some(ref db_path) = config.path {
-                if Self::should_use_single_file(db_path, config.storage_format) {
-                    let fm = if db_path.exists() && db_path.is_file() {
-                        GrafeoFileManager::open(db_path)?
-                    } else if !db_path.exists() {
-                        GrafeoFileManager::create(db_path)?
-                    } else {
-                        // Path exists but is not a file (directory, etc.)
-                        return Err(grafeo_common::utils::error::Error::Internal(format!(
-                            "path exists but is not a file: {}",
-                            db_path.display()
-                        )));
-                    };
-
-                    // Load snapshot data from the file
-                    let snapshot_data = fm.read_snapshot()?;
-                    if !snapshot_data.is_empty() {
-                        Self::apply_snapshot_data(
-                            &store,
-                            &catalog,
-                            #[cfg(feature = "rdf")]
-                            &rdf_store,
-                            &snapshot_data,
-                        )?;
-                    }
-
-                    // Recover sidecar WAL if present
-                    if fm.has_sidecar_wal() {
-                        let recovery = WalRecovery::new(fm.sidecar_wal_path());
-                        let records = recovery.recover()?;
-                        Self::apply_wal_records(
-                            &store,
-                            &catalog,
-                            #[cfg(feature = "rdf")]
-                            &rdf_store,
-                            &records,
-                        )?;
-                    }
-
-                    Some(Arc::new(fm))
+        } else if let Some(ref db_path) = config.path {
+            // Initialize the file manager whenever single-file format is selected,
+            // regardless of whether WAL is enabled. Without this, a database opened
+            // with wal_enabled:false + StorageFormat::SingleFile would produce no
+            // output at all (the file manager was previously gated behind wal_enabled).
+            if Self::should_use_single_file(db_path, config.storage_format) {
+                let fm = if db_path.exists() && db_path.is_file() {
+                    GrafeoFileManager::open(db_path)?
+                } else if !db_path.exists() {
+                    GrafeoFileManager::create(db_path)?
                 } else {
-                    None
+                    // Path exists but is not a file (directory, etc.)
+                    return Err(grafeo_common::utils::error::Error::Internal(format!(
+                        "path exists but is not a file: {}",
+                        db_path.display()
+                    )));
+                };
+
+                // Load snapshot data from the file
+                let snapshot_data = fm.read_snapshot()?;
+                if !snapshot_data.is_empty() {
+                    Self::apply_snapshot_data(
+                        &store,
+                        &catalog,
+                        #[cfg(feature = "rdf")]
+                        &rdf_store,
+                        &snapshot_data,
+                    )?;
                 }
+
+                // Recover sidecar WAL if WAL is enabled and a sidecar exists
+                #[cfg(feature = "wal")]
+                if config.wal_enabled && fm.has_sidecar_wal() {
+                    let recovery = WalRecovery::new(fm.sidecar_wal_path());
+                    let records = recovery.recover()?;
+                    Self::apply_wal_records(
+                        &store,
+                        &catalog,
+                        #[cfg(feature = "rdf")]
+                        &rdf_store,
+                        &records,
+                    )?;
+                }
+
+                Some(Arc::new(fm))
             } else {
                 None
             }
@@ -1228,6 +1229,10 @@ impl GrafeoDB {
                 wal.close_active_log();
             }
 
+            {
+                use grafeo_core::testing::crash::maybe_crash;
+                maybe_crash("close:before_remove_sidecar_wal");
+            }
             fm.remove_sidecar_wal()?;
             fm.close()?;
         }

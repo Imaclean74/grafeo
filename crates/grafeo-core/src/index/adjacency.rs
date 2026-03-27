@@ -222,10 +222,10 @@ struct AdjacencyList {
     /// Cold chunks (immutable, compressed) - for older data.
     cold_chunks: Vec<CompressedAdjacencyChunk>,
     /// Delta buffer for recent insertions.
-    /// Uses SmallVec with 16 inline entries for cache-friendly access.
-    /// Most nodes have <16 recent insertions before compaction, so this
-    /// avoids heap allocation in the common case.
-    delta_inserts: SmallVec<[(NodeId, EdgeId); 16]>,
+    /// Uses SmallVec with 8 inline entries: fits most real-world node degrees
+    /// without heap allocation while keeping AdjacencyList under 4 cache lines
+    /// (~256 bytes) for L1 residency during concurrent traversals.
+    delta_inserts: SmallVec<[(NodeId, EdgeId); 8]>,
     /// Set of deleted edge IDs.
     deleted: FxHashSet<EdgeId>,
     /// Zone map skip index over cold chunks, sorted by `min_destination`.
@@ -780,7 +780,7 @@ impl ChunkedAdjacency {
             for cold in &list.cold_chunks {
                 list_bytes += cold.memory_size();
             }
-            // Delta buffer (SmallVec inline when < 16 entries)
+            // Delta buffer (SmallVec inline when < 8 entries)
             if list.delta_inserts.spilled() {
                 list_bytes += list.delta_inserts.capacity() * 16;
             }

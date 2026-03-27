@@ -39,29 +39,50 @@ impl super::Planner {
             .map(|(i, name)| (name.clone(), i))
             .collect();
 
-        // Collect all property expressions that need to be projected before aggregation
-        let mut property_projections: Vec<(String, String, String)> = Vec::new(); // (variable, property, new_column_name)
+        // Collect all extra projections (property access and complex expressions)
+        // in a single ordered list so that column index assignment matches the
+        // order they are added to the ProjectOperator.
+        enum ExtraProjection {
+            Property { variable: String, property: String },
+            Expression { filter_expr: FilterExpression },
+        }
+        let mut extra_projections: Vec<ExtraProjection> = Vec::new();
         let mut next_col_idx = input_columns.len();
 
-        // Check group-by expressions for properties
+        // Check group-by expressions for properties and complex expressions
+        // (Labels, Type, FunctionCall, IndexAccess, etc.)
         for expr in &agg.group_by {
-            if let LogicalExpression::Property { variable, property } = expr {
-                let col_name = format!("{}_{}", variable, property);
-                if !variable_columns.contains_key(&col_name) {
-                    property_projections.push((
-                        variable.clone(),
-                        property.clone(),
-                        col_name.clone(),
-                    ));
-                    variable_columns.insert(col_name, next_col_idx);
-                    next_col_idx += 1;
+            match expr {
+                LogicalExpression::Property { variable, property } => {
+                    let col_name = format!("{}_{}", variable, property);
+                    if !variable_columns.contains_key(&col_name) {
+                        extra_projections.push(ExtraProjection::Property {
+                            variable: variable.clone(),
+                            property: property.clone(),
+                        });
+                        variable_columns.insert(col_name, next_col_idx);
+                        next_col_idx += 1;
+                    }
+                }
+                LogicalExpression::Variable(_) => {
+                    // Already in variable_columns, nothing to project
+                }
+                _ => {
+                    // Complex expression (Labels, Type, FunctionCall, IndexAccess,
+                    // CASE, Binary, etc.): project as computed column
+                    let col_name = format!("__expr_{:?}", expr);
+                    if !variable_columns.contains_key(&col_name) {
+                        let filter_expr = self.convert_expression(expr)?;
+                        extra_projections.push(ExtraProjection::Expression { filter_expr });
+                        variable_columns.insert(col_name, next_col_idx);
+                        next_col_idx += 1;
+                    }
                 }
             }
         }
 
         // Check aggregate expressions for properties and complex expressions
         // (both first and second arguments)
-        let mut expression_projections: Vec<(FilterExpression, String)> = Vec::new();
         for agg_expr in &agg.aggregates {
             for expr_opt in [&agg_expr.expression, &agg_expr.expression2] {
                 let Some(expr) = expr_opt else { continue };
@@ -69,11 +90,10 @@ impl super::Planner {
                     LogicalExpression::Property { variable, property } => {
                         let col_name = format!("{}_{}", variable, property);
                         if !variable_columns.contains_key(&col_name) {
-                            property_projections.push((
-                                variable.clone(),
-                                property.clone(),
-                                col_name.clone(),
-                            ));
+                            extra_projections.push(ExtraProjection::Property {
+                                variable: variable.clone(),
+                                property: property.clone(),
+                            });
                             variable_columns.insert(col_name, next_col_idx);
                             next_col_idx += 1;
                         }
@@ -86,7 +106,7 @@ impl super::Planner {
                         let col_name = format!("__expr_{:?}", expr);
                         if !variable_columns.contains_key(&col_name) {
                             let filter_expr = self.convert_expression(expr)?;
-                            expression_projections.push((filter_expr, col_name.clone()));
+                            extra_projections.push(ExtraProjection::Expression { filter_expr });
                             variable_columns.insert(col_name, next_col_idx);
                             next_col_idx += 1;
                         }
@@ -95,8 +115,8 @@ impl super::Planner {
             }
         }
 
-        // If we have property or expression projections, add a projection to materialize them
-        if !property_projections.is_empty() || !expression_projections.is_empty() {
+        // If we have extra projections, add a projection to materialize them
+        if !extra_projections.is_empty() {
             let mut projections = Vec::new();
             let mut output_types = Vec::new();
 
@@ -107,28 +127,32 @@ impl super::Planner {
                 output_types.push(LogicalType::Node);
             }
 
-            // Then add property access projections
-            for (variable, property, _col_name) in &property_projections {
-                let source_col = *variable_columns.get(variable).ok_or_else(|| {
-                    Error::Internal(format!(
-                        "Variable '{}' not found for property projection",
-                        variable
-                    ))
-                })?;
-                projections.push(ProjectExpr::PropertyAccess {
-                    column: source_col,
-                    property: property.clone(),
-                });
-                output_types.push(LogicalType::Any);
-            }
-
-            // Then add complex expression projections (CASE, etc.)
-            for (filter_expr, _col_name) in &expression_projections {
-                projections.push(ProjectExpr::Expression {
-                    expr: filter_expr.clone(),
-                    variable_columns: variable_columns.clone(),
-                });
-                output_types.push(LogicalType::Any);
+            // Add extra projections in the same order as index assignment
+            for proj in &extra_projections {
+                match proj {
+                    ExtraProjection::Property {
+                        variable, property, ..
+                    } => {
+                        let source_col = *variable_columns.get(variable).ok_or_else(|| {
+                            Error::Internal(format!(
+                                "Variable '{}' not found for property projection",
+                                variable
+                            ))
+                        })?;
+                        projections.push(ProjectExpr::PropertyAccess {
+                            column: source_col,
+                            property: property.clone(),
+                        });
+                        output_types.push(LogicalType::Any);
+                    }
+                    ExtraProjection::Expression { filter_expr, .. } => {
+                        projections.push(ProjectExpr::Expression {
+                            expr: filter_expr.clone(),
+                            variable_columns: variable_columns.clone(),
+                        });
+                        output_types.push(LogicalType::Any);
+                    }
+                }
             }
 
             input_op = Box::new(
@@ -452,28 +476,6 @@ impl super::Planner {
         expr: &LogicalExpression,
         variable_columns: &HashMap<String, usize>,
     ) -> Result<usize> {
-        match expr {
-            LogicalExpression::Variable(name) => variable_columns
-                .get(name)
-                .copied()
-                .ok_or_else(|| Error::Internal(format!("Variable '{}' not found", name))),
-            LogicalExpression::Property { variable, property } => {
-                // Look up the projected property column (e.g., "p_price" for p.price)
-                let col_name = format!("{}_{}", variable, property);
-                variable_columns.get(&col_name).copied().ok_or_else(|| {
-                    Error::Internal(format!(
-                        "Property column '{}' not found (from {}.{})",
-                        col_name, variable, property
-                    ))
-                })
-            }
-            _ => {
-                // Complex expression (CASE, Binary, etc.): look up synthetic column
-                let col_name = format!("__expr_{:?}", expr);
-                variable_columns.get(&col_name).copied().ok_or_else(|| {
-                    Error::Internal(format!("Cannot resolve expression to column: {:?}", expr))
-                })
-            }
-        }
+        crate::query::planner::common::resolve_expression_to_column(expr, variable_columns, "")
     }
 }

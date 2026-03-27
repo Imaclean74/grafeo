@@ -39,8 +39,8 @@ dynamic _encodeValue(dynamic value) {
     Uint8List bytes => base64Encode(bytes),
     List list => list.map(_encodeValue).toList(),
     Map map => {
-      for (final e in map.entries) e.key.toString(): _encodeValue(e.value),
-    },
+        for (final e in map.entries) e.key.toString(): _encodeValue(e.value),
+      },
     _ => value.toString(),
   };
 }
@@ -56,6 +56,16 @@ String _formatIsoDuration(Duration d) {
   return buf.toString();
 }
 
+Duration _parseIsoDuration(String iso) {
+  final re = RegExp(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?');
+  final match = re.firstMatch(iso);
+  if (match == null) return Duration.zero;
+  final hours = int.tryParse(match.group(1) ?? '') ?? 0;
+  final minutes = int.tryParse(match.group(2) ?? '') ?? 0;
+  final seconds = int.tryParse(match.group(3) ?? '') ?? 0;
+  return Duration(hours: hours, minutes: minutes, seconds: seconds);
+}
+
 // =============================================================================
 // Decoding (JSON from grafeo-c results -> Dart types)
 // =============================================================================
@@ -69,10 +79,16 @@ List<Map<String, dynamic>> parseRows(String json) {
   if (decoded is! List) return [];
   return decoded.map<Map<String, dynamic>>((row) {
     if (row is! Map) return <String, dynamic>{};
-    return {
-      for (final entry in row.entries)
-        entry.key.toString(): _decodeValue(entry.value),
-    };
+    // First, check if the row itself is a temporal marker map.
+    // _decodeMap returns a scalar (Duration, DateTime, etc.) for markers.
+    final asDecoded = _decodeMap(row);
+    if (asDecoded is! Map) {
+      // Wrap the decoded scalar so the row stays Map<String, dynamic>.
+      return <String, dynamic>{row.keys.first.toString(): asDecoded};
+    }
+    return asDecoded.map<String, dynamic>(
+      (key, value) => MapEntry(key.toString(), value),
+    );
   }).toList();
 }
 
@@ -99,10 +115,8 @@ List<String> extractColumns(List<Map<String, dynamic>> rows) {
 
       if (value.containsKey('_labels')) {
         if (!nodeIds.add(id)) continue;
-        final labels = (value['_labels'] as List?)
-                ?.whereType<String>()
-                .toList() ??
-            [];
+        final labels =
+            (value['_labels'] as List?)?.whereType<String>().toList() ?? [];
         nodes.add(Node(id, labels, _extractProperties(value)));
       } else if (value.containsKey('_type')) {
         if (!edgeIds.add(id)) continue;
@@ -164,7 +178,7 @@ dynamic _decodeMap(Map m) {
     return m[r'$time'] as String? ?? '';
   }
   if (m.containsKey(r'$duration')) {
-    return m[r'$duration'] as String? ?? '';
+    return _parseIsoDuration(m[r'$duration'] as String? ?? 'PT0S');
   }
 
   // Regular map
