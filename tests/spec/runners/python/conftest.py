@@ -233,7 +233,7 @@ class GtestItem(pytest.Item):
 
     def repr_failure(self, excinfo):
         """Provide a readable failure message."""
-        if isinstance(excinfo.value, AssertionError if False else AssertionError):
+        if isinstance(excinfo.value, AssertionError):
             return str(excinfo.value)
         return super().repr_failure(excinfo)
 

@@ -586,10 +586,10 @@ def _value_to_string(val) -> str:
             return "Infinity"
         if val == float("-inf"):
             return "-Infinity"
-        # Match Rust's default float formatting: omit trailing zeros but keep
-        # at least one decimal when the number is not whole.
-        s = str(val)
-        return s
+        # Rust's Display for f64 drops ".0" for whole numbers.
+        if val == int(val) and abs(val) < 2**53:
+            return str(int(val))
+        return str(val)
     if isinstance(val, list):
         inner = ", ".join(_value_to_string(v) for v in val)
         return f"[{inner}]"

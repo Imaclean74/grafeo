@@ -34,11 +34,14 @@ def value_to_string(val: Any) -> str:
             return "NaN"
         if math.isinf(val):
             return "Infinity" if val > 0 else "-Infinity"
-        # Rust formats floats without trailing zeros but keeps at least one
-        # decimal for non-integers.  Python's str() is close enough for the
-        # values typically seen in .gtest files.
-        s = str(val)
-        return s
+        # Rust's Display for f64 drops the ".0" suffix for whole numbers:
+        #   format!("{}", 15.0_f64)  -> "15"
+        #   format!("{}", 15.5_f64)  -> "15.5"
+        # Python's str(15.0) produces "15.0", so we need to strip the
+        # trailing ".0" when the value is integral.
+        if val == int(val) and abs(val) < 2**53:
+            return str(int(val))
+        return str(val)
     if isinstance(val, list):
         inner = ", ".join(value_to_string(v) for v in val)
         return f"[{inner}]"

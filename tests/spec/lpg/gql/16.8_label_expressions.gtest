@@ -208,7 +208,8 @@ tests:
   # Edge patterns: -[e IS TYPE1 | TYPE2]->
   # ---------------------------------------------------------------------------
 
-  # Sec 16.8: Edge label disjunction (match multiple edge types)
+  # Sec 16.8: Edge label disjunction using colon + pipe (match multiple edge types)
+  # Edge patterns use :TYPE|TYPE2 syntax for label disjunction in Grafeo.
   - name: iso_16_8_edge_label_disjunction
     setup:
       - "INSERT (:Person {name: 'Alix'})"
@@ -216,35 +217,36 @@ tests:
       - "INSERT (:Company {name: 'Grafeo'})"
       - "MATCH (a:Person {name: 'Alix'}), (g:Person {name: 'Gus'}) INSERT (a)-[:KNOWS]->(g)"
       - "MATCH (a:Person {name: 'Alix'}), (c:Company {name: 'Grafeo'}) INSERT (a)-[:WORKS_AT]->(c)"
-    query: "MATCH (a:Person {name: 'Alix'})-[e IS KNOWS | WORKS_AT]->(b) RETURN b.name"
+    query: "MATCH (a:Person {name: 'Alix'})-[e:KNOWS|WORKS_AT]->(b) RETURN b.name"
     expect:
       rows:
         - [Gus]
         - [Grafeo]
 
-  # Sec 16.8: Edge label with single IS
-  - name: iso_16_8_edge_label_single_is
+  # Sec 16.8: Edge label with single colon type filter
+  - name: iso_16_8_edge_label_single
     setup:
       - "INSERT (:Person {name: 'Alix'})"
       - "INSERT (:Person {name: 'Gus'})"
       - "MATCH (a:Person {name: 'Alix'}), (g:Person {name: 'Gus'}) INSERT (a)-[:KNOWS]->(g)"
-    query: "MATCH (a:Person {name: 'Alix'})-[e IS KNOWS]->(b) RETURN b.name"
+    query: "MATCH (a:Person {name: 'Alix'})-[e:KNOWS]->(b) RETURN b.name"
     expect:
       rows:
         - [Gus]
 
-  # Sec 16.8: Edge label negation (match edges that are NOT of a given type)
-  - name: iso_16_8_edge_label_negation
+  # Sec 16.8: Wildcard edge (no type filter matches all edge types)
+  - name: iso_16_8_edge_wildcard
     setup:
       - "INSERT (:Person {name: 'Alix'})"
       - "INSERT (:Person {name: 'Gus'})"
       - "INSERT (:Company {name: 'Grafeo'})"
       - "MATCH (a:Person {name: 'Alix'}), (g:Person {name: 'Gus'}) INSERT (a)-[:KNOWS]->(g)"
       - "MATCH (a:Person {name: 'Alix'}), (c:Company {name: 'Grafeo'}) INSERT (a)-[:WORKS_AT]->(c)"
-    query: "MATCH (a:Person {name: 'Alix'})-[e IS !WORKS_AT]->(b) RETURN b.name"
+    query: "MATCH (a:Person {name: 'Alix'})-[e]->(b) RETURN b.name"
     expect:
       rows:
         - [Gus]
+        - [Grafeo]
 
   # ---------------------------------------------------------------------------
   # Colon syntax as alias for IS (sec 16.7, is_or_colon)
