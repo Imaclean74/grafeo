@@ -74,7 +74,3 @@ tests:
     query: "{ person(name:: \"Alix\") { name } }"
     expect:
       error: "Expected"
-
-  # Note: RDF-model mutation rejection cannot be tested via the Python runner
-  # because execute_graphql routes through the LPG translator which accepts
-  # mutations. The RDF translator rejection is covered by Rust unit tests.

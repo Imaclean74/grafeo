@@ -50,7 +50,7 @@ fn create_chain() -> GrafeoDB {
             ("pos", Value::Int64(2)),
         ],
     );
-    let nd = session.create_node_with_props(
+    let and = session.create_node_with_props(
         &["Step"],
         [
             ("name", Value::String("D".into())),
@@ -69,9 +69,9 @@ fn create_chain() -> GrafeoDB {
     db.set_edge_property(e1, "weight", Value::Int64(1));
     let e2 = session.create_edge(nb, nc, "NEXT");
     db.set_edge_property(e2, "weight", Value::Int64(2));
-    let e3 = session.create_edge(nc, nd, "NEXT");
+    let e3 = session.create_edge(nc, and, "NEXT");
     db.set_edge_property(e3, "weight", Value::Int64(3));
-    let e4 = session.create_edge(nd, ne, "NEXT");
+    let e4 = session.create_edge(and, ne, "NEXT");
     db.set_edge_property(e4, "weight", Value::Int64(4));
 
     db
@@ -160,12 +160,12 @@ fn create_diamond() -> GrafeoDB {
     let na = session.create_node_with_props(&["Node"], [("name", Value::String("A".into()))]);
     let nb = session.create_node_with_props(&["Node"], [("name", Value::String("B".into()))]);
     let nc = session.create_node_with_props(&["Node"], [("name", Value::String("C".into()))]);
-    let nd = session.create_node_with_props(&["Node"], [("name", Value::String("D".into()))]);
+    let and = session.create_node_with_props(&["Node"], [("name", Value::String("D".into()))]);
 
     session.create_edge(na, nb, "X");
-    session.create_edge(nb, nd, "X");
+    session.create_edge(nb, and, "X");
     session.create_edge(na, nc, "Y");
-    session.create_edge(nc, nd, "Y");
+    session.create_edge(nc, and, "Y");
 
     db
 }

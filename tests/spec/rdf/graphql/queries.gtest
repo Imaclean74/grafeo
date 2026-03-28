@@ -386,9 +386,9 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: block_string_in_query
-    setup:
-      - "INSERT (:Resource:Person {uri: 'http://example.org/person/hans', name: 'Hans', age: 33, city: 'Berlin', bio: 'A long bio'})"
-    query: "{ person(name: \"Hans\") { name bio } }"
+    statements:
+      - "mutation { createPerson(name: \"Hans\", age: 33, city: \"Berlin\", bio: \"A long bio\") { name } }"
+      - "{ person(name: \"Hans\") { name bio } }"
     expect:
       rows:
         - [Hans, A long bio]

@@ -147,3 +147,19 @@ tests:
     query: "{ person(name: \"Alix\") { name } organization { name } }"
     expect:
       count: 2
+
+  # ---------------------------------------------------------------------------
+  # RDF mutation rejection (test harness routes through LPG translator)
+  # ---------------------------------------------------------------------------
+
+  - name: rdf_create_mutation_rejected
+    skip: "Test harness uses LPG translator which accepts mutations; RDF translator rejects them"
+    query: "mutation { createPerson(name: \"Test\") { name } }"
+    expect:
+      error: "Only Query"
+
+  - name: rdf_delete_mutation_rejected
+    skip: "Test harness uses LPG translator which accepts mutations; RDF translator rejects them"
+    query: "mutation { deletePerson(name: \"Alix\") }"
+    expect:
+      error: "Only Query"
