@@ -11,6 +11,7 @@ meta:
   section: "25.1"
   title: Graph Algorithms
   dataset: empty
+  requires: [algos]
 
 tests:
 
