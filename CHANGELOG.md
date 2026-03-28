@@ -10,7 +10,7 @@ Query engine correctness improvements and unified declarative test suite.
 
 - **Turtle parser and serializer**: zero-dependency W3C Turtle support (`load_turtle()`, `to_turtle()` on `RdfStore`), with prefix detection, subject grouping, numeric/boolean shorthands, `a` shorthand, and line/column error positions
 - **N-Quads serializer**: `to_nquads()` on `RdfStore` for exporting default and named graphs in a single stream
-- **Declarative `.gtest` spec test framework**: new `grafeo-spec-tests` crate with a YAML-based test format, build.rs code generator, and runtime comparison library. 1000+ tests across all 7 language/model combinations (GQL, Cypher, Gremlin, GraphQL (LPG+RDF), SQL/PGQ, SPARQL and Rosetta cross-language) from a single source of truth, with runners for binding-level verification
+- **Declarative `.gtest` spec test framework**: new `grafeo-spec-tests` crate with a YAML-based test format, build.rs code generator, and runtime comparison library. 2000+ tests across all 7 language/model combinations (GQL, Cypher, Gremlin, GraphQL (LPG+RDF), SQL/PGQ, SPARQL and Rosetta cross-language) from a single source of truth, with runners for binding-level verification
 - **EXISTS subquery in RETURN**: `RETURN EXISTS { MATCH (n)-[:R]->(:Label) } AS flag` now works for single-hop correlated patterns, including label-filtered endpoints
 - **Aggregate detection in GQL WITH**: `WITH count(n) AS cnt, max(n.val) AS mx` now correctly produces an aggregate operator instead of treating aggregates as scalar expressions
 
@@ -23,6 +23,9 @@ Query engine correctness improvements and unified declarative test suite.
 - **Integer arithmetic overflow**: `9223372036854775807 + 1` no longer panics; checked arithmetic returns NULL on overflow (SQL semantics) for all operations (+, -, *, /, %, unary negation)
 - **Label intersection across MATCH clauses**: `MATCH (n:A) MATCH (n:B)` now correctly filters to nodes with both labels instead of ignoring the second label constraint
 - **CASE WHEN with NULL aggregate**: `WITH count(c) AS cc RETURN CASE WHEN cc = 0 THEN 0 ELSE ... END` no longer returns NULL when the WHEN branch is true
+- **EXISTS with property filters**: `EXISTS { (n)-[:R]->(m) WHERE m.age > 30 }` silently dropped the WHERE, matching all connected nodes
+- **Keywords as property names**: `{order: 3}` and `n.order` rejected `order` and other keywords in property contexts
+- **Binding spec runners**: temporal type-tag unwrapping, missing SPARQL/hash assertions, error test logic, WASM feature gating
 
 ## [0.5.28] - 2026-03-27
 

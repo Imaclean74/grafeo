@@ -3840,7 +3840,7 @@ impl<'a> Parser<'a> {
 
                 if self.current.kind == TokenKind::Dot {
                     self.advance();
-                    if !self.is_identifier() {
+                    if !self.is_label_or_type_name() {
                         return Err(self.error("Expected property name"));
                     }
                     let property = self.get_identifier_name();
@@ -4196,7 +4196,7 @@ impl<'a> Parser<'a> {
 
         if self.current.kind != TokenKind::RBrace {
             loop {
-                if !self.is_identifier() {
+                if !self.is_label_or_type_name() {
                     return Err(self.error("Expected property name"));
                 }
                 let key = self.get_identifier_name();

@@ -345,12 +345,24 @@ impl super::Planner {
             // A Filter wrapping an Expand typically arises from a label constraint
             // on the anonymous endpoint, e.g. EXISTS { (u)<-[:AUTH]-(:Identity) }.
             // Extract the inner Expand pattern and fold the label filter into end_labels.
+            // Only pure hasLabel filters are supported; property filters (WHERE m.age > 30)
+            // must go through the semi-join path for correct evaluation.
             LogicalOperator::Filter(filter_op) => {
-                let (start_var, direction, edge_types, _) =
-                    self.extract_exists_pattern(&filter_op.input)?;
-                // Extract end_labels from the filter predicate (hasLabel function call)
                 let end_labels = self.extract_labels_from_filter_predicate(&filter_op.predicate);
-                Ok((start_var, direction, edge_types, end_labels))
+                match end_labels {
+                    Some(labels) => {
+                        let (start_var, direction, edge_types, _) =
+                            self.extract_exists_pattern(&filter_op.input)?;
+                        Ok((start_var, direction, edge_types, Some(labels)))
+                    }
+                    None => {
+                        // Non-label filter (property checks, etc.): reject so the
+                        // planner uses the semi-join rewrite instead.
+                        Err(Error::Internal(
+                            "Unsupported EXISTS subquery pattern".to_string(),
+                        ))
+                    }
+                }
             }
             _ => Err(Error::Internal(
                 "Unsupported EXISTS subquery pattern".to_string(),

@@ -264,7 +264,12 @@ pub fn assert_hash(result: &QueryResult, expected_hash: &str) {
         hasher.update(row.join("|").as_bytes());
         hasher.update(b"\n");
     }
-    let hash = format!("{:x}", hasher.finalize());
+    let digest = hasher.finalize();
+    let hash = digest.iter().fold(String::new(), |mut acc, b| {
+        use std::fmt::Write;
+        write!(acc, "{b:02x}").unwrap();
+        acc
+    });
 
     assert_eq!(
         hash, expected_hash,
