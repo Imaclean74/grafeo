@@ -1,0 +1,107 @@
+# Known GraphQL LPG implementation gaps
+#
+# Covers: variable/parameter substitution, directive execution (@skip, @include),
+# multiple root fields, and aggregation. All tests here are skipped because
+# the features are not yet implemented. Expected results reflect correct behavior.
+
+meta:
+  language: graphql
+  model: lpg
+  title: GraphQL LPG implementation gaps
+  dataset: social_network
+
+tests:
+
+  # ---------------------------------------------------------------------------
+  # 1. Variable / Parameter Substitution
+  # ---------------------------------------------------------------------------
+
+  - name: variable_in_argument_position
+    skip: "Variable references ($var) in arguments resolve to Null, not wired to parameters"
+    query: "{ person(name: $name) { name age } }"
+    expect:
+      rows:
+        - [Alix, 30]
+
+  - name: variable_declaration_syntax
+    skip: "Query-level variable declarations not parsed (query($name: String) syntax)"
+    query: "query($name: String) { person(name: $name) { name } }"
+    expect:
+      rows:
+        - [Alix]
+
+  - name: variable_in_nested_argument
+    skip: "Variable references in nested field arguments not resolved"
+    query: |
+      {
+        person {
+          name
+          knows(age_gt: $minAge) {
+            name
+          }
+        }
+      }
+    expect:
+      count: 1
+
+  # ---------------------------------------------------------------------------
+  # 2. Directive Execution
+  # ---------------------------------------------------------------------------
+
+  - name: skip_directive_true_excludes_field
+    skip: "@skip directive not executed, all fields returned regardless"
+    query: "{ person { name age @skip(if: true) } }"
+    expect:
+      columns: [name]
+
+  - name: skip_directive_false_includes_field
+    skip: "@skip(if: false) not evaluated, directive syntax ignored"
+    query: "{ person { name age @skip(if: false) } }"
+    expect:
+      columns: [name, age]
+
+  - name: include_directive_false_excludes_field
+    skip: "@include directive not executed, all fields returned regardless"
+    query: "{ person { name @include(if: false) age } }"
+    expect:
+      columns: [age]
+
+  - name: include_directive_true_includes_field
+    skip: "@include(if: true) not evaluated, directive syntax ignored"
+    query: "{ person { name @include(if: true) age } }"
+    expect:
+      columns: [name, age]
+
+  # ---------------------------------------------------------------------------
+  # 3. Multiple Root Fields
+  # ---------------------------------------------------------------------------
+
+  - name: two_root_fields_in_one_query
+    skip: "Only the first root field is executed, subsequent root fields are ignored"
+    query: "{ person { name } company { name } }"
+    expect:
+      count: 4
+
+  - name: three_root_fields
+    skip: "Multiple root fields not supported, only first selection set is processed"
+    query: "{ person { name } company { name } person { age } }"
+    expect:
+      count: 7
+
+  # ---------------------------------------------------------------------------
+  # 4. Aggregation
+  # ---------------------------------------------------------------------------
+
+  - name: count_aggregate_field
+    skip: "No aggregation mechanism exposed via GraphQL (count, sum, avg not mapped)"
+    query: "{ personCount }"
+    expect:
+      rows:
+        - [3]
+
+  - name: sum_avg_on_numeric_fields
+    skip: "Numeric aggregation functions (sum, avg) have no GraphQL projection syntax"
+    query: "{ personAggregate { sum_age avg_age } }"
+    expect:
+      rows:
+        - [90, 30]

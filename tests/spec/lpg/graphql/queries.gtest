@@ -5,7 +5,10 @@
 # _lt, _lte, _ne), string operators (_contains, _starts_with, _ends_with),
 # compound filters, where/filter object syntax, _in operator, pagination
 # (first, skip, limit, offset), ordering (orderBy), nested relationship
-# traversals, and empty result cases.
+# traversals, empty result cases, fragment spreads, inline fragments with type
+# conditions, aliased root fields, mixed where + direct args, nested traversal
+# aliases, delete nonexistent nodes, boolean/float property values, and where
+# with bare equality.
 
 meta:
   language: graphql
@@ -660,3 +663,111 @@ tests:
     query: "{ person(name_starts_with: \"Zz\") { name } }"
     expect:
       empty: true
+
+  # ---------------------------------------------------------------------------
+  # 14. Fragment spreads
+  # ---------------------------------------------------------------------------
+
+  - name: fragment_multiple_scalar_fields
+    query: |
+      fragment PersonFields on Person { name age }
+      query { person { ...PersonFields } }
+    expect:
+      rows:
+        - [Alix, 30]
+        - [Gus, 25]
+        - [Vincent, 35]
+
+  - name: fragment_subset_of_fields
+    query: |
+      fragment NameOnly on Person { name }
+      query { person { ...NameOnly } }
+    expect:
+      rows:
+        - [Alix]
+        - [Gus]
+        - [Vincent]
+
+  # ---------------------------------------------------------------------------
+  # 15. Inline fragments with type condition
+  # ---------------------------------------------------------------------------
+
+  - name: inline_fragment_with_type_condition
+    query: "query { person { ... on Person { name age } } }"
+    expect:
+      count: 3
+
+  # ---------------------------------------------------------------------------
+  # 16. Aliased root field
+  # ---------------------------------------------------------------------------
+
+  - name: aliased_root_field
+    query: "{ people: person { name } }"
+    expect:
+      count: 3
+
+  # ---------------------------------------------------------------------------
+  # 17. Mixed where + direct args (AND semantics)
+  # ---------------------------------------------------------------------------
+
+  - name: mixed_where_and_direct_args
+    query: "{ person(age_gt: 20, where: { city: \"Amsterdam\" }) { name } }"
+    expect:
+      rows:
+        - [Alix]
+
+  # ---------------------------------------------------------------------------
+  # 18. Nested traversal alias
+  # ---------------------------------------------------------------------------
+
+  - name: nested_traversal_alias
+    query: |
+      query {
+        person(name: "Alix") {
+          name
+          friends: knows {
+            name
+          }
+        }
+      }
+    expect:
+      count: 1
+
+  # ---------------------------------------------------------------------------
+  # 19. Delete nonexistent node (silent success)
+  # ---------------------------------------------------------------------------
+
+  - name: delete_nonexistent_node_silent_success
+    query: "mutation { deletePerson(name: \"NonExistent\") }"
+    expect:
+      empty: true
+
+  # ---------------------------------------------------------------------------
+  # 20. Boolean and float property values in create
+  # ---------------------------------------------------------------------------
+
+  - name: create_person_with_boolean_property
+    statements:
+      - "mutation { createPerson(name: \"Beatrix\", active: true) { name } }"
+      - "{ person(name: \"Beatrix\") { name active } }"
+    expect:
+      rows:
+        - [Beatrix, true]
+
+  - name: create_person_with_float_property
+    statements:
+      - "mutation { createPerson(name: \"Django\", score: 9.5) { name } }"
+      - "{ person(name: \"Django\") { name score } }"
+    expect:
+      rows:
+        - [Django, 9.5]
+
+  # ---------------------------------------------------------------------------
+  # 21. Where with bare equality (no suffix)
+  # ---------------------------------------------------------------------------
+
+  - name: where_bare_equality_no_suffix
+    query: "{ person(where: { age: 30 }) { name } }"
+    expect:
+      rows:
+        - [Alix]

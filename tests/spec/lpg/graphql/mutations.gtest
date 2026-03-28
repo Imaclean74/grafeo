@@ -202,3 +202,48 @@ tests:
         - [Butch]
         - [Gus]
         - [Vincent]
+
+  # ---------------------------------------------------------------------------
+  # Boolean and float property types
+  # ---------------------------------------------------------------------------
+
+  - name: create_with_boolean_property
+    statements:
+      - "mutation { createPerson(name: \"Beatrix\", active: true) { name } }"
+      - "{ person(name: \"Beatrix\") { name active } }"
+    expect:
+      rows:
+        - [Beatrix, true]
+
+  - name: create_with_float_property
+    statements:
+      - "mutation { createPerson(name: \"Django\", score: 9.5) { name } }"
+      - "{ person(name: \"Django\") { name score } }"
+    expect:
+      rows:
+        - [Django, 9.5]
+
+  # ---------------------------------------------------------------------------
+  # Mutation return values
+  # ---------------------------------------------------------------------------
+
+  - name: create_returns_created_data
+    query: "mutation { createPerson(name: \"Jules\", age: 32) { name age } }"
+    expect:
+      rows:
+        - [Jules, 32]
+
+  - name: update_returns_updated_data
+    query: "mutation { updatePerson(name: \"Alix\", age: 31) { name age } }"
+    expect:
+      rows:
+        - [Alix, 31]
+
+  # ---------------------------------------------------------------------------
+  # Delete edge cases
+  # ---------------------------------------------------------------------------
+
+  - name: delete_nonexistent_node_succeeds
+    query: "mutation { deletePerson(name: \"NonExistent\") }"
+    expect:
+      empty: true
