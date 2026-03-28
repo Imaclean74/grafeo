@@ -5,6 +5,8 @@
  * the Node.js runner validates results identically to the Rust runner.
  */
 
+import { createHash } from 'crypto'
+
 /**
  * Convert a JS value to its canonical string for comparison.
  * Must match Rust's value_to_string in lib.rs.
@@ -111,6 +113,26 @@ export function assertRowsWithPrecision(result, expected, precision) {
         )
       }
     }
+  }
+}
+
+/**
+ * Assert that the MD5 hash of sorted, pipe-delimited rows matches.
+ * Mirrors assert_hash in the Rust runner.
+ */
+export function assertHash(result, expectedHash) {
+  const rows = resultToRows(result)
+  rows.sort((a, b) => a.join('|').localeCompare(b.join('|')))
+  const hasher = createHash('md5')
+  for (const row of rows) {
+    hasher.update(row.join('|'))
+    hasher.update('\n')
+  }
+  const actualHash = hasher.digest('hex')
+  if (actualHash !== expectedHash) {
+    throw new Error(
+      `Hash mismatch: got '${actualHash}', expected '${expectedHash}'\nRows: ${JSON.stringify(rows)}`
+    )
   }
 }
 

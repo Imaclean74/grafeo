@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs'
 import { join, relative, resolve } from 'path'
 import { parseGtestFile } from './parser.mjs'
-import { assertRowsSorted, assertRowsOrdered, assertRowsWithPrecision, resultToRows } from './comparator.mjs'
+import { assertRowsSorted, assertRowsOrdered, assertRowsWithPrecision, assertHash, resultToRows } from './comparator.mjs'
 
 // ---------------------------------------------------------------------------
 // Import GrafeoDB (skip all tests gracefully if unavailable)
@@ -82,6 +82,9 @@ async function executeQuery(db, language, query) {
     case 'graphql':
       if (!db.executeGraphql) throw new Error('GraphQL not available')
       return db.executeGraphql(query)
+    case 'sparql':
+      if (!db.executeSparql) throw new Error('SPARQL not available')
+      return db.executeSparql(query)
     case 'sql-pgq':
     case 'sql_pgq':
       if (!db.executeSql) throw new Error('SQL/PGQ not available')
@@ -163,9 +166,9 @@ for (const filePath of gtestFiles) {
           // Check language availability
           if (!isLanguageAvailable(db, meta.language)) return
 
-          // Check requires
+          // Check requires: skip if binding does not expose the required method
           for (const req of meta.requires) {
-            if (req === 'sparql' || req === 'rdf') return // skip
+            if (!isLanguageAvailable(db, req)) return // skip
           }
 
           // Load dataset
@@ -195,12 +198,13 @@ async function runTestCase(db, tc, language, setupLanguage) {
   const queries = tc.statements.length > 0 ? tc.statements : tc.query ? [tc.query] : []
   if (queries.length === 0) throw new Error(`No query or statements in test '${tc.name}'`)
 
-  // Error case
+  // Error case: execute all-but-last normally, only last should fail
   if (exp.error) {
+    for (let i = 0; i < queries.length - 1; i++) {
+      await executeQuery(db, language, queries[i])
+    }
     try {
-      for (const q of queries) {
-        await executeQuery(db, language, q)
-      }
+      await executeQuery(db, language, queries[queries.length - 1])
       throw new Error(`Expected error containing '${exp.error}' but query succeeded`)
     } catch (err) {
       if (err.message.startsWith('Expected error')) throw err
@@ -230,6 +234,12 @@ async function runTestCase(db, tc, language, setupLanguage) {
   // Count check
   if (exp.count !== null && exp.count !== undefined) {
     expect(result.length).toBe(exp.count)
+    return
+  }
+
+  // Hash check
+  if (exp.hash) {
+    assertHash(result, exp.hash)
     return
   }
 

@@ -127,8 +127,6 @@ func dispatchKey(lang string) string {
 	switch lang {
 	case "sql-pgq", "sql_pgq":
 		return "sql"
-	case "graphql-rdf":
-		return "graphql"
 	case "":
 		return "gql"
 	default:

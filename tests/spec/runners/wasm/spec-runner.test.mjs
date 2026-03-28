@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs'
 import { join, relative, resolve } from 'path'
 import { parseGtestFile } from '../node/parser.mjs'
-import { assertRowsSorted, assertRowsOrdered, assertRowsWithPrecision } from '../node/comparator.mjs'
+import { assertRowsSorted, assertRowsOrdered, assertRowsWithPrecision, assertHash } from '../node/comparator.mjs'
 
 // ---------------------------------------------------------------------------
 // Import WASM bindings (skip all tests gracefully if unavailable)
@@ -193,7 +193,7 @@ for (const filePath of gtestFiles) {
               if (meta.dataset && meta.dataset !== 'empty') {
                 loadDataset(db, meta.dataset)
               }
-              runTestCase(db, { ...tc, query }, lang)
+              runTestCase(db, { ...tc, query }, lang, meta.language || 'gql')
             } finally {
               db.free()
             }
@@ -213,9 +213,9 @@ for (const filePath of gtestFiles) {
           // Check language availability
           if (!isLanguageAvailable(db, meta.language)) return
 
-          // Check requires
+          // Check requires: skip if binding does not expose the required method
           for (const req of meta.requires) {
-            if (req === 'sparql' || req === 'rdf') return // skip
+            if (!isLanguageAvailable(db, req)) return // skip
           }
 
           // Load dataset
@@ -223,7 +223,7 @@ for (const filePath of gtestFiles) {
             loadDataset(db, meta.dataset)
           }
 
-          runTestCase(db, tc, meta.language)
+          runTestCase(db, tc, meta.language, meta.language || 'gql')
         } finally {
           db.free()
         }
@@ -233,10 +233,10 @@ for (const filePath of gtestFiles) {
 }
 
 /** Execute a single test case and assert the expected result. */
-function runTestCase(db, tc, language) {
-  // Run setup queries in the file's declared language
+function runTestCase(db, tc, language, setupLanguage) {
+  // Run setup queries in the file's declared language (not the variant language)
   for (const setupQ of tc.setup) {
-    executeQuery(db, language, setupQ)
+    executeQuery(db, setupLanguage || language, setupQ)
   }
 
   const exp = tc.expect
@@ -245,12 +245,13 @@ function runTestCase(db, tc, language) {
   const queries = tc.statements.length > 0 ? tc.statements : tc.query ? [tc.query] : []
   if (queries.length === 0) throw new Error(`No query or statements in test '${tc.name}'`)
 
-  // Error case
+  // Error case: execute all-but-last normally, only last should fail
   if (exp.error) {
+    for (let i = 0; i < queries.length - 1; i++) {
+      executeQuery(db, language, queries[i])
+    }
     try {
-      for (const q of queries) {
-        executeQuery(db, language, q)
-      }
+      executeQuery(db, language, queries[queries.length - 1])
       throw new Error(`Expected error containing '${exp.error}' but query succeeded`)
     } catch (err) {
       if (err.message.startsWith('Expected error')) throw err
@@ -283,6 +284,12 @@ function runTestCase(db, tc, language) {
   // Count check
   if (exp.count !== null && exp.count !== undefined) {
     expect(result.length).toBe(exp.count)
+    return
+  }
+
+  // Hash check
+  if (exp.hash) {
+    assertHash(result, exp.hash)
     return
   }
 

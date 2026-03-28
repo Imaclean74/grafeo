@@ -8,9 +8,11 @@
 ///   dart test spec_runner_test.dart
 library;
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:grafeo/grafeo.dart';
 import 'package:test/test.dart';
 import 'package:yaml/yaml.dart';
@@ -44,7 +46,6 @@ Directory _resolveSpecDir() {
 String _normaliseLanguage(String lang) {
   return switch (lang) {
     'sql_pgq' => 'sql-pgq',
-    'graphql-rdf' => 'graphql',
     _ => lang,
   };
 }
@@ -248,6 +249,36 @@ void _assertColumns(QueryResult result, List<String> expected) {
           'Column mismatch: got ${result.columns}, expected $expected');
 }
 
+/// Assert that the MD5 hash of sorted, pipe-delimited rows matches.
+/// Mirrors assert_hash in the Rust runner.
+void _assertHash(QueryResult result, String expectedHash) {
+  final rows = _resultToRows(result);
+  rows.sort((a, b) => a.join('|').compareTo(b.join('|')));
+
+  final sink = AccumulatorSink<crypto.Digest>();
+  final output = crypto.md5.startChunkedConversion(sink);
+  for (final row in rows) {
+    output.add(utf8.encode('${row.join('|')}\n'));
+  }
+  output.close();
+  final actualHash = sink.events.single.toString();
+
+  expect(actualHash, equals(expectedHash),
+      reason: 'Hash mismatch: got $actualHash, expected $expectedHash\n'
+          'Rows: $rows');
+}
+
+/// Accumulator sink for chunked hash computation.
+class AccumulatorSink<T> implements Sink<T> {
+  final events = <T>[];
+
+  @override
+  void add(T event) => events.add(event);
+
+  @override
+  void close() {}
+}
+
 // =============================================================================
 // .gtest YAML parsing
 // =============================================================================
@@ -275,6 +306,7 @@ class _Expect {
   int? count;
   bool empty;
   String? error;
+  String? hash;
   int? precision;
   List<String> columns;
 
@@ -284,6 +316,7 @@ class _Expect {
     this.count,
     this.empty = false,
     this.error,
+    this.hash,
     this.precision,
     List<String>? columns,
   })  : rows = rows ?? [],
@@ -399,6 +432,9 @@ _Expect _parseExpect(YamlMap d) {
 
   final error = d['error'];
   if (error != null) e.error = error.toString();
+
+  final hashVal = d['hash'];
+  if (hashVal != null) e.hash = hashVal.toString();
 
   final precision = d['precision'];
   if (precision != null) {
@@ -545,6 +581,12 @@ void _runTestCase(GrafeoDB db, _TestCase tc, String language) {
         reason:
             'Row count mismatch: got ${result.rows.length}, '
             'expected ${exp.count}');
+    return;
+  }
+
+  // Hash check
+  if (exp.hash != null) {
+    _assertHash(result, exp.hash!);
     return;
   }
 

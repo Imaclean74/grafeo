@@ -9,6 +9,7 @@ environment:
   sdk: '>=3.0.0 <4.0.0'
 
 dependencies:
+  crypto: ^3.0.0
   grafeo:
     path: ../../../../crates/bindings/dart
   yaml: ^3.1.0
