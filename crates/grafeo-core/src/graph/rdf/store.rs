@@ -735,6 +735,34 @@ impl RdfStore {
         Ok(self.bulk_load(triples))
     }
 
+    /// Parses and loads a Turtle document, replacing all existing data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TurtleError` on parse failure.
+    pub fn load_turtle(&self, input: &str) -> Result<BulkLoadResult, super::turtle::TurtleError> {
+        let triples = super::turtle::TurtleParser::new().parse(input)?;
+        Ok(self.bulk_load(triples))
+    }
+
+    /// Serializes this store's triples to Turtle format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if serialization fails.
+    pub fn to_turtle(&self) -> std::io::Result<String> {
+        super::turtle::TurtleSerializer::new().to_string(&self.triples())
+    }
+
+    /// Serializes this store (default + named graphs) to N-Quads format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error if serialization fails.
+    pub fn to_nquads(&self) -> std::io::Result<String> {
+        super::nquads::to_nquads_string(self)
+    }
+
     // =========================================================================
     // Named graph support
     // =========================================================================

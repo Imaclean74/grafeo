@@ -814,12 +814,16 @@ fn generate_single_test(
         .unwrap();
     }
 
-    // Setup queries
+    // Setup queries always run in the file's default language (usually "gql"),
+    // even for rosetta variant tests where lang_override selects a different
+    // language for the main query. This lets setup use INSERT (GQL) regardless
+    // of whether the variant under test is Cypher, Gremlin, etc.
+    let setup_language = &file.meta.language;
     for setup_q in &tc.setup {
         writeln!(
             output,
             "        execute_query(&db, \"{}\", \"{}\");",
-            escape_rust_string(language),
+            escape_rust_string(setup_language),
             escape_rust_string(setup_q)
         )
         .unwrap();
