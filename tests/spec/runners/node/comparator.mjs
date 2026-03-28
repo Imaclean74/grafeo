@@ -82,6 +82,39 @@ export function assertRowsSorted(result, expected) {
 }
 
 /**
+ * Assert rows match with floating-point tolerance.
+ * Cells that parse as numbers on both sides are compared within 10^(-precision).
+ */
+export function assertRowsWithPrecision(result, expected, precision) {
+  const actual = resultToRows(result)
+  const tolerance = Math.pow(10, -precision)
+  if (actual.length !== expected.length) {
+    throw new Error(
+      `Row count mismatch: got ${actual.length}, expected ${expected.length}`
+    )
+  }
+  for (let i = 0; i < actual.length; i++) {
+    for (let j = 0; j < actual[i].length; j++) {
+      const a = actual[i][j]
+      const e = expected[i][j]
+      const af = parseFloat(a)
+      const ef = parseFloat(e)
+      if (!isNaN(af) && !isNaN(ef)) {
+        if (Math.abs(af - ef) >= tolerance) {
+          throw new Error(
+            `Float mismatch at row ${i}, col ${j}: got ${af}, expected ${ef} (tolerance ${tolerance})`
+          )
+        }
+      } else if (a !== e) {
+        throw new Error(
+          `Mismatch at row ${i}, col ${j}: got '${a}', expected '${e}'`
+        )
+      }
+    }
+  }
+}
+
+/**
  * Assert rows match in exact order.
  */
 export function assertRowsOrdered(result, expected) {

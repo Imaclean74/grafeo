@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs'
 import { join, relative, resolve } from 'path'
 import { parseGtestFile } from './parser.mjs'
-import { assertRowsSorted, assertRowsOrdered, resultToRows } from './comparator.mjs'
+import { assertRowsSorted, assertRowsOrdered, assertRowsWithPrecision, resultToRows } from './comparator.mjs'
 
 // ---------------------------------------------------------------------------
 // Import GrafeoDB (skip all tests gracefully if unavailable)
