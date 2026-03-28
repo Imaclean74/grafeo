@@ -1291,4 +1291,3 @@ describe('concurrent instances', () => {
     db2.close()
   })
 })
-
