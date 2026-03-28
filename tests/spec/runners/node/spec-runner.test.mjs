@@ -184,9 +184,9 @@ for (const filePath of gtestFiles) {
 
 /** Execute a single test case and assert the expected result. */
 async function runTestCase(db, tc, language) {
-  // Run setup queries (always GQL)
+  // Run setup queries in the file's declared language
   for (const setupQ of tc.setup) {
-    await db.execute(setupQ)
+    await executeQuery(db, language, setupQ)
   }
 
   const exp = tc.expect
@@ -215,6 +215,12 @@ async function runTestCase(db, tc, language) {
     result = await executeQuery(db, language, queries[i])
   }
 
+  // Column assertion (checked before value assertions)
+  if (exp.columns && exp.columns.length > 0) {
+    const actualCols = result.columns ? [...result.columns] : []
+    expect(actualCols).toEqual(exp.columns)
+  }
+
   // Empty check
   if (exp.empty) {
     expect(result.length).toBe(0)
@@ -229,7 +235,9 @@ async function runTestCase(db, tc, language) {
 
   // Rows check
   if (exp.rows.length > 0) {
-    if (exp.ordered) {
+    if (exp.precision !== null && exp.precision !== undefined) {
+      assertRowsWithPrecision(result, exp.rows, exp.precision)
+    } else if (exp.ordered) {
       assertRowsOrdered(result, exp.rows)
     } else {
       assertRowsSorted(result, exp.rows)

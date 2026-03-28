@@ -768,6 +768,7 @@ fn generate_single_test(
     rel_path: &str,
 ) {
     let language = lang_override.unwrap_or(&file.meta.language);
+    let model = &file.meta.model;
 
     // Feature gate
     let feature_gate = match language {
@@ -814,16 +815,16 @@ fn generate_single_test(
         .unwrap();
     }
 
-    // Setup queries always run in the file's default language (usually "gql"),
-    // even for rosetta variant tests where lang_override selects a different
-    // language for the main query. This lets setup use INSERT (GQL) regardless
-    // of whether the variant under test is Cypher, Gremlin, etc.
+    // Setup queries run in the file's declared language and model. This allows
+    // SPARQL tests to use INSERT DATA in setup, Cypher tests to use CREATE, etc.
+    // For rosetta variant tests, setup always uses meta.language (the file default).
     let setup_language = &file.meta.language;
     for setup_q in &tc.setup {
         writeln!(
             output,
-            "        execute_query(&db, \"{}\", \"{}\");",
+            "        execute_query_with_model(&db, \"{}\", \"{}\", \"{}\");",
             escape_rust_string(setup_language),
+            escape_rust_string(model),
             escape_rust_string(setup_q)
         )
         .unwrap();
@@ -851,36 +852,44 @@ fn generate_single_test(
 
     // Execute queries (all but last are fire-and-forget, last captures result)
     if queries.len() == 1 {
-        generate_execute_and_assert(output, &queries[0], language, tc);
+        generate_execute_and_assert(output, &queries[0], language, model, tc);
     } else {
         // Execute all but last
         for q in &queries[..queries.len() - 1] {
             writeln!(
                 output,
-                "        execute_query(&db, \"{}\", \"{}\");",
+                "        execute_query_with_model(&db, \"{}\", \"{}\", \"{}\");",
                 escape_rust_string(language),
+                escape_rust_string(model),
                 escape_rust_string(q)
             )
             .unwrap();
         }
         // Last query: capture result and assert
         let last = &queries[queries.len() - 1];
-        generate_execute_and_assert(output, last, language, tc);
+        generate_execute_and_assert(output, last, language, model, tc);
     }
 
     writeln!(output, "    }}").unwrap();
     writeln!(output).unwrap();
 }
 
-fn generate_execute_and_assert(output: &mut String, query: &str, language: &str, tc: &TestCase) {
+fn generate_execute_and_assert(
+    output: &mut String,
+    query: &str,
+    language: &str,
+    model: &str,
+    tc: &TestCase,
+) {
     let expect = &tc.expect;
 
     // Error case
     if let Some(err_substr) = &expect.error {
         writeln!(
             output,
-            "        let result = execute_query_result(&db, \"{}\", \"{}\");",
+            "        let result = execute_query_result(&db, \"{}\", \"{}\", \"{}\");",
             escape_rust_string(language),
+            escape_rust_string(model),
             escape_rust_string(query)
         )
         .unwrap();
@@ -908,11 +917,27 @@ fn generate_execute_and_assert(output: &mut String, query: &str, language: &str,
     // Normal execution
     writeln!(
         output,
-        "        let result = execute_query_result(&db, \"{}\", \"{}\").expect(\"query failed\");",
+        "        let result = execute_query_result(&db, \"{}\", \"{}\", \"{}\").expect(\"query failed\");",
         escape_rust_string(language),
+        escape_rust_string(model),
         escape_rust_string(query)
     )
     .unwrap();
+
+    // Column assertion (checked before value assertions)
+    if !expect.columns.is_empty() {
+        let cols: Vec<String> = expect
+            .columns
+            .iter()
+            .map(|c| format!("\"{}\"", escape_rust_string(c)))
+            .collect();
+        writeln!(
+            output,
+            "        assert_columns(&result, &[{}]);",
+            cols.join(", ")
+        )
+        .unwrap();
+    }
 
     // Empty check
     if expect.empty {
@@ -958,7 +983,13 @@ fn generate_execute_and_assert(output: &mut String, query: &str, language: &str,
         }
         writeln!(output, "        ];").unwrap();
 
-        if expect.ordered {
+        if let Some(precision) = expect.precision {
+            writeln!(
+                output,
+                "        assert_rows_with_precision(&result, &expected, {precision});"
+            )
+            .unwrap();
+        } else if expect.ordered {
             writeln!(output, "        assert_rows_ordered(&result, &expected);").unwrap();
         } else {
             writeln!(output, "        assert_rows_sorted(&result, &expected);").unwrap();

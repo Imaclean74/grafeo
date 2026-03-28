@@ -24,12 +24,14 @@ if str(_runner_dir) not in sys.path:
 
 from parser import GtestFile, TestCase, parse_gtest_file  # noqa: E402
 from comparator import (  # noqa: E402
+    assert_columns,
     assert_count,
     assert_empty,
     assert_error,
     assert_hash,
     assert_rows_ordered,
     assert_rows_sorted,
+    assert_rows_with_precision,
 )
 
 # ---------------------------------------------------------------------------
@@ -165,9 +167,10 @@ class GtestItem(pytest.Item):
         if meta.dataset and meta.dataset != "empty":
             _load_dataset(db, meta.dataset)
 
-        # Run setup queries (always GQL)
+        # Run setup queries in the file's declared language
+        setup_language = meta.language or "gql"
         for setup_q in tc.setup:
-            db.execute(setup_q)
+            _execute(db, setup_language, setup_q)
 
         # Determine query / statements
         query = self.variant_query or tc.query
@@ -195,7 +198,11 @@ class GtestItem(pytest.Item):
         # Last query: capture result
         result = _execute(db, language, queries[-1])
 
-        # Assertions
+        # Column assertion (checked before value assertions)
+        if expect.columns:
+            assert_columns(result, expect.columns)
+
+        # Value assertions
         if expect.empty:
             assert_empty(result)
         elif expect.count is not None:
@@ -203,7 +210,9 @@ class GtestItem(pytest.Item):
         elif expect.hash is not None:
             assert_hash(result, expect.hash)
         elif expect.rows:
-            if expect.ordered:
+            if expect.precision is not None:
+                assert_rows_with_precision(result, expect.rows, expect.precision)
+            elif expect.ordered:
                 assert_rows_ordered(result, expect.rows)
             else:
                 assert_rows_sorted(result, expect.rows)

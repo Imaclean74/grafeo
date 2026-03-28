@@ -171,6 +171,50 @@ def assert_error(exc: Exception, expected_substr: str) -> None:
     assert expected_substr in msg, f"Error '{msg}' does not contain '{expected_substr}'"
 
 
+def assert_columns(result, expected_columns: List[str]) -> None:
+    """Assert that result column names match *expected_columns* exactly."""
+    actual = list(result.columns)
+    assert actual == expected_columns, (
+        f"Column mismatch: got {actual}, expected {expected_columns}"
+    )
+
+
+def assert_rows_with_precision(
+    result,
+    expected: List[List[str]],
+    precision: int,
+    columns: Optional[List[str]] = None,
+) -> None:
+    """Assert rows match with floating-point tolerance.
+
+    Cells that parse as float on both sides are compared within
+    ``10**(-precision)`` tolerance. All other cells use exact string match.
+    """
+    actual = result_to_rows(result, columns)
+    tolerance = 10 ** (-precision)
+
+    assert len(actual) == len(expected), (
+        f"Row count mismatch: got {len(actual)}, expected {len(expected)}"
+    )
+
+    for i, (act_row, exp_row) in enumerate(zip(actual, expected)):
+        assert len(act_row) == len(exp_row), (
+            f"Column count mismatch at row {i}: "
+            f"got {len(act_row)}, expected {len(exp_row)}"
+        )
+        for j, (a, e) in enumerate(zip(act_row, exp_row)):
+            try:
+                af, ef = float(a), float(e)
+                assert abs(af - ef) < tolerance, (
+                    f"Float mismatch at row {i}, col {j}: "
+                    f"got {af}, expected {ef} (tolerance {tolerance})"
+                )
+            except (ValueError, TypeError):
+                assert a == e, (
+                    f"Mismatch at row {i}, col {j}: got '{a}', expected '{e}'"
+                )
+
+
 def assert_hash(
     result,
     expected_hash: str,

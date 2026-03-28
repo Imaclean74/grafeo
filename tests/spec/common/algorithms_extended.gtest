@@ -122,7 +122,7 @@ tests:
       - "MATCH (a:City {name: 'Amsterdam'}), (b:City {name: 'Paris'}) INSERT (a)-[:ROUTE {km: 500}]->(b)"
     query: "CALL grafeo.kruskal({weight: 'km'})"
     expect:
-      columns: [source, target, weight, total_weight]
+      columns: [source, target, weight]
       count: 2
 
   - name: kruskal_unweighted_chain
@@ -174,7 +174,7 @@ tests:
       - "MATCH (a:City {name: 'Amsterdam'}), (b:City {name: 'Paris'}) INSERT (a)-[:ROUTE {km: 500}]->(b)"
     query: "CALL grafeo.prim({weight: 'km'})"
     expect:
-      columns: [source, target, weight, total_weight]
+      columns: [source, target, weight]
       count: 2
 
   - name: prim_with_start_node
@@ -271,7 +271,7 @@ tests:
       - "MATCH (a:Station {name: 'Alix'}), (b:Station {name: 'Vincent'}) INSERT (a)-[:PIPE {capacity: 2, cost: 5}]->(b)"
     query: "CALL grafeo.min_cost_max_flow({source: 0, sink: 2, capacity: 'capacity', cost: 'cost'})"
     expect:
-      columns: [source, target, flow, cost, max_flow, total_cost]
+      columns: [source, target, flow, cost, max_flow]
 
   - name: min_cost_max_flow_chain
     setup:

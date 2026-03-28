@@ -39,25 +39,40 @@ pub fn load_dataset(db: &GrafeoDB, relative_path: &str) {
 
 /// Execute a query in the specified language, panicking on failure.
 pub fn execute_query(db: &GrafeoDB, language: &str, query: &str) {
-    execute_query_result(db, language, query)
-        .unwrap_or_else(|e| panic!("Query failed: {query}\nLanguage: {language}\nError: {e}"));
+    execute_query_with_model(db, language, "", query);
 }
 
-/// Execute a query in the specified language, returning the Result.
-pub fn execute_query_result(db: &GrafeoDB, language: &str, query: &str) -> Result<QueryResult> {
-    match language {
-        "gql" | "" => db.execute(query),
+/// Execute a query with model-aware dispatch, panicking on failure.
+pub fn execute_query_with_model(db: &GrafeoDB, language: &str, model: &str, query: &str) {
+    execute_query_result(db, language, model, query)
+        .unwrap_or_else(|e| panic!("Query failed: {query}\nLanguage: {language}\nModel: {model}\nError: {e}"));
+}
+
+/// Execute a query using the (language, model) dispatch key, returning the Result.
+pub fn execute_query_result(
+    db: &GrafeoDB,
+    language: &str,
+    model: &str,
+    query: &str,
+) -> Result<QueryResult> {
+    // The (language, model) pair determines dispatch. For most languages,
+    // model is informational. For GraphQL, model=rdf routes to the RDF
+    // triple store executor via execute_language("graphql-rdf", ...).
+    match (language, model) {
+        ("gql" | "", _) => db.execute(query),
         #[cfg(feature = "cypher")]
-        "cypher" => db.execute_cypher(query),
+        ("cypher", _) => db.execute_cypher(query),
         #[cfg(all(feature = "sparql", feature = "rdf"))]
-        "sparql" => db.execute_sparql(query),
+        ("sparql", _) => db.execute_sparql(query),
         #[cfg(feature = "gremlin")]
-        "gremlin" => db.execute_gremlin(query),
+        ("gremlin", _) => db.execute_gremlin(query),
         #[cfg(feature = "graphql")]
-        "graphql" => db.execute_graphql(query),
+        ("graphql", _) => db.execute_graphql(query),
+        #[cfg(all(feature = "graphql", feature = "rdf"))]
+        ("graphql-rdf", _) => db.execute_language(query, "graphql-rdf", None),
         #[cfg(feature = "sql-pgq")]
-        "sql-pgq" | "sql_pgq" => db.execute_sql(query),
-        other => panic!("Unsupported language: {other}"),
+        ("sql-pgq" | "sql_pgq", _) => db.execute_sql(query),
+        (other, _) => panic!("Unsupported language: {other}"),
     }
 }
 
@@ -183,6 +198,59 @@ pub fn assert_rows_ordered(result: &QueryResult, expected: &[Vec<String>]) {
                 a, e,
                 "Mismatch at row {i}, col {j}: got '{a}', expected '{e}'\nFull actual row: {act:?}\nFull expected row: {exp:?}"
             );
+        }
+    }
+}
+
+/// Assert that result column names match expected names exactly.
+pub fn assert_columns(result: &QueryResult, expected: &[&str]) {
+    let actual: Vec<&str> = result.columns.iter().map(|s| s.as_str()).collect();
+    assert_eq!(
+        actual, expected,
+        "Column mismatch: got {actual:?}, expected {expected:?}"
+    );
+}
+
+/// Assert rows match with floating-point tolerance.
+///
+/// Cells that parse as `f64` on both sides are compared within `10^(-precision)`.
+/// All other cells use exact string comparison.
+pub fn assert_rows_with_precision(
+    result: &QueryResult,
+    expected: &[Vec<String>],
+    precision: u32,
+) {
+    let actual = result_to_strings(result);
+    let tolerance = 10f64.powi(-(precision as i32));
+
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "Row count mismatch: got {} rows, expected {}\nActual: {actual:?}\nExpected: {expected:?}",
+        actual.len(),
+        expected.len()
+    );
+
+    for (i, (act_row, exp_row)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert_eq!(
+            act_row.len(),
+            exp_row.len(),
+            "Column count mismatch at row {i}: got {} cols, expected {}",
+            act_row.len(),
+            exp_row.len()
+        );
+        for (j, (a, e)) in act_row.iter().zip(exp_row.iter()).enumerate() {
+            if let (Ok(af), Ok(ef)) = (a.parse::<f64>(), e.parse::<f64>()) {
+                assert!(
+                    (af - ef).abs() < tolerance,
+                    "Float mismatch at row {i}, col {j}: got {af}, expected {ef} (tolerance {tolerance})"
+                );
+            } else {
+                assert_eq!(
+                    a, e,
+                    "Mismatch at row {i}, col {j}: got '{a}', expected '{e}'"
+                );
+            }
         }
     }
 }
