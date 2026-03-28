@@ -771,3 +771,152 @@ tests:
     expect:
       rows:
         - [Alix]
+
+  # ---------------------------------------------------------------------------
+  # 22. OrderBy with multiple sort keys
+  # ---------------------------------------------------------------------------
+
+  - name: order_by_two_keys
+    query: |
+      query {
+        person(orderBy: { city: ASC, age: DESC }) {
+          name city age
+        }
+      }
+    expect:
+      ordered: true
+      rows:
+        - [Alix, Amsterdam, 30]
+        - [Gus, Berlin, 25]
+        - [Vincent, Paris, 35]
+
+  # ---------------------------------------------------------------------------
+  # 23. OrderBy combined with where
+  # ---------------------------------------------------------------------------
+
+  - name: order_by_with_where_filter
+    query: |
+      query {
+        person(where: { age_gt: 24 }, orderBy: { age: ASC }) {
+          name age
+        }
+      }
+    expect:
+      ordered: true
+      rows:
+        - [Gus, 25]
+        - [Alix, 30]
+        - [Vincent, 35]
+
+  - name: order_by_with_where_and_first
+    query: |
+      query {
+        person(where: { age_gt: 24 }, orderBy: { age: ASC }, first: 2) {
+          name age
+        }
+      }
+    expect:
+      ordered: true
+      rows:
+        - [Gus, 25]
+        - [Alix, 30]
+
+  # ---------------------------------------------------------------------------
+  # 24. Nested field compound filters
+  # ---------------------------------------------------------------------------
+
+  - name: nested_compound_filter
+    query: |
+      query {
+        person {
+          name
+          knows(age_gte: 25, age_lte: 35) {
+            name
+          }
+        }
+      }
+    expect:
+      count: 2
+
+  # ---------------------------------------------------------------------------
+  # 25. Deeply nested traversals (3 levels)
+  # ---------------------------------------------------------------------------
+
+  - name: deeply_nested_three_levels
+    query: |
+      query {
+        person(name: "Alix") {
+          name
+          knows {
+            name
+            knows {
+              name
+            }
+          }
+        }
+      }
+    expect:
+      count: 1
+
+  # ---------------------------------------------------------------------------
+  # 26. Multiple fragment spreads
+  # ---------------------------------------------------------------------------
+
+  - name: multiple_fragment_spreads
+    query: |
+      fragment Names on Person { name }
+      fragment Ages on Person { age }
+      query { person { ...Names ...Ages } }
+    expect:
+      count: 3
+
+  # ---------------------------------------------------------------------------
+  # 27. Fragment with nested fields
+  # ---------------------------------------------------------------------------
+
+  - name: fragment_with_nested_fields
+    query: |
+      fragment PersonWithFriends on Person {
+        name
+        knows { name }
+      }
+      query { person(name: "Alix") { ...PersonWithFriends } }
+    expect:
+      count: 1
+
+  # ---------------------------------------------------------------------------
+  # 28. Inline fragment without type condition
+  # ---------------------------------------------------------------------------
+
+  - name: inline_fragment_no_type_condition
+    query: "query { person { ... { name age } } }"
+    expect:
+      count: 3
+
+  # ---------------------------------------------------------------------------
+  # 29. Edge case property values
+  # ---------------------------------------------------------------------------
+
+  - name: create_and_query_zero_value
+    statements:
+      - "mutation { createPerson(name: \"Mia\", age: 0) { name } }"
+      - "{ person(age: 0) { name age } }"
+    expect:
+      rows:
+        - [Mia, 0]
+
+  - name: create_and_query_false_value
+    statements:
+      - "mutation { createPerson(name: \"Butch\", active: false) { name } }"
+      - "{ person(name: \"Butch\") { name active } }"
+    expect:
+      rows:
+        - [Butch, false]
+
+  - name: create_and_query_empty_string
+    statements:
+      - "mutation { createPerson(name: \"Jules\", city: \"\") { name } }"
+      - "{ person(name: \"Jules\") { name city } }"
+    expect:
+      rows:
+        - [Jules, ""]

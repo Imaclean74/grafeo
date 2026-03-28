@@ -247,3 +247,38 @@ tests:
     query: "mutation { deletePerson(name: \"NonExistent\") }"
     expect:
       empty: true
+
+  # ---------------------------------------------------------------------------
+  # Create with no selection set
+  # ---------------------------------------------------------------------------
+
+  - name: create_without_selection_set
+    statements:
+      - "mutation { createPerson(name: \"Shosanna\", age: 27) }"
+      - "{ person(name: \"Shosanna\") { name age } }"
+    expect:
+      rows:
+        - [Shosanna, 27]
+
+  # ---------------------------------------------------------------------------
+  # Update multiple properties at once
+  # ---------------------------------------------------------------------------
+
+  - name: update_multiple_properties
+    statements:
+      - "mutation { updatePerson(name: \"Alix\", age: 31, city: \"Prague\") { name age city } }"
+      - "{ person(name: \"Alix\") { name age city } }"
+    expect:
+      rows:
+        - [Alix, 31, Prague]
+
+  # ---------------------------------------------------------------------------
+  # Delete then verify edge cleanup
+  # ---------------------------------------------------------------------------
+
+  - name: delete_person_then_verify_count
+    statements:
+      - "mutation { deletePerson(name: \"Alix\") }"
+      - "{ person { name } }"
+    expect:
+      count: 2
