@@ -1136,12 +1136,13 @@ mod tests {
     #[test]
     fn large_insert_and_query() {
         let db = rdf_db();
+        use std::fmt::Write;
         let mut triples = String::from("INSERT DATA {\n");
         for i in 0..100 {
-            triples.push_str(&format!(
-                r#"    <http://ex.org/n{i}> <http://ex.org/val> "{i}" .
-"#
-            ));
+            let _ = writeln!(
+                triples,
+                "    <http://ex.org/n{i}> <http://ex.org/val> \"{i}\" ."
+            );
         }
         triples.push('}');
         db.execute_sparql(&triples).unwrap();

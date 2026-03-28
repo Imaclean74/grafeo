@@ -413,10 +413,10 @@ mod tests {
     fn sec11_count_star() {
         let query = "SELECT (COUNT(*) AS ?total) WHERE { ?s ?p ?o }";
         let result = sparql::parse(query).unwrap();
-        if let ast::QueryForm::Select(select) = &result.query_form {
-            if let ast::Projection::Variables(vars) = &select.projection {
-                assert_eq!(vars[0].alias.as_deref(), Some("total"));
-            }
+        if let ast::QueryForm::Select(select) = &result.query_form
+            && let ast::Projection::Variables(vars) = &select.projection
+        {
+            assert_eq!(vars[0].alias.as_deref(), Some("total"));
         }
     }
 
@@ -1362,11 +1362,11 @@ mod tests {
             }
         "#;
         let result = sparql::parse(query).unwrap();
-        if let ast::QueryForm::Select(select) = &result.query_form {
-            if let ast::Projection::Variables(vars) = &select.projection {
-                assert_eq!(vars.len(), 2);
-                assert_eq!(vars[1].alias.as_deref(), Some("priceWithTax"));
-            }
+        if let ast::QueryForm::Select(select) = &result.query_form
+            && let ast::Projection::Variables(vars) = &select.projection
+        {
+            assert_eq!(vars.len(), 2);
+            assert_eq!(vars[1].alias.as_deref(), Some("priceWithTax"));
         }
     }
 
@@ -1378,10 +1378,10 @@ mod tests {
             }
         "#;
         let result = sparql::parse(query).unwrap();
-        if let ast::QueryForm::Select(select) = &result.query_form {
-            if let ast::Projection::Variables(vars) = &select.projection {
-                assert_eq!(vars.len(), 4);
-            }
+        if let ast::QueryForm::Select(select) = &result.query_form
+            && let ast::Projection::Variables(vars) = &select.projection
+        {
+            assert_eq!(vars.len(), 4);
         }
     }
 

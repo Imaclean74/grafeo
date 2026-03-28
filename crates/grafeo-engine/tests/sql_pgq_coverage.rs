@@ -157,35 +157,35 @@ fn create_chain_with_cycle() -> GrafeoDB {
     let db = GrafeoDB::new_in_memory();
     let session = db.session();
 
-    let a = session.create_node_with_props(
+    let na = session.create_node_with_props(
         &["Node"],
         [
             ("name", Value::String("A".into())),
             ("weight", Value::Int64(10)),
         ],
     );
-    let b = session.create_node_with_props(
+    let nb = session.create_node_with_props(
         &["Node"],
         [
             ("name", Value::String("B".into())),
             ("weight", Value::Int64(20)),
         ],
     );
-    let c = session.create_node_with_props(
+    let nc = session.create_node_with_props(
         &["Node"],
         [
             ("name", Value::String("C".into())),
             ("weight", Value::Int64(30)),
         ],
     );
-    let d = session.create_node_with_props(
+    let and = session.create_node_with_props(
         &["Node"],
         [
             ("name", Value::String("D".into())),
             ("weight", Value::Int64(40)),
         ],
     );
-    let e = session.create_node_with_props(
+    let ne = session.create_node_with_props(
         &["Node"],
         [
             ("name", Value::String("E".into())),
@@ -193,12 +193,12 @@ fn create_chain_with_cycle() -> GrafeoDB {
         ],
     );
 
-    session.create_edge(a, b, "LINK");
-    session.create_edge(b, c, "LINK");
-    session.create_edge(c, d, "LINK");
-    session.create_edge(d, e, "LINK");
-    session.create_edge(a, c, "SHORTCUT");
-    session.create_edge(e, a, "LINK"); // cycle
+    session.create_edge(na, nb, "LINK");
+    session.create_edge(nb, nc, "LINK");
+    session.create_edge(nc, and, "LINK");
+    session.create_edge(and, ne, "LINK");
+    session.create_edge(na, nc, "SHORTCUT");
+    session.create_edge(ne, na, "LINK"); // cycle
 
     db
 }
