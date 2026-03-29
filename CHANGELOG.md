@@ -20,6 +20,17 @@ Async storage foundation and continued test coverage.
 - **`SnapshotMetadata`**: metadata type for snapshot listing in async backends
 - **Node.js `walCheckpoint()` and `save()`**: new sync methods for checkpoint and persistence in Node.js bindings
 
+### Fixed
+
+- **86 stale spec test skips removed**: path modes (TRAIL, SIMPLE, ACYCLIC, WALK), ALL SHORTEST search prefix, list slice syntax, SPARQL string/datetime/hash functions, RDF term construction, conditional functions, named graphs, property paths, GraphQL directive evaluation, and more
+- **SPARQL dateTime extraction functions**: YEAR, MONTH, DAY, HOURS, MINUTES, SECONDS, TIMEZONE, TZ now correctly parse typed `xsd:dateTime` literals with timezone offsets
+- **SPARQL LANGMATCHES()**: implemented RFC 4647 basic filtering with case-insensitive prefix matching and wildcard `"*"` support
+- **SPARQL LANG() companion columns**: language tags are now tracked through triple scans and available to LANG()/LANGMATCHES() in FILTER
+- **SQL/PGQ parameters in WHERE**: `$name`, `$min_age` parameter references now resolved in filter evaluation via gtest runner wiring
+- **SQL/PGQ HAVING inline aggregates**: `HAVING COUNT(*) > 0` and other inline aggregates in HAVING clauses now correctly extracted and referenced
+- **SQL/PGQ zero-length paths**: `*0..N` variable-length patterns now emit the source node as a 0-hop match
+- **Cypher `collect(DISTINCT ...)`**: `size(collect(DISTINCT n.v))` now correctly extracts the wrapped aggregate through non-aggregate function calls
+
 ## [0.5.29] - 2026-03-29
 
 Query engine correctness improvements and unified declarative test suite.
