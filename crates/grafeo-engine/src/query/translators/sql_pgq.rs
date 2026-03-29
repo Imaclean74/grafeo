@@ -9,10 +9,10 @@ use super::common::{
     wrap_return, wrap_skip, wrap_sort,
 };
 use crate::query::plan::{
-    AggregateExpr, AggregateOp, BinaryOp, CallProcedureOp, CreatePropertyGraphOp, DistinctOp,
-    ExpandDirection, ExpandOp, LeftJoinOp, LogicalExpression, LogicalOperator, LogicalPlan,
-    NodeScanOp, PathMode, ProcedureYield, PropertyGraphEdgeTable, PropertyGraphNodeTable,
-    ReturnItem, SortKey, SortOrder, UnaryOp,
+    AggregateExpr, AggregateFunction, AggregateOp, BinaryOp, CallProcedureOp,
+    CreatePropertyGraphOp, DistinctOp, ExpandDirection, ExpandOp, LeftJoinOp, LogicalExpression,
+    LogicalOperator, LogicalPlan, NodeScanOp, PathMode, ProcedureYield, PropertyGraphEdgeTable,
+    PropertyGraphNodeTable, ReturnItem, SortKey, SortOrder, UnaryOp,
 };
 use grafeo_adapters::query::sql_pgq::{self, ast};
 use grafeo_common::types::Value;
@@ -59,6 +59,23 @@ impl SqlPgqTranslator {
         // SQL WHERE and ORDER BY operate on output column aliases, but the binder/planner
         // need graph-level expressions. We resolve aliases back to graph expressions and
         // place Filter/Sort *below* the Return (COLUMNS) projection.
+        //
+        // For aggregate queries, ORDER BY is deferred to after the Aggregate operator
+        // so that aggregate output aliases (e.g., `cnt`) are available for sorting.
+
+        // Detect whether the outer SELECT has aggregates (needed to defer ORDER BY)
+        let is_aggregate_query = match &select.select_list {
+            ast::SelectList::Columns(items) => {
+                items.iter().any(|item| {
+                    matches!(
+                        &item.expression,
+                        ast::Expression::FunctionCall { name, .. }
+                        if is_aggregate_function(name)
+                    )
+                }) || select.group_by.is_some()
+            }
+            ast::SelectList::All => select.group_by.is_some(),
+        };
 
         // 1. Translate MATCH patterns → NodeScan + Expand
         let mut plan = self.translate_match(&select.graph_table.match_clause)?;
@@ -85,8 +102,10 @@ impl SqlPgqTranslator {
             plan = wrap_filter(plan, predicate);
         }
 
-        // 3. Translate ORDER BY → Sort (below Return)
-        if let Some(order_by) = &select.order_by {
+        // 3. Translate ORDER BY → Sort (below Return, unless aggregate query)
+        // For aggregate queries, ORDER BY is deferred to step 7b so that
+        // aggregate output aliases are available for resolution.
+        if !is_aggregate_query && let Some(order_by) = &select.order_by {
             let keys: Vec<SortKey> = order_by
                 .iter()
                 .map(|item| {
@@ -132,6 +151,7 @@ impl SqlPgqTranslator {
             });
 
             if has_aggregates || select.group_by.is_some() {
+                // (aggregate path: builds Aggregate + Return below)
                 let mut aggregates = Vec::new();
                 let mut group_by = Vec::new();
 
@@ -179,6 +199,12 @@ impl SqlPgqTranslator {
                                 }
                             } else {
                                 None
+                            };
+                            // COUNT(expr) should skip NULLs, unlike COUNT(*)
+                            let agg_fn = if agg_fn == AggregateFunction::Count && expr.is_some() {
+                                AggregateFunction::CountNonNull
+                            } else {
+                                agg_fn
                             };
                             aggregates.push(AggregateExpr {
                                 function: agg_fn,
@@ -237,7 +263,94 @@ impl SqlPgqTranslator {
                     })
                     .collect();
                 plan = wrap_return(plan, return_items, false);
+            } else {
+                // Non-aggregate outer SELECT: project only the named columns.
+                // This handles `SELECT name FROM GRAPH_TABLE(... COLUMNS(name, age, city))`
+                // by filtering the output to just the requested columns.
+                let columns_aliases: Vec<&str> = select
+                    .graph_table
+                    .columns
+                    .items
+                    .iter()
+                    .map(|col| col.alias.as_str())
+                    .collect();
+
+                let return_items: Vec<ReturnItem> = items
+                    .iter()
+                    .map(|item| {
+                        // Resolve the outer SELECT expression to a COLUMNS alias
+                        let (resolved_alias, _) = match &item.expression {
+                            ast::Expression::Variable(name) => {
+                                // Bare column name: must match a COLUMNS alias
+                                (name.as_str(), name.as_str())
+                            }
+                            ast::Expression::PropertyAccess { variable, property }
+                                if table_alias.is_some_and(|a| a == variable) =>
+                            {
+                                // Table-qualified: g.name -> name
+                                (property.as_str(), property.as_str())
+                            }
+                            _ => ("", ""),
+                        };
+
+                        // Determine output alias: use AS alias if present, otherwise the column name
+                        let output_alias = item
+                            .alias
+                            .clone()
+                            .unwrap_or_else(|| resolved_alias.to_string());
+
+                        ReturnItem {
+                            expression: LogicalExpression::Variable(resolved_alias.to_string()),
+                            alias: Some(output_alias),
+                        }
+                    })
+                    .collect();
+
+                // Only wrap if the outer SELECT is a strict subset of COLUMNS
+                // (i.e., not requesting all the same columns in the same order)
+                let is_subset = items.len() < columns_aliases.len()
+                    || items.iter().any(|item| item.alias.is_some());
+                if is_subset {
+                    plan = wrap_return(plan, return_items, false);
+                }
             }
+        }
+
+        // 7b. Deferred ORDER BY for aggregate queries.
+        // Applied after Aggregate so that output aliases (e.g., `cnt`) are resolvable.
+        if is_aggregate_query && let Some(order_by) = &select.order_by {
+            let keys: Vec<SortKey> = order_by
+                .iter()
+                .map(|item| {
+                    // After aggregation, ORDER BY references the aggregate output aliases
+                    // (e.g., `cnt`, `source`). These are Variable references in the post-
+                    // aggregation scope. We must NOT resolve through column_map because
+                    // that maps back to graph-level expressions (e.g., `a.name`) which
+                    // no longer exist after the Aggregate operator.
+                    let expression = match &item.expression {
+                        ast::Expression::Variable(name) => {
+                            LogicalExpression::Variable(name.clone())
+                        }
+                        ast::Expression::PropertyAccess { variable, property }
+                            if table_alias.is_some_and(|a| a == variable) =>
+                        {
+                            // Table-qualified: g.source -> source
+                            LogicalExpression::Variable(property.clone())
+                        }
+                        other => self.translate_sql_expression(other, table_alias, &column_map)?,
+                    };
+                    Ok(SortKey {
+                        expression,
+                        order: match item.direction {
+                            ast::SortDirection::Asc => SortOrder::Ascending,
+                            ast::SortDirection::Desc => SortOrder::Descending,
+                        },
+                        nulls: None,
+                    })
+                })
+                .collect::<Result<_>>()?;
+
+            plan = wrap_sort(plan, keys);
         }
 
         // 8. SELECT DISTINCT → wrap with Distinct operator
@@ -430,7 +543,11 @@ impl SqlPgqTranslator {
             ast::EdgeDirection::Undirected => ExpandDirection::Both,
         };
 
-        let (min_hops, max_hops) = (edge.min_hops.unwrap_or(1), edge.max_hops.or(Some(1)));
+        let (min_hops, max_hops) = if edge.min_hops.is_some() || edge.max_hops.is_some() {
+            (edge.min_hops.unwrap_or(1), edge.max_hops)
+        } else {
+            (1, Some(1))
+        };
 
         // Set path_alias for variable-length patterns so path functions work
         let is_variable_length =
