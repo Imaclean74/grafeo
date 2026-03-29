@@ -187,6 +187,16 @@ impl GremlinTranslator {
                     }
                     continue;
                 }
+                ast::Step::OtherV => {
+                    if let Some(ctx) = edge_ctx.take() {
+                        // otherV = the discovered endpoint (to_variable).
+                        // In the Expand operator, from_variable is always the
+                        // traverser's current node and to_variable is the node
+                        // reached by following the edge, regardless of direction.
+                        current_var = ctx.target_var;
+                    }
+                    continue;
+                }
                 _ => {}
             }
 
@@ -826,14 +836,20 @@ impl GremlinTranslator {
                 Ok((plan, Some("id".to_string())))
             }
             ast::Step::Label => {
-                // Gremlin label() returns the first label as a scalar string,
-                // not a list. Use IndexAccess to extract element [0].
+                // For edges, use Type(var) which returns the edge type directly.
+                // For nodes, Labels(var) returns a list, so use IndexAccess to
+                // extract element [0] as a scalar string.
+                let label_expr = if is_edge {
+                    LogicalExpression::Type(current_var.to_string())
+                } else {
+                    LogicalExpression::IndexAccess {
+                        base: Box::new(LogicalExpression::Labels(current_var.to_string())),
+                        index: Box::new(LogicalExpression::Literal(Value::Int64(0))),
+                    }
+                };
                 let plan = LogicalOperator::Project(ProjectOp {
                     projections: vec![Projection {
-                        expression: LogicalExpression::IndexAccess {
-                            base: Box::new(LogicalExpression::Labels(current_var.to_string())),
-                            index: Box::new(LogicalExpression::Literal(Value::Int64(0))),
-                        },
+                        expression: label_expr,
                         alias: Some("label".to_string()),
                     }],
                     input: Box::new(input),
