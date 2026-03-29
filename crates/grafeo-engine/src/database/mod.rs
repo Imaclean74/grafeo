@@ -12,6 +12,8 @@
 //! - `admin` - Stats, introspection, diagnostics, CDC
 
 mod admin;
+#[cfg(feature = "async-storage")]
+pub(crate) mod async_wal_store;
 mod crud;
 #[cfg(feature = "embed")]
 mod embed;

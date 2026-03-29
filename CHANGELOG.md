@@ -12,6 +12,7 @@ Async storage foundation and continued test coverage.
 - **`AsyncTypedWal<R>`**: type-safe async WAL wrapper mirroring sync `TypedWal<R>`, with identical on-disk format for cross-recovery compatibility
 - **`AsyncLpgWal`**: type alias for `AsyncTypedWal<WalRecord>`, the async equivalent of `LpgWal`
 - **`AsyncWalManager::write_frame`**: extracted low-level frame writer enabling generic `WalEntry` types in async context
+- **`AsyncWalGraphStore`**: async decorator that logs mutations to `AsyncLpgWal` before applying to `LpgStore`, with named graph context tracking via tokio mutex
 
 ## [0.5.29] - 2026-03-29
 
