@@ -289,7 +289,7 @@ tests:
       empty: true
 
   - name: zero_to_n_hops
-    skip: "zero-length paths not yet implemented"
+    skip: "zero-length paths (min_hops=0) not yet implemented in executor"
     query: |
       SELECT * FROM GRAPH_TABLE (
         MATCH (src:Person)-[p:KNOWS*0..2]->(dst:Person)
@@ -299,7 +299,7 @@ tests:
       count: 6
 
   - name: unbounded_upper_range
-    skip: "unbounded upper range (*1..) only returns 1-hop, not transitive closure"
+    skip: "unbounded variable-length traversal does not explore multi-hop paths"
     query: |
       SELECT * FROM GRAPH_TABLE (
         MATCH (src:Person)-[p:KNOWS*1..]->(dst:Person)

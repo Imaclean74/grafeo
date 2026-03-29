@@ -137,10 +137,12 @@ impl SqlPgqTranslator {
             plan = wrap_limit(plan, limit as usize);
         }
 
-        // 6. Translate COLUMNS clause → Return (outermost projection)
-        plan = self.translate_columns(&select.graph_table.columns, plan)?;
-
-        // 7. Handle outer SELECT list with aggregates or explicit GROUP BY
+        // 6-7. Translate COLUMNS + outer SELECT list into a single projection.
+        //
+        // The outer SELECT may contain aggregates, computed expressions (CASE),
+        // column subsets, or just `SELECT *`. We merge the outer SELECT with
+        // COLUMNS so that the planner sees a single Return operating on
+        // graph-level variables, avoiding double-Return scalar/node confusion.
         if let ast::SelectList::Columns(items) = &select.select_list {
             let has_aggregates = items.iter().any(|item| {
                 matches!(
@@ -151,7 +153,9 @@ impl SqlPgqTranslator {
             });
 
             if has_aggregates || select.group_by.is_some() {
-                // (aggregate path: builds Aggregate + Return below)
+                // Aggregate path: first project COLUMNS, then aggregate on top.
+                plan = self.translate_columns(&select.graph_table.columns, plan)?;
+
                 let mut aggregates = Vec::new();
                 let mut group_by = Vec::new();
 
@@ -248,7 +252,7 @@ impl SqlPgqTranslator {
                             .alias
                             .clone()
                             .or_else(|| {
-                                // Derive alias from expression (e.g., Variable("source") → "source")
+                                // Derive alias from expression (e.g., Variable("source") -> "source")
                                 if let ast::Expression::Variable(name) = &item.expression {
                                     Some(name.clone())
                                 } else {
@@ -263,7 +267,44 @@ impl SqlPgqTranslator {
                     })
                     .collect();
                 plan = wrap_return(plan, return_items, false);
+            } else {
+                // Non-aggregate outer SELECT: merge with COLUMNS into a single Return.
+                // Translate each outer SELECT item by resolving column aliases back to
+                // their graph-level expressions (from the COLUMNS clause), producing a
+                // single Return that operates directly on graph variables.
+                let return_items: Vec<ReturnItem> = items
+                    .iter()
+                    .map(|item| {
+                        let expr = self.translate_sql_expression(
+                            &item.expression,
+                            table_alias,
+                            &column_map,
+                        )?;
+                        let alias = item.alias.clone().or_else(|| {
+                            // Derive alias from the expression: use the column alias
+                            // for bare variable references, the property name for
+                            // table-qualified references.
+                            match &item.expression {
+                                ast::Expression::Variable(name) => Some(name.clone()),
+                                ast::Expression::PropertyAccess { variable, property }
+                                    if table_alias.is_some_and(|a| a == variable) =>
+                                {
+                                    Some(property.clone())
+                                }
+                                _ => None,
+                            }
+                        });
+                        Ok(ReturnItem {
+                            expression: expr,
+                            alias,
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+                plan = wrap_return(plan, return_items, false);
             }
+        } else {
+            // SELECT * or no explicit outer SELECT: just use COLUMNS directly
+            plan = self.translate_columns(&select.graph_table.columns, plan)?;
         }
 
         // 7b. Deferred ORDER BY for aggregate queries.
@@ -659,6 +700,39 @@ impl SqlPgqTranslator {
                     name: name.clone(),
                     args: translated_args,
                     distinct: *distinct,
+                })
+            }
+            ast::Expression::Case {
+                input,
+                whens,
+                else_clause,
+            } => {
+                let operand = input
+                    .as_ref()
+                    .map(|e| self.translate_sql_expression(e, table_alias, column_map))
+                    .transpose()?
+                    .map(Box::new);
+
+                let when_clauses: Vec<(LogicalExpression, LogicalExpression)> = whens
+                    .iter()
+                    .map(|(w, t)| {
+                        Ok((
+                            self.translate_sql_expression(w, table_alias, column_map)?,
+                            self.translate_sql_expression(t, table_alias, column_map)?,
+                        ))
+                    })
+                    .collect::<Result<_>>()?;
+
+                let else_result = else_clause
+                    .as_ref()
+                    .map(|e| self.translate_sql_expression(e, table_alias, column_map))
+                    .transpose()?
+                    .map(Box::new);
+
+                Ok(LogicalExpression::Case {
+                    operand,
+                    when_clauses,
+                    else_clause: else_result,
                 })
             }
             _ => self.translate_expression(expr, table_alias),
