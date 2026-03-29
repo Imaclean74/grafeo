@@ -594,7 +594,6 @@ fn test_add_multiple_vertices() {
 }
 
 #[test]
-#[ignore = "mid-traversal V() with addE pipeline not yet wired in translator"]
 fn test_add_edge() {
     let db = create_social_network();
     // Add an edge from Gus to Alix
@@ -610,7 +609,6 @@ fn test_add_edge() {
 }
 
 #[test]
-#[ignore = "mid-traversal V() with addE pipeline not yet wired in translator"]
 fn test_add_edge_with_property() {
     let db = create_social_network();
     db.execute_gremlin(
@@ -625,7 +623,6 @@ fn test_add_edge_with_property() {
 }
 
 #[test]
-#[ignore = "mid-traversal V() with addE pipeline not yet wired in translator"]
 fn test_source_add_edge() {
     let db = create_social_network();
     db.execute_gremlin(
@@ -725,7 +722,6 @@ fn test_group_count() {
 }
 
 #[test]
-#[ignore = "group().by(label) produces wrong key structure in translator"]
 fn test_group_by_label() {
     let db = create_social_network();
     let result = db.execute_gremlin("g.V().group().by(label)").unwrap();
@@ -1063,7 +1059,6 @@ fn test_step_or_same_property_different_values() {
 }
 
 #[test]
-#[ignore = "or() with mixed label and property predicates across types not evaluated correctly"]
 fn test_step_or_different_labels_and_properties() {
     let db = create_social_network();
     let result = db

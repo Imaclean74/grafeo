@@ -93,6 +93,19 @@ impl GremlinTranslator {
             if let Some(ref mut edge) = pending_edge {
                 match step {
                     ast::Step::From(from_to) => {
+                        // When from() overrides the source vertex, the current
+                        // traverser (stored as the default from_var by addE)
+                        // becomes the target vertex if to_var is not yet set.
+                        if edge.to_var.is_none() {
+                            edge.to_var = edge.from_var.take();
+                        }
+                        // Resolve as() labels before falling through to plan extraction
+                        if let ast::FromTo::Label(label) = from_to
+                            && let Some(var) = labels.get(label.as_str())
+                        {
+                            edge.from_var = Some(var.clone());
+                            continue;
+                        }
                         let (var, new_plan) =
                             self.extract_from_to_with_plan(from_to, plan, &current_var)?;
                         plan = new_plan;
@@ -100,6 +113,13 @@ impl GremlinTranslator {
                         continue;
                     }
                     ast::Step::To(from_to) => {
+                        // Resolve as() labels before falling through to plan extraction
+                        if let ast::FromTo::Label(label) = from_to
+                            && let Some(var) = labels.get(label.as_str())
+                        {
+                            edge.to_var = Some(var.clone());
+                            continue;
+                        }
                         let (var, new_plan) =
                             self.extract_from_to_with_plan(from_to, plan, &current_var)?;
                         plan = new_plan;
@@ -1108,27 +1128,30 @@ impl GremlinTranslator {
                         Ok((LogicalOperator::Sort(sort_op), None))
                     }
                     LogicalOperator::Aggregate(mut agg_op) => {
-                        // groupCount().by('key') - wrap aggregate in MapCollect.
-                        // Extract the original variable from the existing group_by
-                        // (set as Variable(current_var) during groupCount()), since
-                        // current_var now points to the aggregate alias.
+                        // groupCount().by('key') or group().by('key'): wrap
+                        // aggregate in MapCollect. Extract the original variable
+                        // from the existing group_by (set as Variable(current_var)
+                        // during groupCount()/group()), since current_var now
+                        // points to the aggregate alias.
                         let original_var =
                             if let Some(LogicalExpression::Variable(v)) = agg_op.group_by.first() {
                                 v.clone()
                             } else {
                                 current_var.to_string()
                             };
-                        let by_expr = self.translate_by_modifier(by_modifier, &original_var);
+                        let mut by_expr = self.translate_by_modifier(by_modifier, &original_var);
 
-                        // Compute the key column name that the planner will produce
-                        // (mirrors `expression_to_string` in the planner).
-                        let key_var = match &by_expr {
-                            LogicalExpression::Property { variable, property } => {
-                                format!("{variable}.{property}")
-                            }
-                            LogicalExpression::Variable(name) => name.clone(),
-                            _ => "expr".to_string(),
-                        };
+                        // Labels(var) returns a list: wrap with IndexAccess [0]
+                        // to extract a scalar label (same as the Label step).
+                        if let LogicalExpression::Labels(_) = &by_expr {
+                            by_expr = LogicalExpression::IndexAccess {
+                                base: Box::new(by_expr),
+                                index: Box::new(LogicalExpression::Literal(Value::Int64(0))),
+                            };
+                        }
+
+                        // Compute the key column name using the planner's naming.
+                        let key_var = crate::query::planner::common::expression_to_string(&by_expr);
 
                         agg_op.group_by = vec![by_expr];
 
@@ -1138,7 +1161,15 @@ impl GremlinTranslator {
                             .and_then(|a| a.alias.clone())
                             .unwrap_or_else(|| "count".to_string());
 
-                        let alias = "_groupCount".to_string();
+                        let is_group = agg_op
+                            .aggregates
+                            .first()
+                            .is_some_and(|a| matches!(a.function, AggregateFunction::Collect));
+                        let alias = if is_group {
+                            "_group".to_string()
+                        } else {
+                            "_groupCount".to_string()
+                        };
                         let plan = LogicalOperator::MapCollect(MapCollectOp {
                             key_var,
                             value_var,
@@ -1207,6 +1238,29 @@ impl GremlinTranslator {
                     input: Box::new(input),
                 });
                 Ok((plan, Some(new_var)))
+            }
+
+            // Group: group by a key and collect values into lists
+            ast::Step::Group(_modifiers) => {
+                // Group groups by current_var and collects into lists.
+                // The default group-by key is the current variable; a subsequent
+                // .by() step will replace it.
+                let alias = "collect".to_string();
+                let plan = LogicalOperator::Aggregate(AggregateOp {
+                    group_by: vec![LogicalExpression::Variable(current_var.to_string())],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::Collect,
+                        expression: Some(LogicalExpression::Variable(current_var.to_string())),
+                        expression2: None,
+                        distinct: false,
+                        alias: Some(alias.clone()),
+                        percentile: None,
+                        separator: None,
+                    }],
+                    input: Box::new(input),
+                    having: None,
+                });
+                Ok((plan, Some(alias)))
             }
 
             // GroupCount: group by a key and count occurrences

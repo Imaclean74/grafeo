@@ -595,6 +595,17 @@ impl ExpressionPredicate {
                     let left_val = self.eval_expr(left, chunk, row)?;
                     return self.eval_in_operator(&left_val, right, chunk, row);
                 }
+                // For logical operators (AND/OR/XOR), treat missing values as
+                // NULL so three-valued logic works correctly. Without this,
+                // `NULL OR true` would short-circuit to None instead of true.
+                if matches!(
+                    op,
+                    BinaryFilterOp::And | BinaryFilterOp::Or | BinaryFilterOp::Xor
+                ) {
+                    let left_val = self.eval_expr(left, chunk, row).unwrap_or(Value::Null);
+                    let right_val = self.eval_expr(right, chunk, row).unwrap_or(Value::Null);
+                    return self.eval_binary_op(&left_val, *op, &right_val);
+                }
                 let left_val = self.eval_expr(left, chunk, row)?;
                 let right_val = self.eval_expr(right, chunk, row)?;
                 self.eval_binary_op(&left_val, *op, &right_val)
