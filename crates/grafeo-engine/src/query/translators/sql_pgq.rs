@@ -230,9 +230,16 @@ impl SqlPgqTranslator {
                     }
                 }
 
-                // Translate HAVING clause
+                // Translate HAVING clause, extracting any inline aggregate
+                // calls (e.g. COUNT(*) > 0) into the aggregates list so the
+                // Aggregate operator can evaluate them.
                 let having = if let Some(having_expr) = &select.having {
-                    Some(self.translate_sql_expression(having_expr, table_alias, &column_map)?)
+                    Some(self.translate_having_expression(
+                        having_expr,
+                        table_alias,
+                        &column_map,
+                        &mut aggregates,
+                    )?)
                 } else {
                     None
                 };
@@ -602,6 +609,85 @@ impl SqlPgqTranslator {
     }
 
     // ==================== Expression Translation ====================
+
+    /// Translates a HAVING expression, extracting inline aggregate calls into the
+    /// aggregates list and replacing them with variable references.
+    ///
+    /// For example, `COUNT(*) > 0` becomes `Variable("_having_agg_0") > Literal(0)`
+    /// and a new `AggregateExpr` for `COUNT(*)` with alias `_having_agg_0` is appended
+    /// to `aggregates`.
+    fn translate_having_expression(
+        &self,
+        expr: &ast::Expression,
+        table_alias: Option<&str>,
+        column_map: &hashbrown::HashMap<&str, &ast::Expression>,
+        aggregates: &mut Vec<AggregateExpr>,
+    ) -> Result<LogicalExpression> {
+        match expr {
+            ast::Expression::FunctionCall {
+                name,
+                args,
+                distinct,
+            } if is_aggregate_function(name) => {
+                // This is an inline aggregate: extract it.
+                let agg_fn =
+                    to_aggregate_function(name).expect("validated by is_aggregate_function");
+                let agg_expr = if args.len() == 1 {
+                    let arg = &args[0];
+                    if matches!(arg, ast::Expression::Variable(v) if v == "*") {
+                        None
+                    } else {
+                        Some(self.translate_expression(arg, None)?)
+                    }
+                } else {
+                    None
+                };
+                let agg_fn = if agg_fn == AggregateFunction::Count && agg_expr.is_some() {
+                    AggregateFunction::CountNonNull
+                } else {
+                    agg_fn
+                };
+                let alias = format!("_having_agg_{}", aggregates.len());
+                aggregates.push(AggregateExpr {
+                    function: agg_fn,
+                    expression: agg_expr,
+                    expression2: None,
+                    distinct: *distinct,
+                    alias: Some(alias.clone()),
+                    percentile: None,
+                    separator: None,
+                });
+                Ok(LogicalExpression::Variable(alias))
+            }
+            ast::Expression::Binary { left, op, right } => {
+                let left_expr =
+                    self.translate_having_expression(left, table_alias, column_map, aggregates)?;
+                let right_expr =
+                    self.translate_having_expression(right, table_alias, column_map, aggregates)?;
+                let binary_op = self.translate_binary_op(*op)?;
+                Ok(LogicalExpression::Binary {
+                    left: Box::new(left_expr),
+                    op: binary_op,
+                    right: Box::new(right_expr),
+                })
+            }
+            ast::Expression::Unary { op, operand } => {
+                let operand_expr =
+                    self.translate_having_expression(operand, table_alias, column_map, aggregates)?;
+                if *op == ast::UnaryOp::Pos {
+                    return Ok(operand_expr);
+                }
+                let unary_op = self.translate_unary_op(*op)?;
+                Ok(LogicalExpression::Unary {
+                    op: unary_op,
+                    operand: Box::new(operand_expr),
+                })
+            }
+            // For anything else (variables, literals, property access), fall through
+            // to the standard SQL expression translator (no aggregates expected).
+            _ => self.translate_sql_expression(expr, table_alias, column_map),
+        }
+    }
 
     /// Translates a SQL-level expression (WHERE, ORDER BY) that references output columns.
     ///

@@ -314,4 +314,153 @@ mod sparql_aggregate_expression_tests {
             "Expected a group key containing 'gus', got: {subjects:?}"
         );
     }
+
+    // ---------------------------------------------------------------
+    // Area 3: SPARQL dateTime functions on typed literals
+    // ---------------------------------------------------------------
+
+    fn insert_datetime_triples(db: &GrafeoDB) {
+        db.execute_sparql(
+            r#"PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            INSERT DATA {
+                <http://ex.org/event1> <http://ex.org/date> "2024-06-15T14:30:45+05:30"^^xsd:dateTime .
+                <http://ex.org/event2> <http://ex.org/date> "2024-12-25T08:00:00-08:00"^^xsd:dateTime .
+            }"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sparql_year_month_day_from_zoned_datetime() {
+        let db = rdf_db();
+        insert_datetime_triples(&db);
+
+        let result = db
+            .execute_sparql(
+                r#"PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+                SELECT ?y ?m ?d WHERE {
+                    <http://ex.org/event1> <http://ex.org/date> ?dt .
+                    BIND(YEAR(?dt) AS ?y)
+                    BIND(MONTH(?dt) AS ?m)
+                    BIND(DAY(?dt) AS ?d)
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn sparql_hours_minutes_seconds_from_zoned_datetime() {
+        let db = rdf_db();
+        insert_datetime_triples(&db);
+
+        let result = db
+            .execute_sparql(
+                r#"PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+                SELECT ?h ?min ?sec WHERE {
+                    <http://ex.org/event1> <http://ex.org/date> ?dt .
+                    BIND(HOURS(?dt) AS ?h)
+                    BIND(MINUTES(?dt) AS ?min)
+                    BIND(SECONDS(?dt) AS ?sec)
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    #[test]
+    fn sparql_timezone_and_tz_from_zoned_datetime() {
+        let db = rdf_db();
+        insert_datetime_triples(&db);
+
+        let result = db
+            .execute_sparql(
+                r#"PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+                SELECT ?tz WHERE {
+                    <http://ex.org/event2> <http://ex.org/date> ?dt .
+                    BIND(TZ(?dt) AS ?tz)
+                }"#,
+            )
+            .unwrap();
+        assert_eq!(result.row_count(), 1);
+    }
+
+    // ---------------------------------------------------------------
+    // Area 4: SPARQL LANG() and LANGMATCHES()
+    // ---------------------------------------------------------------
+
+    fn insert_language_tagged_triples(db: &GrafeoDB) {
+        db.execute_sparql(
+            r#"INSERT DATA {
+                <http://ex.org/alix> <http://www.w3.org/2000/01/rdf-schema#label> "Alix"@en .
+                <http://ex.org/alix> <http://www.w3.org/2000/01/rdf-schema#label> "Alix"@fr .
+                <http://ex.org/gus>  <http://www.w3.org/2000/01/rdf-schema#label> "Gus"@en-US .
+                <http://ex.org/item> <http://www.w3.org/2000/01/rdf-schema#label> "Plain" .
+            }"#,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sparql_langmatches_exact() {
+        let db = rdf_db();
+        insert_language_tagged_triples(&db);
+
+        let result = db
+            .execute_sparql(
+                r#"SELECT ?label WHERE {
+                    ?s <http://www.w3.org/2000/01/rdf-schema#label> ?label .
+                    FILTER(LANGMATCHES(LANG(?label), "en"))
+                }"#,
+            )
+            .unwrap();
+        // Should match "en" and "en-US" (prefix match)
+        assert!(
+            result.row_count() >= 2,
+            "LANGMATCHES should match 'en' and 'en-US', got {} rows",
+            result.row_count()
+        );
+    }
+
+    #[test]
+    fn sparql_langmatches_wildcard() {
+        let db = rdf_db();
+        insert_language_tagged_triples(&db);
+
+        let result = db
+            .execute_sparql(
+                r#"SELECT ?label WHERE {
+                    ?s <http://www.w3.org/2000/01/rdf-schema#label> ?label .
+                    FILTER(LANGMATCHES(LANG(?label), "*"))
+                }"#,
+            )
+            .unwrap();
+        // Should match all language-tagged literals (en, fr, en-US) but NOT "Plain"
+        assert!(
+            result.row_count() >= 3,
+            "LANGMATCHES(*) should match all tagged literals, got {} rows",
+            result.row_count()
+        );
+    }
+
+    #[test]
+    fn sparql_query_without_lang_columns() {
+        // Verify strip_internal_columns works: __lang_ columns should not appear in results
+        let db = rdf_db();
+        insert_language_tagged_triples(&db);
+
+        let result = db
+            .execute_sparql(
+                r#"SELECT ?s WHERE {
+                    ?s <http://www.w3.org/2000/01/rdf-schema#label> ?label .
+                }"#,
+            )
+            .unwrap();
+        for col in &result.columns {
+            assert!(
+                !col.starts_with("__lang_"),
+                "Internal __lang_ column should be stripped from results, found: {col}"
+            );
+        }
+    }
 }

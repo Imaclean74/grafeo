@@ -87,8 +87,8 @@ enum ColumnValue {
 struct OutputRow {
     /// Index into input_rows for the source row.
     input_idx: usize,
-    /// The final edge in the path.
-    edge_id: EdgeId,
+    /// The final edge in the path (`None` for zero-length paths).
+    edge_id: Option<EdgeId>,
     /// The target node.
     target_id: NodeId,
     /// The path length (number of edges/hops).
@@ -357,6 +357,27 @@ impl VariableLengthExpandOperator {
         let mut results = Vec::new();
         let needs_tracking = self.output_path_detail || self.path_mode != PathMode::Walk;
 
+        // Zero-length path: when min_hops is 0 the source node matches itself
+        // with no edges traversed. Emit it before starting the BFS.
+        if self.min_hops == 0 {
+            results.push(OutputRow {
+                input_idx,
+                edge_id: None,
+                target_id: source_node,
+                path_length: 0,
+                path_nodes: if self.output_path_detail {
+                    Some(vec![source_node])
+                } else {
+                    None
+                },
+                path_edges: if self.output_path_detail {
+                    Some(Vec::new())
+                } else {
+                    None
+                },
+            });
+        }
+
         if needs_tracking {
             // BFS with shared-prefix path tracking via Rc<PathSegment>.
             // Required for path detail output or non-Walk path modes.
@@ -384,7 +405,7 @@ impl VariableLengthExpandOperator {
                 if depth >= self.min_hops && depth <= self.max_hops {
                     results.push(OutputRow {
                         input_idx,
-                        edge_id,
+                        edge_id: Some(edge_id),
                         target_id: current_node,
                         path_length: depth,
                         path_nodes: if self.output_path_detail {
@@ -426,7 +447,7 @@ impl VariableLengthExpandOperator {
                 if depth >= self.min_hops && depth <= self.max_hops {
                     results.push(OutputRow {
                         input_idx,
-                        edge_id,
+                        edge_id: Some(edge_id),
                         target_id: current_node,
                         path_length: depth,
                         path_nodes: None,
@@ -536,9 +557,13 @@ impl Operator for VariableLengthExpandOperator {
                 }
             }
 
-            // Add edge column
+            // Add edge column (Null for zero-length paths)
             if let Some(col) = chunk.column_mut(num_input_cols) {
-                col.push_edge_id(out_row.edge_id);
+                if let Some(edge_id) = out_row.edge_id {
+                    col.push_edge_id(edge_id);
+                } else {
+                    col.push_value(grafeo_common::types::Value::Null);
+                }
             }
 
             // Add target node column

@@ -17,7 +17,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: empty_query
-    skip: "empty/whitespace queries cannot be tested via .gtest runner (parser strips whitespace)"
     query: " "
     expect:
       error: "Expected"

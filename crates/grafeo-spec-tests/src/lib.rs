@@ -77,6 +77,25 @@ pub fn execute_query_result(
     }
 }
 
+/// Execute a query with parameters, returning the Result.
+///
+/// Delegates to `GrafeoDB::execute_language` which routes the query to the
+/// correct language executor and substitutes parameters before planning.
+pub fn execute_query_result_with_params(
+    db: &GrafeoDB,
+    language: &str,
+    _model: &str,
+    query: &str,
+    params: std::collections::HashMap<String, Value>,
+) -> Result<QueryResult> {
+    // Normalize the language key so execute_language can dispatch correctly.
+    let lang_key = match language {
+        "sql-pgq" | "sql_pgq" => "sql-pgq",
+        other => other,
+    };
+    db.execute_language(query, lang_key, Some(params))
+}
+
 /// Convert a QueryResult into rows of string values for comparison.
 pub fn result_to_strings(result: &QueryResult) -> Vec<Vec<String>> {
     result

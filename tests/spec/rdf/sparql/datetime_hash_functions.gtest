@@ -29,7 +29,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: year_extracts_year
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -48,7 +47,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: month_extracts_month
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -67,7 +65,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: day_extracts_day
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -86,7 +83,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: hours_extracts_hours
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -105,7 +101,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: minutes_extracts_minutes
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -124,7 +119,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: seconds_extracts_seconds
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -143,7 +137,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: timezone_returns_offset
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -162,7 +155,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: tz_returns_string_offset
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -181,7 +173,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: year_month_day_from_single_datetime
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -196,7 +187,6 @@ tests:
         - [1990, 3, 22]
 
   - name: hours_minutes_seconds_from_single_datetime
-    skip: "function on typed dateTime literal returns null in projection"
     setup:
       - |
         INSERT DATA {
@@ -215,7 +205,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: md5_hash
-    skip: "hash function on string literal returns null in projection"
     query: |
       SELECT (MD5("hello") AS ?hash) WHERE { }
     expect:
@@ -227,7 +216,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: sha1_hash
-    skip: "hash function on string literal returns null in projection"
     query: |
       SELECT (SHA1("hello") AS ?hash) WHERE { }
     expect:
@@ -239,7 +227,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: sha256_hash
-    skip: "hash function on string literal returns null in projection"
     query: |
       SELECT (SHA256("hello") AS ?hash) WHERE { }
     expect:
@@ -251,7 +238,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: sha384_hash
-    skip: "hash function on string literal returns null in projection"
     query: |
       SELECT (SHA384("hello") AS ?hash) WHERE { }
     expect:
@@ -263,7 +249,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: sha512_hash
-    skip: "hash function on string literal returns null in projection"
     query: |
       SELECT (SHA512("hello") AS ?hash) WHERE { }
     expect:
