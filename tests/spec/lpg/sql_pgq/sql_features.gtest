@@ -18,7 +18,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: case_searched_age_category
-    skip: "CASE in outer SELECT WHERE not evaluated by SQL/PGQ translator"
     query: |
       SELECT * FROM GRAPH_TABLE (
         MATCH (n:Person)
@@ -31,7 +30,6 @@ tests:
         - [Vincent, 35]
 
   - name: case_searched_in_select
-    skip: "CASE in outer SELECT not evaluated by SQL/PGQ translator"
     query: |
       SELECT name, CASE WHEN age >= 30 THEN 'senior' ELSE 'junior' END AS category
       FROM GRAPH_TABLE (
@@ -45,7 +43,6 @@ tests:
         - [Vincent, senior]
 
   - name: case_simple_city_to_country
-    skip: "CASE in outer SELECT not evaluated by SQL/PGQ translator"
     query: |
       SELECT name, CASE city
         WHEN 'Amsterdam' THEN 'NL'
@@ -63,7 +60,6 @@ tests:
         - [Vincent, other]
 
   - name: case_without_else_returns_null
-    skip: "CASE in outer SELECT not evaluated by SQL/PGQ translator"
     query: |
       SELECT name, CASE city
         WHEN 'Amsterdam' THEN 'NL'
@@ -80,7 +76,6 @@ tests:
         - [Vincent, null]
 
   - name: case_null_check
-    skip: "CASE in outer SELECT not evaluated by SQL/PGQ translator"
     query: |
       SELECT person, CASE WHEN company IS NULL THEN 'unemployed' ELSE company END AS status
       FROM GRAPH_TABLE (
@@ -99,7 +94,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: outer_select_single_column_from_multi
-    skip: "outer SELECT projection not yet implemented, returns all COLUMNS"
     query: |
       SELECT name FROM GRAPH_TABLE (
         MATCH (n:Person)
@@ -112,7 +106,6 @@ tests:
         - [Vincent]
 
   - name: outer_select_alias_rename
-    skip: "outer SELECT projection not yet implemented, returns all COLUMNS"
     query: |
       SELECT name AS person_name FROM GRAPH_TABLE (
         MATCH (n:Person)
@@ -125,7 +118,6 @@ tests:
         - [Vincent]
 
   - name: outer_select_qualified_subset
-    skip: "outer SELECT projection not yet implemented, returns all COLUMNS"
     query: |
       SELECT g.name, g.city FROM GRAPH_TABLE (
         MATCH (n:Person)
@@ -142,7 +134,7 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: order_by_count_alias_desc
-    skip: "ORDER BY on aggregate alias not yet implemented"
+    skip: "ORDER BY on aggregate alias placed before Aggregate in plan"
     query: |
       SELECT city, COUNT(*) AS cnt FROM GRAPH_TABLE (
         MATCH (n:Person)
@@ -156,7 +148,7 @@ tests:
         - [Paris, 1]
 
   - name: order_by_sum_alias
-    skip: "ORDER BY on aggregate alias not yet implemented"
+    skip: "ORDER BY on aggregate alias placed before Aggregate in plan"
     query: |
       SELECT source, SUM(year) AS total FROM GRAPH_TABLE (
         MATCH (a:Person)-[e:KNOWS]->(b:Person)
@@ -304,7 +296,7 @@ tests:
         - [Paris, 1, 35]
 
   - name: having_inline_aggregate
-    skip: "inline COUNT(*) in HAVING not resolved, only alias references work"
+    skip: "inline aggregate in HAVING not resolved to aggregate reference"
     query: |
       SELECT city FROM GRAPH_TABLE (
         MATCH (n:Person)

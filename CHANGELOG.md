@@ -2,7 +2,7 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.29] - 2026-03-28
+## [0.5.29] - 2026-03-29
 
 Query engine correctness improvements and unified declarative test suite.
 
@@ -26,7 +26,21 @@ Query engine correctness improvements and unified declarative test suite.
 - **EXISTS with property filters**: `EXISTS { (n)-[:R]->(m) WHERE m.age > 30 }` silently dropped the WHERE, matching all connected nodes
 - **Keywords as property names**: `{order: 3}` and `n.order` rejected `order` and other keywords in property contexts
 - **Gremlin `hasLabel` on edges**: `g.E().hasLabel('KNOWS')` returned 0 rows because the translator used node labels instead of edge type
-- **Gremlin parser**: added `regex()` predicate, `$param` parameters, mid-traversal `V()` step
+- **Gremlin parser**: added `regex()` predicate, `$param` parameters, mid-traversal `V()` step, bare `label`/`id` keywords in `by()` modifiers
+- **Gremlin `coalesce()` semantics**: now uses `OtherwiseOp` for first-non-empty branch selection instead of `Union` which returned all branches
+- **Gremlin `group().by()` two-pass**: `group().by(key).by(value)` now correctly sets grouping key and value projection, with `MapCollect` wrapping for single-map output
+- **Gremlin `optional()` step**: rewrote translation to produce correct per-row semantics (navigation vs filter cases) instead of returning identity vertex
+- **Gremlin `values()` null filtering**: `values('nonexistent')` now returns zero rows instead of a row with null, matching Gremlin semantics
+- **Gremlin `addE` with `as()` labels**: `from('a')` / `to('a')` now resolves step labels from the `as()` alias map instead of treating them as literal strings
+- **Gremlin `or()` three-valued logic**: `or(hasLabel('X'), has('prop', val))` across different node types now correctly returns matches from both branches (NULL OR true = true)
+- **SPARQL functions in SELECT projections**: created `RdfProjectOperator` that delegates to `RdfExpressionPredicate` for full function support (STRLEN, UCASE, LCASE, IF, COALESCE, REPLACE, etc.)
+- **SPARQL IN/NOT IN operators**: added `FilterExpression::List` evaluation and `BinaryFilterOp::In` handling in `RdfExpressionPredicate`
+- **SPARQL BOUND() with OPTIONAL**: checks vector validity bitmap directly to distinguish unbound variables from null values after LEFT JOIN
+- **SQL/PGQ unbounded variable-length paths**: `*1..` no longer silently caps max_hops to 1
+- **SQL/PGQ COUNT(column) NULL skipping**: `COUNT(expr)` now uses `CountNonNull` to skip NULL values per SQL standard
+- **SQL/PGQ CASE expressions**: CASE WHEN in outer SELECT and WHERE clauses now evaluated by the translator
+- **SQL/PGQ outer SELECT projection**: non-aggregate `SELECT col FROM GRAPH_TABLE(... COLUMNS(...))` now projects the correct columns
+- **SQL/PGQ ORDER BY on aggregate aliases**: ORDER BY for aggregate queries now placed after the Aggregate operator so output aliases resolve correctly
 - **JSON Infinity/NaN lost through C FFI**: `SUM()` overflow returned `null` in bindings because JSON cannot represent infinity; now encoded as string `"Infinity"`
 - **C#/Dart temporal values**: dates, times, and durations returned as locale-dependent native types instead of ISO strings
 - **Binding spec runners**: replaced YAML library parsers (Go yaml.v3, C# YamlDotNet, Dart package:yaml) with line-based parsers matching Rust/Node.js/Python; fixed SPARQL dispatch, hash assertions, error test logic, WASM feature gating

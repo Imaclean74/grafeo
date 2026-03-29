@@ -42,9 +42,9 @@ tests:
       ) AS g
     expect:
       rows:
-        - [Alix, 30]
-        - [Gus, 25]
-        - [Vincent, 35]
+        - [Alix]
+        - [Gus]
+        - [Vincent]
 
   - name: node_label_filter_company
     query: |
@@ -105,8 +105,8 @@ tests:
       WHERE g.age > 28
     expect:
       rows:
-        - [Alix, 30]
-        - [Vincent, 35]
+        - [Alix]
+        - [Vincent]
 
   - name: where_string_equality
     query: |

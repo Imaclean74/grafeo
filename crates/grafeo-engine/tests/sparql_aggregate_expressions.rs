@@ -168,11 +168,8 @@ mod sparql_aggregate_expression_tests {
     /// where a FunctionCall expression appears as a projected column alongside
     /// a plain variable.
     ///
-    /// Currently STRLEN() in RDF projection evaluates to Null because the
-    /// physical project operator lacks the store context needed for function
-    /// evaluation on RDF values. This test verifies the pipeline does not panic
-    /// and returns the correct number of rows. Once function evaluation in
-    /// projection is wired up, the assertions can be tightened.
+    /// STRLEN() in RDF projection is evaluated via RdfProjectOperator, which
+    /// delegates to RdfExpressionPredicate for full SPARQL function support.
     #[test]
     fn test_sparql_strlen_in_projection() {
         let db = rdf_db();
@@ -197,33 +194,35 @@ mod sparql_aggregate_expression_tests {
             let name_val = &row[name_idx];
             let len_val = &row[len_idx];
 
-            let name_str = name_val.to_string();
-            let expected_len = name_str.len() as i64;
+            // Extract the actual string content (without Display quotes)
+            let name_content = match name_val {
+                grafeo_common::types::Value::String(s) => s.as_str(),
+                other => panic!("Expected String for ?name, got: {other:?}"),
+            };
+            let expected_len = name_content.len() as i64;
 
             match len_val {
                 grafeo_common::types::Value::Int64(n) => {
                     assert_eq!(
                         *n, expected_len,
-                        "STRLEN(\"{name_str}\") should be {expected_len}, got {n}"
+                        "STRLEN(\"{name_content}\") should be {expected_len}, got {n}"
                     );
                 }
                 grafeo_common::types::Value::Float64(f) => {
                     assert_eq!(
                         *f as i64, expected_len,
-                        "STRLEN(\"{name_str}\") should be {expected_len}, got {f}"
+                        "STRLEN(\"{name_content}\") should be {expected_len}, got {f}"
                     );
                 }
                 grafeo_common::types::Value::String(s) => {
                     let parsed: i64 = s.parse().unwrap_or(-1);
                     assert_eq!(
                         parsed, expected_len,
-                        "STRLEN(\"{name_str}\") should be {expected_len}, got \"{s}\""
+                        "STRLEN(\"{name_content}\") should be {expected_len}, got \"{s}\""
                     );
                 }
                 grafeo_common::types::Value::Null => {
-                    // Known limitation: STRLEN in RDF projection currently
-                    // returns Null because the physical project operator
-                    // does not have the store context for function evaluation.
+                    panic!("STRLEN should not return Null now that RdfProjectOperator is used");
                 }
                 other => {
                     panic!("STRLEN should return a numeric or Null value, got: {other:?}");

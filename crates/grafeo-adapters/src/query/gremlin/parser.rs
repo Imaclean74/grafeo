@@ -741,6 +741,16 @@ impl<'a> Parser<'a> {
             return Ok(ByModifier::Token(t));
         }
 
+        // Bare `label` or `id` tokens are shorthand for T.label / T.id
+        if self.check(TokenKind::Label) {
+            self.advance();
+            return Ok(ByModifier::Token(TokenType::Label));
+        }
+        if self.check(TokenKind::Id) {
+            self.advance();
+            return Ok(ByModifier::Token(TokenType::Id));
+        }
+
         // Check for direct order tokens: asc, desc, shuffle
         if let Some(order) = self.try_parse_sort_order() {
             return Ok(ByModifier::Order(order));
@@ -886,6 +896,12 @@ impl<'a> Parser<'a> {
             return Ok(FromTo::Traversal(steps));
         }
 
+        // Check for bare V()/E() traversal (without 'g.' prefix)
+        if self.check(TokenKind::V) || self.check(TokenKind::E) {
+            let steps = self.parse_bare_traversal()?;
+            return Ok(FromTo::Traversal(steps));
+        }
+
         Err(self.error("Expected label or traversal for from/to"))
     }
 
@@ -916,6 +932,42 @@ impl<'a> Parser<'a> {
             traversals.push(self.parse_inner_steps()?);
         }
         Ok(traversals)
+    }
+
+    /// Parse a bare traversal starting with V() or E() (without 'g.' prefix).
+    /// Used inside from()/to() arguments, e.g. `from(V().has('name', 'Gus'))`.
+    fn parse_bare_traversal(&mut self) -> Result<Vec<Step>> {
+        // Parse source (V, E, etc.) and convert to a step
+        let source = self.parse_source()?;
+
+        // Convert source to initial steps
+        let mut steps = match source {
+            TraversalSource::V(ids) => {
+                if let Some(ids) = ids {
+                    vec![Step::HasId(ids)]
+                } else {
+                    Vec::new()
+                }
+            }
+            TraversalSource::E(ids) => {
+                if let Some(ids) = ids {
+                    vec![Step::HasId(ids)]
+                } else {
+                    Vec::new()
+                }
+            }
+            TraversalSource::AddV(label) => vec![Step::AddV(label)],
+            TraversalSource::AddE(label) => vec![Step::AddE(label)],
+        };
+
+        // Parse additional steps until we hit the closing paren of from/to
+        while self.check(TokenKind::Dot) {
+            self.advance(); // consume '.'
+            let step = self.parse_step()?;
+            steps.push(step);
+        }
+
+        Ok(steps)
     }
 
     /// Parse a sub-traversal (e.g., g.V().has('name', 'Gus'))
