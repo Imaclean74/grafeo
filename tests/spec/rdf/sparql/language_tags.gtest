@@ -137,7 +137,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: langmatches_exact
-    skip: "LANGMATCHES() always returns false, filtering out all rows"
     # LANGMATCHES(LANG(?x), "en") matches literals tagged exactly "en".
     setup:
       - |
@@ -155,7 +154,6 @@ tests:
       count: 1
 
   - name: langmatches_wildcard
-    skip: "LANGMATCHES() always returns false, filtering out all rows"
     # LANGMATCHES(LANG(?x), "*") matches any literal that has a language tag,
     # but excludes untagged plain literals.
     setup:
@@ -174,7 +172,6 @@ tests:
       count: 2
 
   - name: langmatches_subtag
-    skip: "LANGMATCHES() always returns false, filtering out all rows"
     # LANGMATCHES uses BCP47 range matching: LANGMATCHES(LANG(?x), "en")
     # should match both "en" and subtags like "en-US" and "en-GB".
     setup:
