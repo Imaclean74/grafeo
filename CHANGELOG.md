@@ -18,6 +18,7 @@ Async storage foundation and continued test coverage.
 - **`AsyncStorageBackend` trait**: object-safe async trait for pluggable persistence backends (WAL batches, snapshots, sync), enabling community implementations for Postgres, S3, etc.
 - **`AsyncLocalBackend`**: built-in local filesystem implementation wrapping `AsyncLpgWal`
 - **`SnapshotMetadata`**: metadata type for snapshot listing in async backends
+- **Node.js `walCheckpoint()` and `save()`**: new sync methods for checkpoint and persistence in Node.js bindings
 
 ## [0.5.29] - 2026-03-29
 
