@@ -59,6 +59,57 @@ We use conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `pe
 | `grafeo-csharp` | C# / .NET 8 bindings (P/Invoke, wraps grafeo-c) |
 | `grafeo-dart` | Dart bindings (dart:ffi, wraps grafeo-c) |
 
+## Spec Tests (gtests)
+
+Declarative, cross-language integration tests live in `tests/spec/` as `.gtest` files:
+
+```text
+tests/spec/
+├── lpg/           # Labeled Property Graph tests
+│   ├── gql/       # GQL (ISO 39075)
+│   ├── cypher/    # openCypher
+│   ├── gremlin/   # TinkerPop Gremlin
+│   ├── graphql/   # GraphQL over LPG
+│   └── sql_pgq/   # SQL/PGQ (SQL:2023)
+├── rdf/           # RDF model tests
+│   ├── sparql/    # SPARQL 1.1
+│   └── graphql/   # GraphQL over RDF
+├── common/        # Language-agnostic tests
+├── datasets/      # Shared test fixtures (.setup files)
+├── regression/    # Issue-mapped regression tests
+└── rosetta/       # Cross-language equivalence tests
+```
+
+Each `.gtest` file is YAML-like with a `meta:` header and `tests:` list. A build script generates Rust `#[test]` functions at compile time. Run them with:
+
+```bash
+cargo test -p grafeo-spec-tests                          # All spec tests
+cargo test -p grafeo-spec-tests -- gremlin               # Filter by keyword
+cargo test -p grafeo-spec-tests -- rdf_sparql             # SPARQL tests only
+```
+
+### Writing a spec test
+
+```yaml
+meta:
+  language: gql
+  model: lpg
+  section: "my-feature"
+  title: My Feature Tests
+  dataset: social_network
+
+tests:
+  - name: basic_query
+    query: MATCH (p:Person) RETURN p.name
+    expect:
+      rows:
+        - [Alix]
+        - [Gus]
+        - [Vincent]
+```
+
+Tests can use `skip: "reason"` to mark known gaps, `expect: { count: N }` for row count checks, `expect: { ordered: true }` for order-sensitive assertions, and `expect: { error: "substring" }` for expected errors.
+
 ## Code Style
 
 - Standard Rust conventions: `rustfmt` and `clippy` are enforced in CI
