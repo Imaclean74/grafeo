@@ -263,56 +263,6 @@ impl SqlPgqTranslator {
                     })
                     .collect();
                 plan = wrap_return(plan, return_items, false);
-            } else {
-                // Non-aggregate outer SELECT: project only the named columns.
-                // This handles `SELECT name FROM GRAPH_TABLE(... COLUMNS(name, age, city))`
-                // by filtering the output to just the requested columns.
-                let columns_aliases: Vec<&str> = select
-                    .graph_table
-                    .columns
-                    .items
-                    .iter()
-                    .map(|col| col.alias.as_str())
-                    .collect();
-
-                let return_items: Vec<ReturnItem> = items
-                    .iter()
-                    .map(|item| {
-                        // Resolve the outer SELECT expression to a COLUMNS alias
-                        let (resolved_alias, _) = match &item.expression {
-                            ast::Expression::Variable(name) => {
-                                // Bare column name: must match a COLUMNS alias
-                                (name.as_str(), name.as_str())
-                            }
-                            ast::Expression::PropertyAccess { variable, property }
-                                if table_alias.is_some_and(|a| a == variable) =>
-                            {
-                                // Table-qualified: g.name -> name
-                                (property.as_str(), property.as_str())
-                            }
-                            _ => ("", ""),
-                        };
-
-                        // Determine output alias: use AS alias if present, otherwise the column name
-                        let output_alias = item
-                            .alias
-                            .clone()
-                            .unwrap_or_else(|| resolved_alias.to_string());
-
-                        ReturnItem {
-                            expression: LogicalExpression::Variable(resolved_alias.to_string()),
-                            alias: Some(output_alias),
-                        }
-                    })
-                    .collect();
-
-                // Only wrap if the outer SELECT is a strict subset of COLUMNS
-                // (i.e., not requesting all the same columns in the same order)
-                let is_subset = items.len() < columns_aliases.len()
-                    || items.iter().any(|item| item.alias.is_some());
-                if is_subset {
-                    plan = wrap_return(plan, return_items, false);
-                }
             }
         }
 

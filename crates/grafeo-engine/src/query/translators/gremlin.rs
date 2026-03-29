@@ -1240,28 +1240,9 @@ impl GremlinTranslator {
                 Ok((plan, Some(new_var)))
             }
 
-            // Group: group by a key and collect values into lists
-            ast::Step::Group(_modifiers) => {
-                // Group groups by current_var and collects into lists.
-                // The default group-by key is the current variable; a subsequent
-                // .by() step will replace it.
-                let alias = "collect".to_string();
-                let plan = LogicalOperator::Aggregate(AggregateOp {
-                    group_by: vec![LogicalExpression::Variable(current_var.to_string())],
-                    aggregates: vec![AggregateExpr {
-                        function: AggregateFunction::Collect,
-                        expression: Some(LogicalExpression::Variable(current_var.to_string())),
-                        expression2: None,
-                        distinct: false,
-                        alias: Some(alias.clone()),
-                        percentile: None,
-                        separator: None,
-                    }],
-                    input: Box::new(input),
-                    having: None,
-                });
-                Ok((plan, Some(alias)))
-            }
+            // Group: not yet fully implemented (two-pass .by() key/value
+            // semantics and MapCollect interaction need rework).
+            ast::Step::Group(_modifiers) => Ok((input, None)),
 
             // GroupCount: group by a key and count occurrences
             ast::Step::GroupCount(_label) => {
@@ -3114,10 +3095,10 @@ mod tests {
         }
     }
 
-    // === coalesce() produces Union ===
+    // === coalesce() produces Otherwise (first-non-empty) ===
 
     #[test]
-    fn test_coalesce_produces_union() {
+    fn test_coalesce_produces_otherwise() {
         let result = translate("g.V().coalesce(out('knows'), out('works_at'))");
         assert!(
             result.is_ok(),
@@ -3126,8 +3107,15 @@ mod tests {
         );
         let plan = result.unwrap();
 
-        let union = find_union(&plan.root).expect("Expected Union for coalesce()");
-        assert_eq!(union.inputs.len(), 2, "coalesce() should have 2 branches");
+        // coalesce() now uses Otherwise for first-non-empty semantics
+        fn find_otherwise(op: &LogicalOperator) -> bool {
+            matches!(op, LogicalOperator::Otherwise(_))
+                || op.children().iter().any(|c| find_otherwise(c))
+        }
+        assert!(
+            find_otherwise(&plan.root),
+            "coalesce() should produce an Otherwise operator"
+        );
     }
 
     // === project().by() produces correct Project ===
