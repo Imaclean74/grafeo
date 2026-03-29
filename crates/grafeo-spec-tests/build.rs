@@ -441,9 +441,9 @@ fn parse_params(lines: &[&str], idx: &mut usize) -> HashMap<String, String> {
         }
 
         if let Some((key, value)) = parse_kv(trimmed) {
-            // Check indent level: params are deeply nested
+            // Check indent level: params entries are deeply nested (indent >= 6)
             let indent = lines[*idx].len() - lines[*idx].trim_start().len();
-            if indent < 6 && !trimmed.starts_with("- name:") {
+            if indent >= 6 {
                 // Still in params
                 params.insert(key.to_string(), unquote(value));
                 *idx += 1;
@@ -883,17 +883,74 @@ fn generate_execute_and_assert(
     tc: &TestCase,
 ) {
     let expect = &tc.expect;
+    let has_params = !tc.params.is_empty();
+
+    // Build params HashMap if test has parameters
+    if has_params {
+        writeln!(output, "        let params = {{").unwrap();
+        writeln!(
+            output,
+            "            let mut m = std::collections::HashMap::new();"
+        )
+        .unwrap();
+        for (key, value) in &tc.params {
+            // Try to parse as integer first, then float, then treat as string
+            if let Ok(n) = value.parse::<i64>() {
+                writeln!(
+                    output,
+                    "            m.insert(\"{}\".to_string(), grafeo_common::types::Value::Int64({n}));",
+                    escape_rust_string(key)
+                )
+                .unwrap();
+            } else if let Ok(f) = value.parse::<f64>() {
+                writeln!(
+                    output,
+                    "            m.insert(\"{}\".to_string(), grafeo_common::types::Value::Float64({f}_f64));",
+                    escape_rust_string(key)
+                )
+                .unwrap();
+            } else if value == "true" || value == "false" {
+                writeln!(
+                    output,
+                    "            m.insert(\"{}\".to_string(), grafeo_common::types::Value::Bool({value}));",
+                    escape_rust_string(key)
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    output,
+                    "            m.insert(\"{}\".to_string(), grafeo_common::types::Value::String(\"{}\".into()));",
+                    escape_rust_string(key),
+                    escape_rust_string(value)
+                )
+                .unwrap();
+            }
+        }
+        writeln!(output, "            m").unwrap();
+        writeln!(output, "        }};").unwrap();
+    }
 
     // Error case
     if let Some(err_substr) = &expect.error {
-        writeln!(
-            output,
-            "        let result = execute_query_result(&db, \"{}\", \"{}\", \"{}\");",
-            escape_rust_string(language),
-            escape_rust_string(model),
-            escape_rust_string(query)
-        )
-        .unwrap();
+        if has_params {
+            writeln!(
+                output,
+                "        let result = execute_query_result_with_params(&db, \"{}\", \"{}\", \"{}\", params);",
+                escape_rust_string(language),
+                escape_rust_string(model),
+                escape_rust_string(query)
+            )
+            .unwrap();
+        } else {
+            writeln!(
+                output,
+                "        let result = execute_query_result(&db, \"{}\", \"{}\", \"{}\");",
+                escape_rust_string(language),
+                escape_rust_string(model),
+                escape_rust_string(query)
+            )
+            .unwrap();
+        }
         writeln!(
             output,
             "        assert!(result.is_err(), \"Expected error containing '{}' but query succeeded\");",
@@ -916,14 +973,25 @@ fn generate_execute_and_assert(
     }
 
     // Normal execution
-    writeln!(
-        output,
-        "        let result = execute_query_result(&db, \"{}\", \"{}\", \"{}\").expect(\"query failed\");",
-        escape_rust_string(language),
-        escape_rust_string(model),
-        escape_rust_string(query)
-    )
-    .unwrap();
+    if has_params {
+        writeln!(
+            output,
+            "        let result = execute_query_result_with_params(&db, \"{}\", \"{}\", \"{}\", params).expect(\"query failed\");",
+            escape_rust_string(language),
+            escape_rust_string(model),
+            escape_rust_string(query)
+        )
+        .unwrap();
+    } else {
+        writeln!(
+            output,
+            "        let result = execute_query_result(&db, \"{}\", \"{}\", \"{}\").expect(\"query failed\");",
+            escape_rust_string(language),
+            escape_rust_string(model),
+            escape_rust_string(query)
+        )
+        .unwrap();
+    }
 
     // Column assertion (checked before value assertions)
     if !expect.columns.is_empty() {

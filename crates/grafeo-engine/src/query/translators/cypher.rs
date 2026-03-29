@@ -1445,13 +1445,46 @@ impl CypherTranslator {
         synthetic_alias: &str,
     ) -> Result<(AggregateExpr, LogicalExpression)> {
         match expr {
-            ast::Expression::FunctionCall { .. } => {
-                // The expression IS an aggregate: extract it directly
-                let agg = self
-                    .try_extract_aggregate(expr, &Some(synthetic_alias.to_string()))?
-                    .expect("contains_aggregate was true but try_extract_aggregate returned None");
-                let substitute = LogicalExpression::Variable(synthetic_alias.to_string());
-                Ok((agg, substitute))
+            ast::Expression::FunctionCall { name, args, .. } => {
+                // Check if the function itself is an aggregate
+                if let Some(agg) =
+                    self.try_extract_aggregate(expr, &Some(synthetic_alias.to_string()))?
+                {
+                    let substitute = LogicalExpression::Variable(synthetic_alias.to_string());
+                    return Ok((agg, substitute));
+                }
+                // Non-aggregate function wrapping an aggregate argument,
+                // e.g. size(collect(DISTINCT n.v)). Extract the inner aggregate
+                // and replace the argument with a variable reference.
+                for (i, arg) in args.iter().enumerate() {
+                    if contains_aggregate(arg) {
+                        let (agg, inner_sub) =
+                            self.extract_wrapped_aggregate(arg, synthetic_alias)?;
+                        // Rebuild the outer function call with the substituted argument
+                        let mut translated_args: Vec<LogicalExpression> = args
+                            .iter()
+                            .enumerate()
+                            .map(|(j, a)| {
+                                if j == i {
+                                    Ok(inner_sub.clone())
+                                } else {
+                                    self.translate_expression(a)
+                                }
+                            })
+                            .collect::<Result<_>>()?;
+                        let _ = &mut translated_args; // suppress unused_mut if needed
+                        let substitute = LogicalExpression::FunctionCall {
+                            name: name.clone(),
+                            args: translated_args,
+                            distinct: false,
+                        };
+                        return Ok((agg, substitute));
+                    }
+                }
+                Err(Error::Query(QueryError::new(
+                    QueryErrorKind::Semantic,
+                    "contains_aggregate was true but no aggregate found in function arguments",
+                )))
             }
             ast::Expression::Binary { left, op, right } => {
                 let binary_op = self.translate_binary_op(*op)?;

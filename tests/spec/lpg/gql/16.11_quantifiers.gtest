@@ -134,6 +134,7 @@ tests:
     expect:
       ordered: true
       rows:
+        - [A]
         - [B]
         - [C]
 

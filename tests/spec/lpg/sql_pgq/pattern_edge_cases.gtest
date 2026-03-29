@@ -289,7 +289,6 @@ tests:
       empty: true
 
   - name: zero_to_n_hops
-    skip: "zero-length paths (min_hops=0) not yet implemented in executor"
     query: |
       SELECT * FROM GRAPH_TABLE (
         MATCH (src:Person)-[p:KNOWS*0..2]->(dst:Person)

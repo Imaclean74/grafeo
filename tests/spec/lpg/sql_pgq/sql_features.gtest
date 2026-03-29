@@ -294,7 +294,6 @@ tests:
         - [Paris, 1, 35]
 
   - name: having_inline_aggregate
-    skip: "inline aggregate in HAVING not resolved to aggregate reference"
     query: |
       SELECT city FROM GRAPH_TABLE (
         MATCH (n:Person)
