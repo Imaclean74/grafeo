@@ -47,7 +47,7 @@ use grafeo_common::utils::error::Result;
 use grafeo_core::graph::lpg::LpgStore;
 #[cfg(feature = "rdf")]
 use grafeo_core::graph::rdf::RdfStore;
-use grafeo_core::graph::{GraphStore, GraphStoreMut, ReadOnlyGraphStore};
+use grafeo_core::graph::{GraphStore, GraphStoreMut};
 
 use crate::catalog::Catalog;
 use crate::config::Config;
@@ -115,9 +115,12 @@ pub struct GrafeoDB {
     /// Single-file database manager (when using `.grafeo` format).
     #[cfg(feature = "grafeo-file")]
     pub(super) file_manager: Option<Arc<GrafeoFileManager>>,
-    /// External graph store (when using with_store()).
+    /// External read-only graph store (when using with_store() or with_read_store()).
     /// When set, sessions route queries through this store instead of the built-in LpgStore.
-    pub(super) external_store: Option<Arc<dyn GraphStoreMut>>,
+    pub(super) external_read_store: Option<Arc<dyn GraphStore>>,
+    /// External writable graph store (when using with_store()).
+    /// None for read-only databases created via with_read_store().
+    pub(super) external_write_store: Option<Arc<dyn GraphStoreMut>>,
     /// Metrics registry shared across all sessions.
     #[cfg(feature = "metrics")]
     pub(crate) metrics: Option<Arc<crate::metrics::MetricsRegistry>>,
@@ -459,7 +462,8 @@ impl GrafeoDB {
             embedding_models: RwLock::new(hashbrown::HashMap::new()),
             #[cfg(feature = "grafeo-file")]
             file_manager,
-            external_store: None,
+            external_read_store: None,
+            external_write_store: None,
             #[cfg(feature = "metrics")]
             metrics: Some(Arc::new(crate::metrics::MetricsRegistry::new())),
             current_graph: RwLock::new(None),
@@ -531,7 +535,8 @@ impl GrafeoDB {
             embedding_models: RwLock::new(hashbrown::HashMap::new()),
             #[cfg(feature = "grafeo-file")]
             file_manager: None,
-            external_store: Some(store),
+            external_read_store: Some(Arc::clone(&store) as Arc<dyn GraphStore>),
+            external_write_store: Some(store),
             #[cfg(feature = "metrics")]
             metrics: Some(Arc::new(crate::metrics::MetricsRegistry::new())),
             current_graph: RwLock::new(None),
@@ -542,9 +547,8 @@ impl GrafeoDB {
 
     /// Creates a database backed by a read-only [`GraphStore`].
     ///
-    /// The store is wrapped in [`ReadOnlyGraphStore`] and the database is
-    /// set to read-only mode. Write queries (CREATE, SET, DELETE) will
-    /// return `TransactionError::ReadOnly`.
+    /// The database is set to read-only mode. Write queries (CREATE, SET,
+    /// DELETE) will return `TransactionError::ReadOnly`.
     ///
     /// # Examples
     ///
@@ -561,10 +565,7 @@ impl GrafeoDB {
     /// ```
     ///
     /// [`GraphStore`]: grafeo_core::graph::GraphStore
-    /// [`ReadOnlyGraphStore`]: grafeo_core::graph::ReadOnlyGraphStore
     pub fn with_read_store(store: Arc<dyn GraphStore>, config: Config) -> Result<Self> {
-        let wrapped: Arc<dyn GraphStoreMut> = Arc::new(ReadOnlyGraphStore::new(store));
-
         config
             .validate()
             .map_err(|e| grafeo_common::utils::error::Error::Internal(e.to_string()))?;
@@ -603,7 +604,8 @@ impl GrafeoDB {
             embedding_models: RwLock::new(hashbrown::HashMap::new()),
             #[cfg(feature = "grafeo-file")]
             file_manager: None,
-            external_store: Some(wrapped),
+            external_read_store: Some(store),
+            external_write_store: None,
             #[cfg(feature = "metrics")]
             metrics: Some(Arc::new(crate::metrics::MetricsRegistry::new())),
             current_graph: RwLock::new(None),
@@ -1009,9 +1011,13 @@ impl GrafeoDB {
             read_only: self.read_only,
         };
 
-        if let Some(ref ext_store) = self.external_store {
-            return Session::with_external_store(Arc::clone(ext_store), session_cfg())
-                .expect("arena allocation for external store session");
+        if let Some(ref ext_read) = self.external_read_store {
+            return Session::with_external_store(
+                Arc::clone(ext_read),
+                self.external_write_store.as_ref().map(Arc::clone),
+                session_cfg(),
+            )
+            .expect("arena allocation for external store session");
         }
 
         #[cfg(feature = "rdf")]
@@ -1217,17 +1223,31 @@ impl GrafeoDB {
 
     /// Returns the graph store as a trait object.
     ///
-    /// This provides the [`GraphStoreMut`] interface for code that should work
-    /// with any storage backend. Use this when you only need graph read/write
-    /// operations and don't need admin methods like index management.
+    /// Returns a read-only trait object for the active graph store.
     ///
-    /// [`GraphStoreMut`]: grafeo_core::graph::GraphStoreMut
+    /// This provides the [`GraphStore`] interface for code that only needs
+    /// read operations. For write access, use [`graph_store_mut()`](Self::graph_store_mut).
+    ///
+    /// [`GraphStore`]: grafeo_core::graph::GraphStore
     #[must_use]
-    pub fn graph_store(&self) -> Arc<dyn GraphStoreMut> {
-        if let Some(ref ext_store) = self.external_store {
-            Arc::clone(ext_store)
+    pub fn graph_store(&self) -> Arc<dyn GraphStore> {
+        if let Some(ref ext_read) = self.external_read_store {
+            Arc::clone(ext_read)
         } else {
-            Arc::clone(self.lpg_store()) as Arc<dyn GraphStoreMut>
+            Arc::clone(self.lpg_store()) as Arc<dyn GraphStore>
+        }
+    }
+
+    /// Returns the writable graph store, if available.
+    ///
+    /// Returns `None` for read-only databases created via
+    /// [`with_read_store()`](Self::with_read_store).
+    #[must_use]
+    pub fn graph_store_mut(&self) -> Option<Arc<dyn GraphStoreMut>> {
+        if self.external_read_store.is_some() {
+            self.external_write_store.as_ref().map(Arc::clone)
+        } else {
+            Some(Arc::clone(self.lpg_store()) as Arc<dyn GraphStoreMut>)
         }
     }
 

@@ -20,7 +20,7 @@ pub mod compact;
 #[cfg(feature = "rdf")]
 pub mod rdf;
 
-pub use traits::{GraphStore, GraphStoreMut, NullGraphStore, ReadOnlyGraphStore};
+pub use traits::{GraphStore, GraphStoreMut, NullGraphStore};
 
 /// Controls which edges to follow during traversal.
 ///
