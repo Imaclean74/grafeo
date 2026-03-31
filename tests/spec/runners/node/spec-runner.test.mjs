@@ -114,6 +114,7 @@ async function executeQuery(db, language, query, params) {
       if (!db.executeSql) throw new Error('SQL/PGQ not available')
       return params ? db.executeSql(query, params) : db.executeSql(query)
     default:
+      if (db.executeLanguage) return db.executeLanguage(language, query)
       throw new Error(`Unsupported language: ${language}`)
   }
 }
@@ -129,7 +130,7 @@ function isLanguageAvailable(db, language) {
     case 'rdf': return typeof db.executeSparql === 'function'
     case 'sql-pgq': case 'sql_pgq': return typeof db.executeSql === 'function'
     case 'sparql': return typeof db.executeSparql === 'function'
-    default: return false
+    default: return typeof db.executeLanguage === 'function'
   }
 }
 
@@ -202,7 +203,7 @@ for (const filePath of gtestFiles) {
             await loadDataset(db, meta.dataset)
           }
 
-          await runTestCase(db, tc, meta.language, meta.language || 'gql')
+          await runTestCase(db, tc, tc.language || meta.language, meta.language || 'gql')
         } finally {
           db.close()
         }

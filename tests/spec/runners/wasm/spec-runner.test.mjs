@@ -230,7 +230,7 @@ for (const filePath of gtestFiles) {
         }
 
         try {
-          runTestCase(db, tc, meta.language, meta.language || 'gql')
+          runTestCase(db, tc, tc.language || meta.language, meta.language || 'gql')
         } catch (err) {
           // WASM panics (e.g. rand(), SystemTime) surface as RuntimeError: unreachable
           if (err instanceof WebAssembly.RuntimeError) return ctx.skip()

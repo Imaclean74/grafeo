@@ -390,6 +390,7 @@ class _TestCase {
   List<String> statements;
   List<String> setup;
   String? skip;
+  String? language;
   _Expect expect;
   Map<String, String> variants;
   List<String> tags;
@@ -400,6 +401,7 @@ class _TestCase {
     List<String>? statements,
     List<String>? setup,
     this.skip,
+    this.language,
     _Expect? expect,
     Map<String, String>? variants,
     List<String>? tags,
@@ -535,6 +537,9 @@ _TestCase _parseSingleTest(_ParseContext ctx) {
         }
       case 'skip':
         tc.skip = _unquote(value);
+        ctx.idx++;
+      case 'language':
+        tc.language = _unquote(value);
         ctx.idx++;
       case 'setup':
         ctx.idx++;
@@ -1062,7 +1067,7 @@ void main() {
               _loadDataset(db, meta.dataset);
             }
 
-            _runTestCase(db, tc, meta.language);
+            _runTestCase(db, tc, tc.language ?? meta.language);
           } finally {
             db.close();
           }

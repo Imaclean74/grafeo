@@ -145,8 +145,8 @@ class GtestItem(pytest.Item):
         if tc.skip is not None:
             pytest.skip(f"skipped in .gtest: {tc.skip}")
 
-        # Determine language
-        language = self.variant_lang or meta.language or "gql"
+        # Determine language: per-test override > rosetta variant > file meta
+        language = self.variant_lang or tc.language or meta.language or "gql"
 
         # Check requires: skip if the binding does not expose the method
         all_requires = list(meta.requires)
@@ -309,13 +309,21 @@ def _coerce_params(raw_params: Dict[str, str]) -> Optional[Dict[str, object]]:
 
 def _execute(db, language: str, query: str, params=None):
     """Execute a query in the specified language, returning the QueryResult."""
-    method_name = _LANGUAGE_METHODS.get(language, "execute")
-    method = getattr(db, method_name, None)
+    method_name = _LANGUAGE_METHODS.get(language)
+    if method_name is not None:
+        method = getattr(db, method_name, None)
+        if method is None:
+            pytest.skip(
+                f"grafeo build does not support language '{language}' "
+                f"(no {method_name} method)"
+            )
+        if params is not None:
+            return method(query, params)
+        return method(query)
+    # Fall back to generic execute_language for non-standard languages
+    method = getattr(db, "execute_language", None)
     if method is None:
-        pytest.skip(
-            f"grafeo build does not support language '{language}' "
-            f"(no {method_name} method)"
-        )
+        pytest.skip(f"grafeo build does not support language '{language}'")
     if params is not None:
-        return method(query, params)
-    return method(query)
+        return method(language, query, params)
+    return method(language, query)

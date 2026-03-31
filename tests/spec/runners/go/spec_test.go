@@ -50,6 +50,7 @@ type TestCase struct {
 	Params     map[string]string
 	Tags       []string
 	Skip       string
+	Language   string
 	Expect     Expect
 	Variants   map[string]string
 }
@@ -663,6 +664,9 @@ func parseSingleTest(ctx *parseContext) TestCase {
 		case "skip":
 			tc.Skip = unquote(value)
 			ctx.idx++
+		case "language":
+			tc.Language = unquote(value)
+			ctx.idx++
 		case "setup":
 			ctx.idx++
 			tc.Setup = parseStringList(ctx)
@@ -1061,8 +1065,11 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 		t.Skipf("skipped in .gtest: %s", tc.Skip)
 	}
 
-	// Determine language
+	// Determine language: per-test override > rosetta variant > file meta
 	language := variantLang
+	if language == "" && tc.Language != "" {
+		language = tc.Language
+	}
 	if language == "" {
 		language = gf.Meta.Language
 	}

@@ -44,6 +44,8 @@ pub struct DatabaseInfo {
     pub wal_enabled: bool,
     /// Database version.
     pub version: String,
+    /// Compiled feature flags (e.g. "gql", "cypher", "algos", "vector-index").
+    pub features: Vec<String>,
 }
 
 /// Detailed database statistics returned by `db.stats()`.
@@ -431,6 +433,7 @@ mod tests {
             path: Some(PathBuf::from("/tmp/db")),
             wal_enabled: true,
             version: "0.4.1".to_string(),
+            features: vec!["gql".into(), "cypher".into()],
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: DatabaseInfo = serde_json::from_str(&json).unwrap();

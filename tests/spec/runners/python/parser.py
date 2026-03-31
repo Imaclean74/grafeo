@@ -60,6 +60,7 @@ class TestCase:
     skip: Optional[str] = None
     expect: Expect = field(default_factory=Expect)
     variants: Dict[str, str] = field(default_factory=dict)
+    language: Optional[str] = None
 
 
 @dataclass
@@ -144,6 +145,11 @@ def _parse_test_dict(d: dict) -> TestCase:
     raw_params = d.get("params", {})
     if isinstance(raw_params, dict):
         tc.params = {str(k): str(v) for k, v in raw_params.items()}
+
+    # per-test language override (e.g. "graphql-rdf")
+    lang = d.get("language")
+    if lang is not None:
+        tc.language = str(lang)
 
     # variants
     raw_variants = d.get("variants", {})

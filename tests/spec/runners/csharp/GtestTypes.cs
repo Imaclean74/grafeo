@@ -38,6 +38,7 @@ public sealed class TestCase
     public Dictionary<string, string> Params { get; set; } = new();
     public List<string> Tags { get; set; } = [];
     public string? Skip { get; set; }
+    public string? Language { get; set; }
     public Expect Expect { get; set; } = new();
     public Dictionary<string, string> Variants { get; set; } = new();
 }

@@ -477,6 +477,17 @@ impl PyGrafeoDB {
         self.execute_language_impl("sparql", query, params)
     }
 
+    /// Execute a query in a named language (e.g. `"graphql-rdf"`).
+    #[pyo3(signature = (language, query, params=None))]
+    fn execute_language(
+        &self,
+        language: &str,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<PyQueryResult> {
+        self.execute_language_impl(language, query, params)
+    }
+
     /// Create a node.
     #[pyo3(signature = (labels, properties=None))]
     fn create_node(
@@ -2755,6 +2766,17 @@ impl PyTransaction {
         _py: Python<'_>,
     ) -> PyResult<PyQueryResult> {
         self.execute_language_impl("sparql", query, params)
+    }
+
+    /// Execute a query in a named language (e.g. `"graphql-rdf"`).
+    #[pyo3(signature = (language, query, params=None))]
+    fn execute_language(
+        &self,
+        language: &str,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<PyQueryResult> {
+        self.execute_language_impl(language, query, params)
     }
 
     /// Check if transaction is active.

@@ -144,6 +144,8 @@ public static class GtestParser
                     break;
                 case "skip":
                     tc.Skip = Unquote(value); ctx.Idx++; break;
+                case "language":
+                    tc.Language = Unquote(value); ctx.Idx++; break;
                 case "setup":
                     ctx.Idx++; tc.Setup = ParseStringList(ctx); break;
                 case "statements":

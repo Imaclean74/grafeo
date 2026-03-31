@@ -90,7 +90,7 @@ public class SpecTests : IDisposable
         Assert.NotNull(tc);
 
         var meta = gtestFile.Meta;
-        var language = variantLang ?? meta.Language;
+        var language = variantLang ?? tc.Language ?? meta.Language;
 
         // Check language availability
         if (language != "gql" && language != "")

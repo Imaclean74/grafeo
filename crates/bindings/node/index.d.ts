@@ -151,6 +151,8 @@ export declare class GrafeoDB {
   executeGraphql(query: string, params?: any | undefined | null): Promise<QueryResult>
   /** Execute a SPARQL query against the RDF triple store. */
   executeSparql(query: string, params?: any | undefined | null): Promise<QueryResult>
+  /** Execute a query in a named language (e.g. `"graphql-rdf"`). */
+  executeLanguage(language: string, query: string, params?: any | undefined | null): Promise<QueryResult>
 }
 export type JsGrafeoDB = GrafeoDB
 
