@@ -23,9 +23,10 @@ use grafeo_core::graph::rdf::{Literal, RdfStore, Term, Triple, TriplePattern};
 
 use crate::query::plan::{
     AddGraphOp, AggregateFunction as LogicalAggregateFunction, AggregateOp, AntiJoinOp, BindOp,
-    ClearGraphOp, CopyGraphOp, CreateGraphOp, DeleteTripleOp, DistinctOp, DropGraphOp, FilterOp,
-    InsertTripleOp, LeftJoinOp, LimitOp, LogicalExpression, LogicalOperator, LogicalPlan, ModifyOp,
-    MoveGraphOp, SkipOp, SortOp, TripleComponent, TripleScanOp, TripleTemplate,
+    ClearGraphOp, CopyGraphOp, CreateGraphOp, DatasetRestriction, DeleteTripleOp, DistinctOp,
+    DropGraphOp, FilterOp, InsertTripleOp, LeftJoinOp, LimitOp, LogicalExpression, LogicalOperator,
+    LogicalPlan, ModifyOp, MoveGraphOp, SkipOp, SortOp, TripleComponent, TripleScanOp,
+    TripleTemplate,
 };
 use crate::query::planner::{PhysicalPlan, convert_aggregate_function, convert_filter_expression};
 
@@ -197,9 +198,9 @@ impl RdfPlanner {
     /// Returns an error if planning fails.
     pub fn plan(&self, logical_plan: &LogicalPlan) -> Result<PhysicalPlan> {
         let (operator, columns) = self.plan_operator(&logical_plan.root)?;
-        // Strip internal companion columns (__lang_<var>, __datatype_<var>)
-        // from the output. They are used by LANG()/LANGMATCHES()/DATATYPE()
-        // during evaluation but should never appear in query results.
+        // Strip internal companion columns (__lang_<var>) from the output.
+        // They are used by LANG()/LANGMATCHES() during evaluation but should
+        // never appear in query results.
         let (operator, columns) = strip_internal_columns(operator, columns);
         Ok(PhysicalPlan {
             operator,
@@ -321,11 +322,10 @@ impl RdfPlanner {
             object_var_name = Some(name.clone());
         }
 
-        // When the object is a variable, add hidden companion columns for
-        // language tags and datatypes so that LANG(), LANGMATCHES(), and
-        // DATATYPE() can access them. These must be added BEFORE the graph
-        // column to match the DataChunk layout (emitted right after the
-        // object column).
+        // When the object is a variable, add a hidden companion column for
+        // language tags so that LANG() and LANGMATCHES() can access them.
+        // This must be added BEFORE the graph column to match the DataChunk
+        // layout (the lang column is emitted right after the object column).
         let emit_companion_columns = object_var_name.is_some();
         if let Some(ref obj_name) = object_var_name {
             columns.push(format!("__lang_{obj_name}"));
@@ -351,8 +351,11 @@ impl RdfPlanner {
             pattern,
             output_mask,
             self.chunk_size,
-            graph_iri,
-            scan_all_graphs,
+            GraphContext {
+                graph: graph_iri,
+                scan_all_graphs,
+                dataset: scan.dataset.clone(),
+            },
             emit_companion_columns,
         ));
 
@@ -1875,7 +1878,13 @@ impl Operator for RdfClearGraphOperator {
             return Ok(None);
         }
 
-        self.store.clear_graph(self.graph.as_deref());
+        // Empty string is the sentinel for CLEAR ALL (both default and all named graphs)
+        if self.graph.as_deref() == Some("") {
+            self.store.clear();
+            self.store.clear_all_named();
+        } else {
+            self.store.clear_graph(self.graph.as_deref());
+        }
 
         #[cfg(feature = "wal")]
         log_rdf_wal(
@@ -2299,8 +2308,6 @@ impl RdfModifyOperator {
                 if s.starts_with("http://") || s.starts_with("https://") || s.starts_with("urn:") {
                     Some(Term::Iri(s.to_string().into()))
                 } else {
-                    // Preserve string values as simple literals without speculative
-                    // numeric parsing, so DELETE can match the original storage format.
                     Some(Term::Literal(Literal::simple(s.to_string())))
                 }
             }
@@ -2639,6 +2646,19 @@ impl Operator for RdfProjectOperator {
 // RDF Triple Scan Operator
 // ============================================================================
 
+/// Graph resolution context for a triple scan.
+///
+/// Groups the graph IRI, scan-all flag, and SPARQL dataset restriction
+/// to keep the operator constructor argument count manageable.
+struct GraphContext {
+    /// Named graph to query. `None` = default graph.
+    graph: Option<String>,
+    /// Whether to scan ALL graphs (when GRAPH ?var is used).
+    scan_all_graphs: bool,
+    /// SPARQL dataset restriction from FROM / FROM NAMED clauses.
+    dataset: Option<DatasetRestriction>,
+}
+
 /// Lazy triple scan operator that processes triples in chunks.
 ///
 /// This operator queries the RDF store and emits results in DataChunks
@@ -2650,13 +2670,9 @@ struct RdfTripleScanOperator {
     pattern: TriplePattern,
     /// Which components to include in output [s, p, o, g].
     output_mask: [bool; 4],
-    /// Named graph to query. `None` = default graph, `Some(iri)` = named graph.
-    /// When the graph component is a variable, this is `None` and we scan all graphs.
-    graph: Option<String>,
-    /// Whether to scan ALL graphs (when GRAPH ?var is used).
-    scan_all_graphs: bool,
-    /// Whether to emit companion columns (language tag, datatype) after the
-    /// object column. Enabled when the object position is a variable.
+    /// Graph resolution context (graph IRI, scan-all flag, dataset restriction).
+    graph_context: GraphContext,
+    /// Whether to emit a companion language-tag column after the object column.
     emit_companion_columns: bool,
     /// Chunk size for batching.
     chunk_size: usize,
@@ -2672,16 +2688,14 @@ impl RdfTripleScanOperator {
         pattern: TriplePattern,
         output_mask: [bool; 4],
         chunk_size: usize,
-        graph: Option<String>,
-        scan_all_graphs: bool,
+        graph_context: GraphContext,
         emit_companion_columns: bool,
     ) -> Self {
         Self {
             store,
             pattern,
             output_mask,
-            graph,
-            scan_all_graphs,
+            graph_context,
             emit_companion_columns,
             chunk_size,
             triples: None,
@@ -2690,29 +2704,92 @@ impl RdfTripleScanOperator {
     }
 
     /// Lazily load matching triples on first access.
+    ///
+    /// Respects SPARQL dataset clauses (FROM / FROM NAMED):
+    /// - FROM: basic patterns (no graph context) scan the union of specified named graphs.
+    /// - FROM NAMED: GRAPH patterns only iterate listed named graphs.
     fn ensure_triples(&mut self) {
         if self.triples.is_none() {
-            self.triples = Some(if self.scan_all_graphs {
-                // GRAPH ?var - scan all graphs (default + named)
-                self.store.find_in_graphs(&self.pattern, Some(&[]))
-            } else if let Some(ref graph_iri) = self.graph {
-                // GRAPH <iri> - scan specific named graph
-                self.store
-                    .graph(graph_iri)
-                    .map(|g| {
-                        g.find(&self.pattern)
-                            .into_iter()
-                            .map(|t| (Some(graph_iri.clone()), t))
-                            .collect()
-                    })
-                    .unwrap_or_default()
+            let ctx = &self.graph_context;
+            self.triples = Some(if ctx.scan_all_graphs {
+                // GRAPH ?var: scan named graphs (restricted by FROM NAMED if present)
+                if let Some(ref ds) = ctx.dataset {
+                    if !ds.named_graphs.is_empty() {
+                        // FROM NAMED restricts which named graphs are visible
+                        let graph_refs: Vec<&str> =
+                            ds.named_graphs.iter().map(String::as_str).collect();
+                        self.store.find_in_graphs(&self.pattern, Some(&graph_refs))
+                    } else {
+                        // No FROM NAMED: all graphs visible
+                        self.store.find_in_graphs(&self.pattern, Some(&[]))
+                    }
+                } else {
+                    // No dataset restriction: scan all graphs
+                    self.store.find_in_graphs(&self.pattern, Some(&[]))
+                }
+            } else if let Some(ref graph_iri) = ctx.graph {
+                // GRAPH <iri>: scan specific named graph (restricted by FROM NAMED if present)
+                if let Some(ref ds) = ctx.dataset {
+                    if !ds.named_graphs.is_empty()
+                        && !ds.named_graphs.iter().any(|g| g == graph_iri)
+                    {
+                        // The specified graph is not in the FROM NAMED list: empty result
+                        Vec::new()
+                    } else {
+                        self.store
+                            .graph(graph_iri)
+                            .map(|g| {
+                                g.find(&self.pattern)
+                                    .into_iter()
+                                    .map(|t| (Some(graph_iri.clone()), t))
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    }
+                } else {
+                    self.store
+                        .graph(graph_iri)
+                        .map(|g| {
+                            g.find(&self.pattern)
+                                .into_iter()
+                                .map(|t| (Some(graph_iri.clone()), t))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
             } else {
-                // Default graph
-                self.store
-                    .find(&self.pattern)
-                    .into_iter()
-                    .map(|t| (None, t))
-                    .collect()
+                // No graph context (basic triple pattern).
+                // FROM clauses redefine the default graph as the union of specified graphs.
+                if let Some(ref ds) = ctx.dataset {
+                    if !ds.default_graphs.is_empty() {
+                        // FROM: default graph = union of specified named graphs.
+                        // Deduplicate graph IRIs first so listing the same IRI
+                        // twice does not produce duplicate triples.
+                        let mut unique_graphs: Vec<&str> =
+                            ds.default_graphs.iter().map(String::as_str).collect();
+                        unique_graphs.sort_unstable();
+                        unique_graphs.dedup();
+                        let mut results = self
+                            .store
+                            .find_in_graphs(&self.pattern, Some(&unique_graphs));
+                        // Clear graph names so results appear as default-graph triples
+                        for item in &mut results {
+                            item.0 = None;
+                        }
+                        results
+                    } else {
+                        // Dataset has FROM NAMED only, no FROM: default graph is empty
+                        // per SPARQL spec sec 13.2
+                        Vec::new()
+                    }
+                } else {
+                    // No dataset restriction: use actual default graph
+                    self.store
+                        .find(&self.pattern)
+                        .into_iter()
+                        .map(|t| (None, t))
+                        .collect()
+                }
             });
         }
     }
@@ -2721,7 +2798,6 @@ impl RdfTripleScanOperator {
     fn output_column_count(&self) -> usize {
         let base = self.output_mask.iter().filter(|&&b| b).count();
         if self.emit_companion_columns {
-            // Two companion columns: __lang_ and __datatype_
             base + 2
         } else {
             base
@@ -3896,9 +3972,6 @@ impl RdfExpressionPredicate {
 
             // DATATYPE - datatype IRI of a literal
             "DATATYPE" => {
-                // Look up the companion datatype column for the variable.
-                // The triple scan emits a hidden __datatype_<var> column alongside
-                // each object variable.
                 if let Some(FilterExpression::Variable(var_name)) = args.first() {
                     let dt_col_name = format!("__datatype_{var_name}");
                     if let Some(&col_idx) = self.variable_columns.get(&dt_col_name)
@@ -3909,7 +3982,6 @@ impl RdfExpressionPredicate {
                         return Some(Value::String(dt));
                     }
                 }
-                // Fallback: infer datatype from the Value type
                 let val = self.eval_expr(args.first()?, chunk, row)?;
                 let dt = match &val {
                     Value::String(_) => "http://www.w3.org/2001/XMLSchema#string",
@@ -3950,7 +4022,6 @@ impl RdfExpressionPredicate {
             }
 
             // STRDT - construct a typed literal
-            // STRDT - construct a typed literal
             "STRDT" => {
                 if args.len() < 2 {
                     return None;
@@ -3959,8 +4030,6 @@ impl RdfExpressionPredicate {
                 let datatype = self.eval_expr(&args[1], chunk, row)?;
                 let lex_str = value_to_string(&lexical);
                 let dt_str = value_to_string(&datatype);
-                // Convert the lexical form to the target XSD type so that
-                // DATATYPE() on the result returns the correct IRI.
                 match dt_str.as_str() {
                     "http://www.w3.org/2001/XMLSchema#integer"
                     | "http://www.w3.org/2001/XMLSchema#int"
@@ -4098,7 +4167,7 @@ impl Predicate for RdfExpressionPredicate {
 // Helper Functions
 // ============================================================================
 
-/// Strips internal `__lang_*` and `__datatype_*` companion columns from the final output.
+/// Strips internal `__lang_*` companion columns from the final output.
 ///
 /// If no internal columns are present, the operator and columns pass through
 /// unchanged. Otherwise, a lightweight projection is inserted to remove them.
@@ -4397,6 +4466,7 @@ mod tests {
             object: TripleComponent::Variable("o".to_string()),
             graph: None,
             input: None,
+            dataset: None,
         };
 
         let plan = LogicalPlan::new(LogicalOperator::TripleScan(scan));
@@ -4433,6 +4503,7 @@ mod tests {
             object: TripleComponent::Variable("o".to_string()),
             graph: None,
             input: None,
+            dataset: None,
         };
 
         let plan = LogicalPlan::new(LogicalOperator::TripleScan(scan));
@@ -4466,8 +4537,11 @@ mod tests {
             pattern,
             [true, true, true, false],
             30,
-            None,
-            false,
+            GraphContext {
+                graph: None,
+                scan_all_graphs: false,
+                dataset: None,
+            },
             false,
         );
 

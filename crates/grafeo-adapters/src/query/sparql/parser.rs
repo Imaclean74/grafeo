@@ -15,6 +15,8 @@ pub struct Parser<'a> {
     source: &'a str,
     /// Counter for generating unique blank node labels (used by RDF collections).
     collection_counter: u32,
+    /// Counter for generating unique anonymous blank node labels.
+    anon_blank_counter: u32,
 }
 
 impl<'a> Parser<'a> {
@@ -27,7 +29,15 @@ impl<'a> Parser<'a> {
             current,
             source,
             collection_counter: 0,
+            anon_blank_counter: 0,
         }
+    }
+
+    /// Generates a unique blank node label for anonymous blank nodes (`[]`).
+    fn next_anon_blank(&mut self) -> String {
+        let id = self.anon_blank_counter;
+        self.anon_blank_counter += 1;
+        format!("_anon{id}")
     }
 
     /// Generates a unique blank node label for RDF collection desugaring.
@@ -896,14 +906,41 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_triples_same_subject(&mut self, triples: &mut Vec<TriplePattern>) -> Result<()> {
-        // Handle RDF collection in subject position: (item1 item2) pred obj .
-        let subject = if self.current.kind == TokenKind::LeftParen {
-            self.parse_collection(triples)?
+        if self.current.kind == TokenKind::LeftParen {
+            // RDF collection in subject position: (item1 item2) pred obj .
+            let subject = self.parse_collection(triples)?;
+            self.parse_property_list_not_empty(&subject, triples)?;
+        } else if self.current.kind == TokenKind::LeftBracket {
+            // Anonymous blank node in subject position: [ pred obj ; ... ] pred obj .
+            let subject = self.parse_blank_node_subject(triples)?;
+            if self.is_verb() {
+                self.parse_property_list_not_empty(&subject, triples)?;
+            }
         } else {
-            self.parse_var_or_term()?
-        };
-        self.parse_property_list_not_empty(&subject, triples)?;
+            let subject = self.parse_var_or_term()?;
+            self.parse_property_list_not_empty(&subject, triples)?;
+        }
         Ok(())
+    }
+
+    /// Parses `[ predicate-object-list ]` in subject position.
+    fn parse_blank_node_subject(&mut self, triples: &mut Vec<TriplePattern>) -> Result<TripleTerm> {
+        self.expect(TokenKind::LeftBracket)?;
+
+        let label = self.next_anon_blank();
+        let subject = TripleTerm::BlankNode(BlankNode::Labeled(label));
+
+        if self.current.kind == TokenKind::RightBracket {
+            // Empty anonymous blank node: []
+            self.advance();
+            return Ok(subject);
+        }
+
+        // Parse internal property-object pairs
+        self.parse_property_list_not_empty(&subject, triples)?;
+        self.expect(TokenKind::RightBracket)?;
+
+        Ok(subject)
     }
 
     fn parse_property_list_not_empty(

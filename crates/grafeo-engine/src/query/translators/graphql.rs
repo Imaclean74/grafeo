@@ -15,9 +15,9 @@ use super::common::{
     wrap_skip, wrap_sort,
 };
 use crate::query::plan::{
-    AggregateExpr, AggregateFunction, AggregateOp, BinaryOp, CountExpr, CreateNodeOp,
-    DeleteNodeOp, ExpandDirection, ExpandOp, LogicalExpression, LogicalOperator, LogicalPlan,
-    NodeScanOp, PathMode, ReturnItem, SetPropertyOp, SortKey, SortOrder, UnionOp,
+    AggregateExpr, AggregateFunction, AggregateOp, BinaryOp, CountExpr, CreateNodeOp, DeleteNodeOp,
+    ExpandDirection, ExpandOp, LogicalExpression, LogicalOperator, LogicalPlan, NodeScanOp,
+    PathMode, ReturnItem, SetPropertyOp, SortKey, SortOrder, UnionOp,
 };
 use grafeo_adapters::query::graphql::{self, ast};
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};

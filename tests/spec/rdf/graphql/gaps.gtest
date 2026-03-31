@@ -123,7 +123,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: variable_with_default_value
-    skip: "RDF GraphQL translator does not support pagination (first/limit arguments)"
     query: "query($limit: Int = 2) { person(first: $limit) { name } }"
     expect:
       count: 2
@@ -138,17 +137,17 @@ tests:
       count: 2
 
   # ---------------------------------------------------------------------------
-  # RDF mutation rejection (test harness routes through LPG translator)
+  # RDF mutation rejection (routed through RDF translator via per-test language)
   # ---------------------------------------------------------------------------
 
   - name: rdf_create_mutation_rejected
-    skip: "Test harness uses LPG translator which accepts mutations; RDF translator rejects them"
+    language: graphql-rdf
     query: "mutation { createPerson(name: \"Test\") { name } }"
     expect:
       error: "Only Query"
 
   - name: rdf_delete_mutation_rejected
-    skip: "Test harness uses LPG translator which accepts mutations; RDF translator rejects them"
+    language: graphql-rdf
     query: "mutation { deletePerson(name: \"Alix\") }"
     expect:
       error: "Only Query"

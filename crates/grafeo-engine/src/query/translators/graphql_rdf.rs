@@ -10,10 +10,12 @@
 //! - Nested selections → Predicate-object traversals
 //! - Scalar fields → Select variables from triple bindings
 
-use super::common::{VarGen, capitalize_first, graphql_directives_allow, wrap_filter};
+use super::common::{
+    VarGen, capitalize_first, graphql_directives_allow, wrap_filter, wrap_limit, wrap_skip,
+};
 use crate::query::plan::{
-    BinaryOp, JoinOp, JoinType, LogicalExpression, LogicalOperator, LogicalPlan, ProjectOp,
-    Projection, TripleComponent, TripleScanOp, UnionOp,
+    BinaryOp, CountExpr, JoinOp, JoinType, LogicalExpression, LogicalOperator, LogicalPlan,
+    ProjectOp, Projection, TripleComponent, TripleScanOp, UnionOp,
 };
 use grafeo_adapters::query::graphql::{self, ast};
 use grafeo_common::utils::error::{Error, QueryError, QueryErrorKind, Result};
@@ -170,11 +172,16 @@ impl GraphQLRdfTranslator {
             object: TripleComponent::Iri(type_iri),
             graph: None,
             input: None,
+            dataset: None,
         });
 
-        // Apply argument filters
-        if !field.arguments.is_empty() {
-            plan = self.translate_arguments(&field.arguments, &subject_var, plan)?;
+        // Extract pagination (first/limit, skip/offset) from regular filter arguments
+        let (pagination_first, pagination_skip, filter_args) =
+            Self::extract_pagination_args(&field.arguments);
+
+        // Apply filter arguments (excluding pagination)
+        if !filter_args.is_empty() {
+            plan = self.translate_arguments(&filter_args, &subject_var, plan)?;
         }
 
         // Process nested selection set
@@ -193,6 +200,14 @@ impl GraphQLRdfTranslator {
                 input: Box::new(plan),
                 pass_through_input: false,
             });
+        }
+
+        // Apply pagination
+        if let Some(skip) = pagination_skip {
+            plan = wrap_skip(plan, skip);
+        }
+        if let Some(first) = pagination_first {
+            plan = wrap_limit(plan, first);
         }
 
         Ok(plan)
@@ -262,6 +277,7 @@ impl GraphQLRdfTranslator {
                             object: TripleComponent::Iri(type_iri),
                             graph: None,
                             input: None,
+                            dataset: None,
                         });
                         plan = self.join_patterns(plan, type_check);
                     }
@@ -294,6 +310,7 @@ impl GraphQLRdfTranslator {
             object: TripleComponent::Variable(object_var.clone()),
             graph: None,
             input: None,
+            dataset: None,
         });
 
         let plan = self.join_patterns(input, triple);
@@ -316,6 +333,7 @@ impl GraphQLRdfTranslator {
             object: TripleComponent::Variable(to_var.clone()),
             graph: None,
             input: None,
+            dataset: None,
         });
 
         let mut plan = self.join_patterns(input, triple);
@@ -335,6 +353,36 @@ impl GraphQLRdfTranslator {
         }
 
         Ok((plan, projections))
+    }
+
+    /// Extracts pagination arguments (first/limit, skip/offset) from field arguments,
+    /// returning the pagination values and the remaining filter arguments.
+    fn extract_pagination_args(
+        args: &[ast::Argument],
+    ) -> (Option<CountExpr>, Option<CountExpr>, Vec<ast::Argument>) {
+        let mut first = None;
+        let mut skip = None;
+        let mut filters = Vec::new();
+        for arg in args {
+            match arg.name.as_str() {
+                "first" | "limit" => match &arg.value {
+                    ast::InputValue::Int(n) => first = Some(CountExpr::Literal(*n as usize)),
+                    ast::InputValue::Variable(name) => {
+                        first = Some(CountExpr::Parameter(name.clone()));
+                    }
+                    _ => {}
+                },
+                "skip" | "offset" => match &arg.value {
+                    ast::InputValue::Int(n) => skip = Some(CountExpr::Literal(*n as usize)),
+                    ast::InputValue::Variable(name) => {
+                        skip = Some(CountExpr::Parameter(name.clone()));
+                    }
+                    _ => {}
+                },
+                _ => filters.push(arg.clone()),
+            }
+        }
+        (first, skip, filters)
     }
 
     fn translate_arguments(
@@ -357,6 +405,7 @@ impl GraphQLRdfTranslator {
                 object: TripleComponent::Variable(object_var.clone()),
                 graph: None,
                 input: None,
+                dataset: None,
             });
 
             plan = self.join_patterns(plan, triple);
@@ -392,6 +441,7 @@ impl GraphQLRdfTranslator {
             object: TripleComponent::Iri(type_iri),
             graph: None,
             input: None,
+            dataset: None,
         });
 
         let plan = self.join_patterns(input, type_check);

@@ -38,6 +38,12 @@ CompactStore: a read-optimized columnar graph store for memory-constrained envir
 - **SPARQL `STRDT()` type conversion**: `STRDT("88", xsd:integer)` now produces a typed `Int64` value so `DATATYPE()` returns the correct IRI
 - **SPARQL subquery aggregation propagation**: inner `SELECT (COUNT(...) AS ?c)` subquery results now correctly propagate to outer query
 - **GraphQL aggregation**: `{ personCount }`, `{ personAggregate { sum_age avg_age } }`, and `{ person { _count } }` field patterns now emit proper aggregate operators
+- **SPARQL `FROM` / `FROM NAMED` enforcement**: dataset clauses now restrict which graphs are visible to triple scans per SPARQL 1.1 spec sections 13.1 and 13.2
+- **GQL `ANY` and `ANY SHORTEST` path search prefixes**: `MATCH ANY p = ...` returns one arbitrary matching path, `MATCH p = ANY SHORTEST ...` returns one shortest path, uses the existing shortest path BFS operator
+- **SPARQL `CLEAR ALL`**: clears both the default graph and all named graphs
+- **SPARQL anonymous blank node `[]` as subject**: `[ <pred> ?obj ; <pred2> ?obj2 ]` now parsed and expanded to triple patterns with a fresh blank node variable
+- **RDF GraphQL per-test language dispatch**: `language: graphql-rdf` in gtest routes through the RDF translator for mutation rejection testing
+- **RDF GraphQL pagination**: `first`/`limit`/`skip`/`offset` arguments now supported in the RDF GraphQL translator
 
 ## [0.5.30] - 2026-03-30
 

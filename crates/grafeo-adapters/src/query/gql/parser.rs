@@ -1368,8 +1368,8 @@ impl<'a> Parser<'a> {
                 self.advance(); // consume k
                 return Ok(Some(PathSearchPrefix::AnyK(k)));
             }
-            if next == TokenKind::LParen {
-                // ANY (pattern...) - just ANY prefix
+            // ANY followed by ( or an identifier (path variable: ANY p = ...)
+            if next == TokenKind::LParen || next == TokenKind::Identifier {
                 self.advance(); // consume ANY
                 return Ok(Some(PathSearchPrefix::Any));
             }

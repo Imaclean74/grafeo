@@ -421,7 +421,6 @@ tests:
       count: 2
 
   - name: zero_or_more_rdf_collection_traversal
-    skip: "rdf:rest*/rdf:first returns duplicate items due to reflexive object-scan discovering unreachable nodes"
     # Traverse an RDF collection using rdf:rest*/rdf:first
     setup:
       - |
