@@ -3,6 +3,7 @@
 // Discovers all .gtest files under tests/spec/, parses them, and creates
 // parameterized xUnit tests that execute queries and assert expected results.
 
+using System;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -773,9 +774,24 @@ public class SpecTests : IDisposable
                     .ToHashSet();
             }
         }
-        catch
+        catch (DllNotFoundException)
         {
             // Native library not available
+        }
+        catch (BadImageFormatException)
+        {
+            // Native library not available
+        }
+        catch (TypeInitializationException ex)
+        {
+            if (ex.InnerException is DllNotFoundException or BadImageFormatException)
+            {
+                // Native library not available
+            }
+            else
+            {
+                throw;
+            }
         }
         return [];
     }
