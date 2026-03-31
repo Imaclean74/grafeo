@@ -228,7 +228,7 @@ mod tests {
             ));
         }
 
-        // GRAPH ?g scans all graphs (default + named)
+        // GRAPH ?g scans named graphs only (per SPARQL 1.1 spec sec 13.3)
         let result = session
             .execute_sparql(
                 r#"SELECT ?g ?s ?name WHERE {
@@ -238,8 +238,8 @@ mod tests {
             .unwrap();
 
         assert!(
-            result.row_count() >= 3,
-            "Expected >= 3 rows from all graphs, got {}",
+            result.row_count() >= 2,
+            "Expected >= 2 rows from named graphs, got {}",
             result.row_count()
         );
     }

@@ -15,7 +15,7 @@ use grafeo_core::graph::GraphStore;
 use grafeo_core::graph::lpg::LpgStore;
 
 use super::super::{AlgorithmResult, ParameterDef, ParameterType, Parameters};
-use super::traits::{GraphAlgorithm, MinScored};
+use super::traits::{GraphAlgorithm, MinScored, impl_algorithm};
 
 // ============================================================================
 // Edge Weight Extraction
@@ -793,20 +793,12 @@ fn bellman_ford_params() -> &'static [ParameterDef] {
 /// Bellman-Ford algorithm wrapper for the plugin registry.
 pub struct BellmanFordAlgorithm;
 
-impl GraphAlgorithm for BellmanFordAlgorithm {
-    fn name(&self) -> &str {
-        "bellman_ford"
-    }
-
-    fn description(&self) -> &str {
-        "Bellman-Ford shortest path algorithm (handles negative weights)"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        bellman_ford_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    BellmanFordAlgorithm,
+    name: "bellman_ford",
+    description: "Bellman-Ford shortest path algorithm (handles negative weights)",
+    params: bellman_ford_params,
+    execute(store, params) {
         let source_id = params
             .get_int("source")
             .ok_or_else(|| Error::InvalidValue("source parameter required".to_string()))?;
@@ -852,20 +844,12 @@ fn floyd_warshall_params() -> &'static [ParameterDef] {
 /// Floyd-Warshall algorithm wrapper for the plugin registry.
 pub struct FloydWarshallAlgorithm;
 
-impl GraphAlgorithm for FloydWarshallAlgorithm {
-    fn name(&self) -> &str {
-        "floyd_warshall"
-    }
-
-    fn description(&self) -> &str {
-        "Floyd-Warshall all-pairs shortest paths algorithm"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        floyd_warshall_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    FloydWarshallAlgorithm,
+    name: "floyd_warshall",
+    description: "Floyd-Warshall all-pairs shortest paths algorithm",
+    params: floyd_warshall_params,
+    execute(store, params) {
         let weight_prop = params.get_string("weight");
 
         let fw_result = floyd_warshall(store, weight_prop);

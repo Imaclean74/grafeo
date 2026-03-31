@@ -5,33 +5,8 @@
 #[allow(clippy::wildcard_imports)]
 use super::ast::*;
 use super::lexer::{Lexer, Token, TokenKind};
+use crate::query::keywords::unescape_string;
 use grafeo_common::utils::error::{QueryError, QueryErrorKind, Result};
-
-/// Unescapes backslash-escaped characters in a string literal.
-fn unescape_string(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.next() {
-                Some('n') => result.push('\n'),
-                Some('r') => result.push('\r'),
-                Some('t') => result.push('\t'),
-                Some('\\') => result.push('\\'),
-                Some('\'') => result.push('\''),
-                Some('"') => result.push('"'),
-                Some(other) => {
-                    result.push('\\');
-                    result.push(other);
-                }
-                None => result.push('\\'),
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
 
 /// Cypher query parser.
 pub struct Parser<'a> {

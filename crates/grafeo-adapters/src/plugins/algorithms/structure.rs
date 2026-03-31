@@ -13,7 +13,7 @@ use grafeo_core::graph::GraphStore;
 use grafeo_core::graph::lpg::LpgStore;
 
 use super::super::{AlgorithmResult, ParameterDef, ParameterType, Parameters};
-use super::traits::GraphAlgorithm;
+use super::traits::{GraphAlgorithm, impl_algorithm};
 
 // ============================================================================
 // Articulation Points (Cut Vertices)
@@ -396,20 +396,12 @@ fn articulation_params() -> &'static [ParameterDef] {
 /// Articulation Points algorithm wrapper.
 pub struct ArticulationPointsAlgorithm;
 
-impl GraphAlgorithm for ArticulationPointsAlgorithm {
-    fn name(&self) -> &str {
-        "articulation_points"
-    }
-
-    fn description(&self) -> &str {
-        "Find articulation points (cut vertices) in the graph"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        articulation_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, _params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    ArticulationPointsAlgorithm,
+    name: "articulation_points",
+    description: "Find articulation points (cut vertices) in the graph",
+    params: articulation_params,
+    execute(store, _params) {
         let points = articulation_points(store);
 
         let mut result = AlgorithmResult::new(vec!["node_id".to_string()]);
@@ -432,20 +424,12 @@ fn bridges_params() -> &'static [ParameterDef] {
 /// Bridges algorithm wrapper.
 pub struct BridgesAlgorithm;
 
-impl GraphAlgorithm for BridgesAlgorithm {
-    fn name(&self) -> &str {
-        "bridges"
-    }
-
-    fn description(&self) -> &str {
-        "Find bridges (cut edges) in the graph"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        bridges_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, _params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    BridgesAlgorithm,
+    name: "bridges",
+    description: "Find bridges (cut edges) in the graph",
+    params: bridges_params,
+    execute(store, _params) {
         let bridge_list = bridges(store);
 
         let mut result = AlgorithmResult::new(vec!["source".to_string(), "target".to_string()]);

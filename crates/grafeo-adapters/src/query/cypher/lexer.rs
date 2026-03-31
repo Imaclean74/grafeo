@@ -504,54 +504,15 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Maps a common keyword to the Cypher token kind.
-    fn map_common_keyword(kw: crate::query::keywords::CommonKeyword) -> TokenKind {
-        use crate::query::keywords::CommonKeyword;
-        match kw {
-            CommonKeyword::Match => TokenKind::Match,
-            CommonKeyword::Return => TokenKind::Return,
-            CommonKeyword::Where => TokenKind::Where,
-            CommonKeyword::As => TokenKind::As,
-            CommonKeyword::Distinct => TokenKind::Distinct,
-            CommonKeyword::With => TokenKind::With,
-            CommonKeyword::Optional => TokenKind::Optional,
-            CommonKeyword::Order => TokenKind::Order,
-            CommonKeyword::By => TokenKind::By,
-            CommonKeyword::Asc => TokenKind::Asc,
-            CommonKeyword::Desc => TokenKind::Desc,
-            CommonKeyword::Limit => TokenKind::Limit,
-            CommonKeyword::Skip => TokenKind::Skip,
-            CommonKeyword::And => TokenKind::And,
-            CommonKeyword::Or => TokenKind::Or,
-            CommonKeyword::Not => TokenKind::Not,
-            CommonKeyword::In => TokenKind::In,
-            CommonKeyword::Is => TokenKind::Is,
-            CommonKeyword::Null => TokenKind::Null,
-            CommonKeyword::True => TokenKind::True,
-            CommonKeyword::False => TokenKind::False,
-            CommonKeyword::Create => TokenKind::Create,
-            CommonKeyword::Delete => TokenKind::Delete,
-            CommonKeyword::Set => TokenKind::Set,
-            CommonKeyword::Remove => TokenKind::Remove,
-            CommonKeyword::Merge => TokenKind::Merge,
-            CommonKeyword::Detach => TokenKind::Detach,
-            CommonKeyword::On => TokenKind::On,
-            CommonKeyword::Call => TokenKind::Call,
-            CommonKeyword::Yield => TokenKind::Yield,
-            CommonKeyword::Exists => TokenKind::Exists,
-            CommonKeyword::Unwind => TokenKind::Unwind,
-            CommonKeyword::Starts => TokenKind::Starts,
-            CommonKeyword::Ends => TokenKind::Ends,
-            CommonKeyword::Contains => TokenKind::Contains,
-            CommonKeyword::Case => TokenKind::Case,
-            CommonKeyword::When => TokenKind::When,
-            CommonKeyword::Then => TokenKind::Then,
-            CommonKeyword::Else => TokenKind::Else,
-            CommonKeyword::End => TokenKind::End,
-            // Keywords in CommonKeyword but not used in Cypher
-            // map to Identifier (they can appear as variable names)
-            _ => TokenKind::Identifier,
-        }
+    crate::map_common_keywords! {
+        Match, Return, Where, As, Distinct, With, Optional,
+        Order, By, Asc, Desc, Limit, Skip,
+        And, Or, Not, In, Is,
+        Null, True, False,
+        Create, Delete, Set, Remove, Merge, Detach, On,
+        Call, Yield, Exists, Unwind,
+        Starts, Ends, Contains,
+        Case, When, Then, Else, End,
     }
 
     fn is_at_end(&self) -> bool {

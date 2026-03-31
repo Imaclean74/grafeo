@@ -2,7 +2,7 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.31] - Unreleased
+## [0.5.31] - 2026-03-31
 
 CompactStore: a read-optimized columnar graph store for memory-constrained environments. Thanks to [@temporaryfix](https://github.com/temporaryfix) for the design, prototype and implementation ([#199](https://github.com/GrafeoDB/grafeo/issues/199), [#204](https://github.com/GrafeoDB/grafeo/pull/204)).
 
@@ -44,6 +44,14 @@ CompactStore: a read-optimized columnar graph store for memory-constrained envir
 - **SPARQL anonymous blank node `[]` as subject**: `[ <pred> ?obj ; <pred2> ?obj2 ]` now parsed and expanded to triple patterns with a fresh blank node variable
 - **RDF GraphQL per-test language dispatch**: `language: graphql-rdf` in gtest routes through the RDF translator for mutation rejection testing
 - **RDF GraphQL pagination**: `first`/`limit`/`skip`/`offset` arguments now supported in the RDF GraphQL translator
+
+### Internal
+
+- **`eval_function` split**: 1,687-line monolith in `filter.rs` refactored into a thin dispatcher and 9 focused category methods (graph element, type, collection, string, numeric, temporal, path, vector, session)
+- **`impl_algorithm!` macro**: declarative macro for `GraphAlgorithm` trait boilerplate, applied to 16 of 22 algorithm implementations
+- **`map_common_keywords!` macro**: shared macro for lexer keyword mapping, replacing 3 near-identical 30-44 arm match blocks
+- **`unescape_string` dedup**: 3 identical parser copies extracted to shared `keywords` module
+- **`extract_and_map` generic**: binding entity extraction deduped via generic function in `grafeo-bindings-common`
 
 ## [0.5.30] - 2026-03-30
 

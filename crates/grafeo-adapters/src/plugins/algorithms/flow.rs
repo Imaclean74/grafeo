@@ -7,15 +7,15 @@ use std::collections::VecDeque;
 use std::sync::OnceLock;
 
 use grafeo_common::types::{EdgeId, NodeId, Value};
-use grafeo_common::utils::error::{Error, Result};
+use grafeo_common::utils::error::Error;
 use grafeo_common::utils::hash::FxHashMap;
 use grafeo_core::graph::Direction;
 use grafeo_core::graph::GraphStore;
 #[cfg(test)]
 use grafeo_core::graph::lpg::LpgStore;
 
-use super::super::{AlgorithmResult, ParameterDef, ParameterType, Parameters};
-use super::traits::GraphAlgorithm;
+use super::super::{AlgorithmResult, ParameterDef, ParameterType};
+use super::traits::impl_algorithm;
 
 // ============================================================================
 // Property Extraction
@@ -435,20 +435,12 @@ fn max_flow_params() -> &'static [ParameterDef] {
 /// Max Flow algorithm wrapper.
 pub struct MaxFlowAlgorithm;
 
-impl GraphAlgorithm for MaxFlowAlgorithm {
-    fn name(&self) -> &str {
-        "max_flow"
-    }
-
-    fn description(&self) -> &str {
-        "Maximum flow using Edmonds-Karp algorithm"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        max_flow_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    MaxFlowAlgorithm,
+    name: "max_flow",
+    description: "Maximum flow using Edmonds-Karp algorithm",
+    params: max_flow_params,
+    execute(store, params) {
         let source_id = params
             .get_int("source")
             .ok_or_else(|| Error::InvalidValue("source parameter required".to_string()))?;
@@ -534,20 +526,12 @@ fn min_cost_flow_params() -> &'static [ParameterDef] {
 /// Min Cost Max Flow algorithm wrapper.
 pub struct MinCostFlowAlgorithm;
 
-impl GraphAlgorithm for MinCostFlowAlgorithm {
-    fn name(&self) -> &str {
-        "min_cost_max_flow"
-    }
-
-    fn description(&self) -> &str {
-        "Minimum cost maximum flow using successive shortest paths"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        min_cost_flow_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    MinCostFlowAlgorithm,
+    name: "min_cost_max_flow",
+    description: "Minimum cost maximum flow using successive shortest paths",
+    params: min_cost_flow_params,
+    execute(store, params) {
         let source_id = params
             .get_int("source")
             .ok_or_else(|| Error::InvalidValue("source parameter required".to_string()))?;

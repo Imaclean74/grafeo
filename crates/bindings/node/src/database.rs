@@ -1077,16 +1077,11 @@ pub(crate) fn extract_entities(
     result: &EngineQueryResult,
     _db: &GrafeoDB,
 ) -> (Vec<JsNode>, Vec<JsEdge>) {
-    let (raw_nodes, raw_edges) = grafeo_bindings_common::entity::extract_entities(result);
-    let nodes = raw_nodes
-        .into_iter()
-        .map(|n| JsNode::new(n.id, n.labels, n.properties))
-        .collect();
-    let edges = raw_edges
-        .into_iter()
-        .map(|e| JsEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties))
-        .collect();
-    (nodes, edges)
+    grafeo_bindings_common::entity::extract_and_map(
+        result,
+        |n| JsNode::new(n.id, n.labels, n.properties),
+        |e| JsEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties),
+    )
 }
 
 /// Convert a Grafeo Value to serde_json::Value.

@@ -522,44 +522,14 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// Maps a common keyword to the SQL/PGQ token kind.
-    fn map_common_keyword(kw: crate::query::keywords::CommonKeyword) -> TokenKind {
-        use crate::query::keywords::CommonKeyword;
-        match kw {
-            CommonKeyword::Match => TokenKind::Match,
-            CommonKeyword::Where => TokenKind::Where,
-            CommonKeyword::As => TokenKind::As,
-            CommonKeyword::Distinct => TokenKind::Distinct,
-            CommonKeyword::Order => TokenKind::Order,
-            CommonKeyword::By => TokenKind::By,
-            CommonKeyword::Asc => TokenKind::Asc,
-            CommonKeyword::Desc => TokenKind::Desc,
-            CommonKeyword::Limit => TokenKind::Limit,
-            CommonKeyword::And => TokenKind::And,
-            CommonKeyword::Or => TokenKind::Or,
-            CommonKeyword::Not => TokenKind::Not,
-            CommonKeyword::In => TokenKind::In,
-            CommonKeyword::Is => TokenKind::Is,
-            CommonKeyword::Like => TokenKind::Like,
-            CommonKeyword::Null => TokenKind::Null,
-            CommonKeyword::True => TokenKind::True,
-            CommonKeyword::False => TokenKind::False,
-            CommonKeyword::Create => TokenKind::Create,
-            CommonKeyword::Node => TokenKind::Node,
-            CommonKeyword::Edge => TokenKind::Edge,
-            CommonKeyword::Call => TokenKind::Call,
-            CommonKeyword::Yield => TokenKind::Yield,
-            CommonKeyword::Optional => TokenKind::Optional,
-            CommonKeyword::Having => TokenKind::Having,
-            CommonKeyword::Case => TokenKind::Case,
-            CommonKeyword::When => TokenKind::When,
-            CommonKeyword::Then => TokenKind::Then,
-            CommonKeyword::Else => TokenKind::Else,
-            CommonKeyword::End => TokenKind::End,
-            // Keywords recognized by CommonKeyword but not used in SQL/PGQ
-            // are mapped to Identifier (they can appear as table/column names)
-            _ => TokenKind::Identifier,
-        }
+    crate::map_common_keywords! {
+        Match, Where, As, Distinct,
+        Order, By, Asc, Desc, Limit,
+        And, Or, Not, In, Is, Like,
+        Null, True, False,
+        Create, Node, Edge,
+        Call, Yield, Optional, Having,
+        Case, When, Then, Else, End,
     }
 
     fn is_at_end(&self) -> bool {

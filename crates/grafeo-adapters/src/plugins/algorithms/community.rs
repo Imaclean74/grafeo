@@ -6,15 +6,14 @@
 use std::sync::OnceLock;
 
 use grafeo_common::types::{NodeId, Value};
-use grafeo_common::utils::error::Result;
 use grafeo_common::utils::hash::{FxHashMap, FxHashSet};
 use grafeo_core::graph::Direction;
 use grafeo_core::graph::GraphStore;
 #[cfg(test)]
 use grafeo_core::graph::lpg::LpgStore;
 
-use super::super::{AlgorithmResult, ParameterDef, ParameterType, Parameters};
-use super::traits::{ComponentResultBuilder, GraphAlgorithm};
+use super::super::{AlgorithmResult, ParameterDef, ParameterType};
+use super::traits::{ComponentResultBuilder, impl_algorithm};
 
 // ============================================================================
 // Label Propagation
@@ -372,20 +371,12 @@ fn label_prop_params() -> &'static [ParameterDef] {
 /// Label Propagation algorithm wrapper.
 pub struct LabelPropagationAlgorithm;
 
-impl GraphAlgorithm for LabelPropagationAlgorithm {
-    fn name(&self) -> &str {
-        "label_propagation"
-    }
-
-    fn description(&self) -> &str {
-        "Label Propagation community detection"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        label_prop_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    LabelPropagationAlgorithm,
+    name: "label_propagation",
+    description: "Label Propagation community detection",
+    params: label_prop_params,
+    execute(store, params) {
         let max_iter = params.get_int("max_iterations").unwrap_or(100) as usize;
 
         let communities = label_propagation(store, max_iter);
@@ -417,20 +408,12 @@ fn louvain_params() -> &'static [ParameterDef] {
 /// Louvain algorithm wrapper.
 pub struct LouvainAlgorithm;
 
-impl GraphAlgorithm for LouvainAlgorithm {
-    fn name(&self) -> &str {
-        "louvain"
-    }
-
-    fn description(&self) -> &str {
-        "Louvain community detection (modularity optimization)"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        louvain_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    LouvainAlgorithm,
+    name: "louvain",
+    description: "Louvain community detection (modularity optimization)",
+    params: louvain_params,
+    execute(store, params) {
         let resolution = params.get_float("resolution").unwrap_or(1.0);
 
         let result = louvain(store, resolution);
