@@ -125,9 +125,10 @@ pub(crate) fn build_inner_join(
     right: Box<dyn Operator>,
     left_columns: &[String],
     right_columns: &[String],
-    schema_fn: impl Fn(&[String]) -> Vec<LogicalType>,
+    left_types: &[LogicalType],
+    right_types: &[LogicalType],
     cardinalities: Option<(f64, f64)>,
-) -> (Box<dyn Operator>, Vec<String>) {
+) -> (Box<dyn Operator>, Vec<String>, Vec<LogicalType>) {
     let (probe_keys, build_keys) = find_shared_join_keys(left_columns, right_columns);
 
     let join_type = if probe_keys.is_empty() {
@@ -146,7 +147,8 @@ pub(crate) fn build_inner_join(
         // Output order is right+left from the join, then we project back to left+right
         let mut join_columns: Vec<String> = right_columns.to_vec();
         join_columns.extend(left_columns.iter().cloned());
-        let join_schema = schema_fn(&join_columns);
+        let mut join_schema: Vec<LogicalType> = right_types.to_vec();
+        join_schema.extend(left_types.iter().cloned());
 
         let join_op: Box<dyn Operator> = Box::new(HashJoinOperator::new(
             right,      // probe (larger)
@@ -154,7 +156,7 @@ pub(crate) fn build_inner_join(
             build_keys, // swapped: right keys become probe keys
             probe_keys, // swapped: left keys become build keys
             join_type,
-            join_schema,
+            join_schema.clone(),
         ));
 
         // Remap to logical left+right order and deduplicate shared columns
@@ -178,14 +180,19 @@ pub(crate) fn build_inner_join(
             .iter()
             .map(|&i| ProjectExpr::Column(i))
             .collect();
-        let proj_types: Vec<LogicalType> = proj_indices.iter().map(|_| LogicalType::Any).collect();
+        let proj_types: Vec<LogicalType> = proj_indices
+            .iter()
+            .map(|&i| join_schema[i].clone())
+            .collect();
+        let output_types = proj_types.clone();
         let operator = Box::new(ProjectOperator::new(join_op, proj_exprs, proj_types));
-        (operator, output_columns)
+        (operator, output_columns, output_types)
     } else {
         // Normal order: left = probe, right = build
         let mut join_columns: Vec<String> = left_columns.to_vec();
         join_columns.extend(right_columns.iter().cloned());
-        let join_schema = schema_fn(&join_columns);
+        let mut join_schema: Vec<LogicalType> = left_types.to_vec();
+        join_schema.extend(right_types.iter().cloned());
 
         let join_op: Box<dyn Operator> = Box::new(HashJoinOperator::new(
             left,
@@ -193,7 +200,7 @@ pub(crate) fn build_inner_join(
             probe_keys,
             build_keys,
             join_type,
-            join_schema,
+            join_schema.clone(),
         ));
 
         // Deduplicate: keep left columns, then only right columns not already on the left
@@ -214,12 +221,15 @@ pub(crate) fn build_inner_join(
                 .iter()
                 .map(|&i| ProjectExpr::Column(i))
                 .collect();
-            let proj_types: Vec<LogicalType> =
-                keep_indices.iter().map(|_| LogicalType::Any).collect();
+            let proj_types: Vec<LogicalType> = keep_indices
+                .iter()
+                .map(|&i| join_schema[i].clone())
+                .collect();
+            let output_types = proj_types.clone();
             let operator = Box::new(ProjectOperator::new(join_op, proj_exprs, proj_types));
-            (operator, output_columns)
+            (operator, output_columns, output_types)
         } else {
-            (join_op, output_columns)
+            (join_op, output_columns, join_schema)
         }
     }
 }
@@ -292,14 +302,16 @@ pub(crate) fn build_left_join(
     right: Box<dyn Operator>,
     left_columns: &[String],
     right_columns: &[String],
-    schema_fn: impl Fn(&[String]) -> Vec<LogicalType>,
-) -> (Box<dyn Operator>, Vec<String>) {
+    left_types: &[LogicalType],
+    right_types: &[LogicalType],
+) -> (Box<dyn Operator>, Vec<String>, Vec<LogicalType>) {
     let (probe_keys, build_keys) = find_shared_join_keys(left_columns, right_columns);
 
     // Full join outputs all left + all right columns
     let mut join_columns: Vec<String> = left_columns.to_vec();
     join_columns.extend(right_columns.iter().cloned());
-    let join_schema = schema_fn(&join_columns);
+    let mut join_schema: Vec<LogicalType> = left_types.to_vec();
+    join_schema.extend(right_types.iter().cloned());
 
     let join_op: Box<dyn Operator> = Box::new(HashJoinOperator::new(
         left,
@@ -307,7 +319,7 @@ pub(crate) fn build_left_join(
         probe_keys,
         build_keys,
         PhysicalJoinType::Left,
-        join_schema,
+        join_schema.clone(),
     ));
 
     // Deduplicate: keep left columns, then only right columns not already on the left
@@ -328,11 +340,15 @@ pub(crate) fn build_left_join(
             .iter()
             .map(|&i| ProjectExpr::Column(i))
             .collect();
-        let proj_types: Vec<LogicalType> = keep_indices.iter().map(|_| LogicalType::Any).collect();
+        let proj_types: Vec<LogicalType> = keep_indices
+            .iter()
+            .map(|&i| join_schema[i].clone())
+            .collect();
+        let output_types = proj_types.clone();
         let operator = Box::new(ProjectOperator::new(join_op, proj_exprs, proj_types));
-        (operator, output_columns)
+        (operator, output_columns, output_types)
     } else {
-        (join_op, output_columns)
+        (join_op, output_columns, join_schema)
     }
 }
 

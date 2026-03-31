@@ -1106,18 +1106,10 @@ impl GqlTranslator {
             ))
         })?;
 
-        // ANY or ANY SHORTEST: wrap in LIMIT 1 to return a single matching path
-        let has_any_shortest_per_pattern = match_clause
-            .patterns
-            .iter()
-            .any(|ap| matches!(&ap.search_prefix, Some(ast::PathSearchPrefix::AnyShortest)));
-        if use_any_limit
-            || matches!(
-                &match_clause.search_prefix,
-                Some(ast::PathSearchPrefix::AnyShortest)
-            )
-            || has_any_shortest_per_pattern
-        {
+        // ANY (without SHORTEST): wrap in LIMIT 1 to return a single matching path.
+        // ANY SHORTEST uses ShortestPathOperator which inherently returns one
+        // path per source/target pair, so no LIMIT 1 wrapper is needed.
+        if use_any_limit {
             result = wrap_limit(result, 1);
         }
 

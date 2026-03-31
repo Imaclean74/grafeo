@@ -45,8 +45,14 @@ CompactStore: a read-optimized columnar graph store for memory-constrained envir
 - **RDF GraphQL per-test language dispatch**: `language: graphql-rdf` in gtest routes through the RDF translator for mutation rejection testing
 - **RDF GraphQL pagination**: `first`/`limit`/`skip`/`offset` arguments now supported in the RDF GraphQL translator
 
+### Performance
+
+- **RDF schema type propagation**: `plan_operator` now threads concrete `LogicalType`s (mostly `String`) through the entire plan tree instead of using `LogicalType::Any` everywhere, keeping triple scan data in `Vec<ArcStr>` (8 bytes/entry) through joins, sorts, and projections instead of re-boxing into `Vec<Value>` (40 bytes/entry)
+
 ### Internal
 
+- **`ValueVector` push safety net**: `push_bool`, `push_int64`, `push_float64`, `push_string` now fall back to `VectorData::Generic` on type mismatch instead of silently dropping data
+- **`derive_rdf_schema` removed**: replaced by concrete type propagation through `plan_operator` return values
 - **`eval_function` split**: 1,687-line monolith in `filter.rs` refactored into a thin dispatcher and 9 focused category methods (graph element, type, collection, string, numeric, temporal, path, vector, session)
 - **`impl_algorithm!` macro**: declarative macro for `GraphAlgorithm` trait boilerplate, applied to 16 of 22 algorithm implementations
 - **`map_common_keywords!` macro**: shared macro for lexer keyword mapping, replacing 3 near-identical 30-44 arm match blocks

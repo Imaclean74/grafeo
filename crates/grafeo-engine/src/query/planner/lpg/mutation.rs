@@ -253,13 +253,15 @@ impl super::Planner {
                 self.plan_operator(&left_join.left)?
             };
         let (right_op, right_columns) = self.plan_operator(&left_join.right)?;
-        let schema_fn = |cols: &[String]| self.derive_schema_from_columns(cols);
-        let (join_op, join_columns) = super::common::build_left_join(
+        let left_types = self.derive_schema_from_columns(&left_columns);
+        let right_types = self.derive_schema_from_columns(&right_columns);
+        let (join_op, join_columns, _join_types) = super::common::build_left_join(
             left_op,
             right_op,
             &left_columns,
             &right_columns,
-            schema_fn,
+            &left_types,
+            &right_types,
         );
 
         // If the LeftJoin carries a cross-side condition (null-safe predicate),

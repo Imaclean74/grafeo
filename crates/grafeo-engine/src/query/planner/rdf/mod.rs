@@ -135,6 +135,9 @@ pub struct RdfPlanner {
     /// Epoch to stamp CDC events with (snapshot at plan time).
     #[cfg(feature = "cdc")]
     cdc_epoch: grafeo_common::types::EpochId,
+    /// Whether the query uses LANG()/LANGMATCHES()/DATATYPE() functions.
+    /// When false, companion columns are not emitted, saving ~66% scan overhead.
+    needs_companion_columns: std::cell::Cell<bool>,
 }
 
 impl RdfPlanner {
@@ -147,6 +150,7 @@ impl RdfPlanner {
             transaction_id: None,
             profiling: std::cell::Cell::new(false),
             profile_entries: std::cell::RefCell::new(Vec::new()),
+            needs_companion_columns: std::cell::Cell::new(false),
             #[cfg(feature = "wal")]
             wal: None,
             #[cfg(feature = "cdc")]
@@ -197,10 +201,14 @@ impl RdfPlanner {
     ///
     /// Returns an error if planning fails.
     pub fn plan(&self, logical_plan: &LogicalPlan) -> Result<PhysicalPlan> {
-        let (operator, columns) = self.plan_operator(&logical_plan.root)?;
-        // Strip internal companion columns (__lang_<var>) from the output.
-        // They are used by LANG()/LANGMATCHES() during evaluation but should
-        // never appear in query results.
+        // Pre-analyze: only emit companion columns if the query uses LANG/DATATYPE
+        self.needs_companion_columns
+            .set(uses_lang_or_datatype(&logical_plan.root));
+
+        let (operator, columns, _types) = self.plan_operator(&logical_plan.root)?;
+        // Strip internal companion columns (__lang_<var>, __datatype_<var>)
+        // from the output. They are used by LANG()/LANGMATCHES()/DATATYPE()
+        // during evaluation but should never appear in query results.
         let (operator, columns) = strip_internal_columns(operator, columns);
         Ok(PhysicalPlan {
             operator,
@@ -222,7 +230,7 @@ impl RdfPlanner {
         let result = self.plan_operator(&logical_plan.root);
 
         self.profiling.set(false);
-        let (operator, columns) = result?;
+        let (operator, columns, _types) = result?;
         let (operator, columns) = strip_internal_columns(operator, columns);
         let entries = self.profile_entries.borrow_mut().drain(..).collect();
 
@@ -240,23 +248,26 @@ impl RdfPlanner {
     /// and records a [`ProfileEntry`](crate::query::profile::ProfileEntry).
     fn maybe_profile(
         &self,
-        result: Result<(Box<dyn Operator>, Vec<String>)>,
+        result: Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)>,
         op: &LogicalOperator,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         if self.profiling.get() {
-            let (physical, columns) = result?;
+            let (physical, columns, types) = result?;
             let (entry, stats) =
                 crate::query::profile::ProfileEntry::new(physical.name(), op.display_label());
             let profiled = grafeo_core::execution::ProfiledOperator::new(physical, stats);
             self.profile_entries.borrow_mut().push(entry);
-            Ok((Box::new(profiled), columns))
+            Ok((Box::new(profiled), columns, types))
         } else {
             result
         }
     }
 
     /// Plans a single logical operator.
-    fn plan_operator(&self, op: &LogicalOperator) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_operator(
+        &self,
+        op: &LogicalOperator,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         let result = match op {
             LogicalOperator::TripleScan(scan) => self.plan_triple_scan(scan),
             LogicalOperator::Filter(filter) => self.plan_filter(filter),
@@ -284,7 +295,7 @@ impl RdfPlanner {
             LogicalOperator::MultiWayJoin(mwj) => self.plan_multi_way_join(mwj),
             LogicalOperator::Empty => {
                 let op: Box<dyn Operator> = Box::new(SingleRowOperator::new());
-                Ok((op, vec![]))
+                Ok((op, vec![], vec![]))
             }
             _ => Err(Error::Internal(format!(
                 "Unsupported RDF operator: {:?}",
@@ -298,7 +309,10 @@ impl RdfPlanner {
     ///
     /// Creates a lazy scanning operator that reads triples in chunks
     /// for cache-efficient, vectorized processing.
-    fn plan_triple_scan(&self, scan: &TripleScanOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_triple_scan(
+        &self,
+        scan: &TripleScanOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         // Build the triple pattern for querying the store
         let pattern = self.build_triple_pattern(scan);
 
@@ -327,9 +341,12 @@ impl RdfPlanner {
         // This must be added BEFORE the graph column to match the DataChunk
         // layout (the lang column is emitted right after the object column).
         let emit_companion_columns = object_var_name.is_some();
+        let emit_datatype_column = emit_companion_columns && self.needs_companion_columns.get();
         if let Some(ref obj_name) = object_var_name {
             columns.push(format!("__lang_{obj_name}"));
-            columns.push(format!("__datatype_{obj_name}"));
+            if emit_datatype_column {
+                columns.push(format!("__datatype_{obj_name}"));
+            }
         }
 
         if let Some(TripleComponent::Variable(name)) = &scan.graph {
@@ -357,9 +374,11 @@ impl RdfPlanner {
                 dataset: scan.dataset.clone(),
             },
             emit_companion_columns,
+            emit_datatype_column,
         ));
 
-        Ok((operator, columns))
+        let types = vec![LogicalType::String; columns.len()];
+        Ok((operator, columns, types))
     }
 
     /// Builds a TriplePattern from a TripleScanOp.
@@ -375,8 +394,8 @@ impl RdfPlanner {
     fn plan_return(
         &self,
         ret: &crate::query::plan::ReturnOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
-        let (input_op, _input_columns) = self.plan_operator(&ret.input)?;
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
+        let (input_op, _input_columns, input_types) = self.plan_operator(&ret.input)?;
 
         // Extract output column names
         let columns: Vec<String> = ret
@@ -389,19 +408,22 @@ impl RdfPlanner {
             })
             .collect();
 
-        Ok((input_op, columns))
+        Ok((input_op, columns, input_types))
     }
 
     /// Plans a filter operator.
     ///
     /// Handles EXISTS/NOT EXISTS patterns by transforming them into semi-joins/anti-joins.
-    fn plan_filter(&self, filter: &FilterOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_filter(
+        &self,
+        filter: &FilterOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         // Check for EXISTS/NOT EXISTS patterns and transform to semi/anti joins
         if let Some((subquery, is_negated)) = self.extract_exists_pattern(&filter.predicate) {
             return self.plan_exists_as_join(&filter.input, subquery, is_negated);
         }
 
-        let (input_op, columns) = self.plan_operator(&filter.input)?;
+        let (input_op, columns, types) = self.plan_operator(&filter.input)?;
 
         // Build variable to column index mapping
         let variable_columns: HashMap<String, usize> = columns
@@ -417,7 +439,7 @@ impl RdfPlanner {
         let predicate = RdfExpressionPredicate::new(filter_expr, variable_columns);
 
         let operator = Box::new(FilterOperator::new(input_op, Box::new(predicate)));
-        Ok((operator, columns))
+        Ok((operator, columns, types))
     }
 
     /// Extracts an EXISTS or NOT EXISTS pattern from a filter predicate.
@@ -452,71 +474,83 @@ impl RdfPlanner {
         input: &LogicalOperator,
         subquery: &LogicalOperator,
         is_negated: bool,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
 
-        let (left_op, left_columns) = self.plan_operator(input)?;
-        let (right_op, right_columns) = self.plan_operator(subquery)?;
-
-        let schema = derive_rdf_schema(&left_columns);
+        let (left_op, left_columns, left_types) = self.plan_operator(input)?;
+        let (right_op, right_columns, _right_types) = self.plan_operator(subquery)?;
 
         // Use Anti for NOT EXISTS, Semi for EXISTS
-        let result = if is_negated {
-            common::build_anti_join(left_op, right_op, left_columns, &right_columns, schema)
+        let (result_op, result_columns) = if is_negated {
+            common::build_anti_join(
+                left_op,
+                right_op,
+                left_columns,
+                &right_columns,
+                left_types.clone(),
+            )
         } else {
-            common::build_semi_join(left_op, right_op, left_columns, &right_columns, schema)
+            common::build_semi_join(
+                left_op,
+                right_op,
+                left_columns,
+                &right_columns,
+                left_types.clone(),
+            )
         };
 
-        Ok(result)
+        Ok((result_op, result_columns, left_types))
     }
 
     /// Plans a DISTINCT operator.
-    fn plan_distinct(&self, distinct: &DistinctOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_distinct(
+        &self,
+        distinct: &DistinctOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
-        let (input_op, columns) = self.plan_operator(&distinct.input)?;
-        let schema = derive_rdf_schema(&columns);
-        Ok(common::build_distinct(
+        let (input_op, columns, types) = self.plan_operator(&distinct.input)?;
+        let (op, cols) = common::build_distinct(
             input_op,
             columns,
             distinct.columns.as_deref(),
-            schema,
-        ))
+            types.clone(),
+        );
+        Ok((op, cols, types))
     }
 
     /// Plans a LIMIT operator.
-    fn plan_limit(&self, limit: &LimitOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_limit(
+        &self,
+        limit: &LimitOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
-        let (input_op, columns) = self.plan_operator(&limit.input)?;
-        let schema = derive_rdf_schema(&columns);
-        Ok(common::build_limit(
-            input_op,
-            columns,
-            limit.count.value(),
-            schema,
-        ))
+        let (input_op, columns, types) = self.plan_operator(&limit.input)?;
+        let (op, cols) = common::build_limit(input_op, columns, limit.count.value(), types.clone());
+        Ok((op, cols, types))
     }
 
     /// Plans a SKIP operator.
-    fn plan_skip(&self, skip: &SkipOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_skip(
+        &self,
+        skip: &SkipOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
-        let (input_op, columns) = self.plan_operator(&skip.input)?;
-        let schema = derive_rdf_schema(&columns);
-        Ok(common::build_skip(
-            input_op,
-            columns,
-            skip.count.value(),
-            schema,
-        ))
+        let (input_op, columns, types) = self.plan_operator(&skip.input)?;
+        let (op, cols) = common::build_skip(input_op, columns, skip.count.value(), types.clone());
+        Ok((op, cols, types))
     }
 
     /// Plans a SORT operator.
-    fn plan_sort(&self, sort: &SortOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_sort(
+        &self,
+        sort: &SortOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::plan::SortOrder;
         use grafeo_core::execution::operators::{
             FilterExpression, NullOrder, ProjectExpr, ProjectOperator, SortDirection, SortKey,
         };
 
-        let (mut input_op, columns) = self.plan_operator(&sort.input)?;
+        let (mut input_op, columns, types) = self.plan_operator(&sort.input)?;
 
         let mut variable_columns: HashMap<String, usize> = columns
             .iter()
@@ -545,15 +579,14 @@ impl RdfPlanner {
         if !expression_projections.is_empty() {
             let mut projections: Vec<ProjectExpr> =
                 (0..columns.len()).map(ProjectExpr::Column).collect();
-            let mut output_types: Vec<LogicalType> =
-                columns.iter().map(|_| LogicalType::Any).collect();
+            let mut output_types: Vec<LogicalType> = types.clone();
 
             for (filter_expr, _col_name) in &expression_projections {
                 projections.push(ProjectExpr::Expression {
                     expr: filter_expr.clone(),
                     variable_columns: variable_columns.clone(),
                 });
-                output_types.push(LogicalType::Any);
+                output_types.push(LogicalType::Any); // computed expressions may produce non-string types
             }
 
             input_op = Box::new(ProjectOperator::with_store(
@@ -580,9 +613,8 @@ impl RdfPlanner {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let output_schema = derive_rdf_schema(&columns);
-        let operator = Box::new(SortOperator::new(input_op, physical_keys, output_schema));
-        Ok((operator, columns))
+        let operator = Box::new(SortOperator::new(input_op, physical_keys, types.clone()));
+        Ok((operator, columns, types))
     }
 
     /// Plans a PROJECT operator.
@@ -591,8 +623,8 @@ impl RdfPlanner {
     fn plan_project(
         &self,
         project: &crate::query::plan::ProjectOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
-        let (input_op, input_columns) = self.plan_operator(&project.input)?;
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
+        let (input_op, input_columns, input_types) = self.plan_operator(&project.input)?;
 
         // Build mapping from variable name to column index
         let variable_columns: HashMap<String, usize> = input_columns
@@ -611,7 +643,7 @@ impl RdfPlanner {
                     if let Some(&col_idx) = variable_columns.get(name) {
                         projections.push(RdfProjectExpr::Column(col_idx));
                         output_columns.push(proj.alias.clone().unwrap_or_else(|| name.clone()));
-                        output_types.push(LogicalType::Any); // preserve actual value types
+                        output_types.push(input_types[col_idx].clone());
                     } else {
                         return Err(Error::Internal(format!(
                             "Variable '{}' not found in input columns",
@@ -640,23 +672,29 @@ impl RdfPlanner {
 
         // If no projections were extracted, just return the input as-is
         if projections.is_empty() {
-            return Ok((input_op, input_columns));
+            return Ok((input_op, input_columns, input_types));
         }
 
         // Use RdfProjectOperator which delegates expression evaluation to
         // RdfExpressionPredicate, giving access to SPARQL functions (STRLEN,
         // UCASE, LCASE, etc.) that the generic ProjectOperator does not know.
-        let operator: Box<dyn Operator> =
-            Box::new(RdfProjectOperator::new(input_op, projections, output_types));
-        Ok((operator, output_columns))
+        let operator: Box<dyn Operator> = Box::new(RdfProjectOperator::new(
+            input_op,
+            projections,
+            output_types.clone(),
+        ));
+        Ok((operator, output_columns, output_types))
     }
 
     /// Plans a BIND operator.
     ///
     /// BIND adds a computed column to each row by evaluating an expression.
     /// For example: `BIND (CONCAT(?name, " (age ", STR(?age), ")") AS ?label)`
-    fn plan_bind(&self, bind: &BindOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
-        let (input_op, input_columns) = self.plan_operator(&bind.input)?;
+    fn plan_bind(
+        &self,
+        bind: &BindOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
+        let (input_op, input_columns, mut input_types) = self.plan_operator(&bind.input)?;
 
         // Build variable-to-column mapping for expression evaluation
         let variable_columns: HashMap<String, usize> = input_columns
@@ -671,20 +709,24 @@ impl RdfPlanner {
         // Build output columns: all input columns + the new BIND variable
         let mut output_columns = input_columns;
         output_columns.push(bind.variable.clone());
+        input_types.push(LogicalType::Any);
 
         let operator = Box::new(RdfBindOperator::new(
             input_op,
             filter_expr,
             variable_columns,
         ));
-        Ok((operator, output_columns))
+        Ok((operator, output_columns, input_types))
     }
 
     /// Plans an AGGREGATE operator.
-    fn plan_aggregate(&self, agg: &AggregateOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_aggregate(
+        &self,
+        agg: &AggregateOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use grafeo_core::execution::operators::AggregateExpr as PhysicalAggregateExpr;
 
-        let (mut input_op, input_columns) = self.plan_operator(&agg.input)?;
+        let (mut input_op, input_columns, input_types) = self.plan_operator(&agg.input)?;
 
         let mut variable_columns: HashMap<String, usize> = input_columns
             .iter()
@@ -734,15 +776,14 @@ impl RdfPlanner {
         if !expression_projections.is_empty() {
             let mut projections: Vec<ProjectExpr> =
                 (0..input_columns.len()).map(ProjectExpr::Column).collect();
-            let mut output_types: Vec<LogicalType> =
-                input_columns.iter().map(|_| LogicalType::Any).collect();
+            let mut output_types: Vec<LogicalType> = input_types;
 
             for (filter_expr, _col_name) in &expression_projections {
                 projections.push(ProjectExpr::Expression {
                     expr: filter_expr.clone(),
                     variable_columns: variable_columns.clone(),
                 });
-                output_types.push(LogicalType::Any);
+                output_types.push(LogicalType::Any); // computed expressions may produce non-string types
             }
 
             input_op = Box::new(ProjectOperator::with_store(
@@ -815,18 +856,19 @@ impl RdfPlanner {
             );
         }
 
+        let agg_schema = output_schema.clone();
         let mut operator: Box<dyn Operator> = if group_columns.is_empty() {
             Box::new(SimpleAggregateOperator::new(
                 input_op,
                 physical_aggregates,
-                output_schema,
+                agg_schema,
             ))
         } else {
             Box::new(HashAggregateOperator::new(
                 input_op,
                 group_columns,
                 physical_aggregates,
-                output_schema,
+                agg_schema,
             ))
         };
 
@@ -843,7 +885,7 @@ impl RdfPlanner {
             operator = Box::new(FilterOperator::new(operator, Box::new(predicate)));
         }
 
-        Ok((operator, output_columns))
+        Ok((operator, output_columns, output_schema))
     }
 
     /// Plans a JOIN operator using HashJoin.
@@ -853,10 +895,10 @@ impl RdfPlanner {
     fn plan_join(
         &self,
         join: &crate::query::plan::JoinOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
-        let (left_op, left_columns) = self.plan_operator(&join.left)?;
-        let (right_op, right_columns) = self.plan_operator(&join.right)?;
+        let (left_op, left_columns, left_types) = self.plan_operator(&join.left)?;
+        let (right_op, right_columns, right_types) = self.plan_operator(&join.right)?;
 
         // Estimate cardinalities for build-side selection
         let cardinalities = estimate_operator_cardinality(&join.left, &self.store)
@@ -867,38 +909,46 @@ impl RdfPlanner {
             right_op,
             &left_columns,
             &right_columns,
-            derive_rdf_schema,
+            &left_types,
+            &right_types,
             cardinalities,
         ))
     }
 
     /// Plans a LEFT JOIN operator (for SPARQL OPTIONAL) using HashJoin.
-    fn plan_left_join(&self, join: &LeftJoinOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_left_join(
+        &self,
+        join: &LeftJoinOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
-        let (left_op, left_columns) = self.plan_operator(&join.left)?;
-        let (right_op, right_columns) = self.plan_operator(&join.right)?;
+        let (left_op, left_columns, left_types) = self.plan_operator(&join.left)?;
+        let (right_op, right_columns, right_types) = self.plan_operator(&join.right)?;
         Ok(common::build_left_join(
             left_op,
             right_op,
             &left_columns,
             &right_columns,
-            derive_rdf_schema,
+            &left_types,
+            &right_types,
         ))
     }
 
     /// Plans an ANTI JOIN operator (for SPARQL MINUS).
-    fn plan_anti_join(&self, join: &AntiJoinOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_anti_join(
+        &self,
+        join: &AntiJoinOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
-        let (left_op, left_columns) = self.plan_operator(&join.left)?;
-        let (right_op, right_columns) = self.plan_operator(&join.right)?;
-        let schema = derive_rdf_schema(&left_columns);
-        Ok(common::build_anti_join(
+        let (left_op, left_columns, left_types) = self.plan_operator(&join.left)?;
+        let (right_op, right_columns, _right_types) = self.plan_operator(&join.right)?;
+        let (op, cols) = common::build_anti_join(
             left_op,
             right_op,
             left_columns,
             &right_columns,
-            schema,
-        ))
+            left_types.clone(),
+        );
+        Ok((op, cols, left_types))
     }
 
     /// Plans a multi-way join as cascading pairwise hash joins.
@@ -908,7 +958,7 @@ impl RdfPlanner {
     fn plan_multi_way_join(
         &self,
         mwj: &crate::query::plan::MultiWayJoinOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         use crate::query::planner::common;
 
         if mwj.inputs.is_empty() {
@@ -918,42 +968,45 @@ impl RdfPlanner {
         }
 
         // Plan all inputs and estimate cardinalities
-        let mut planned: Vec<(Box<dyn Operator>, Vec<String>, f64)> = Vec::new();
+        let mut planned: Vec<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>, f64)> = Vec::new();
         for input in &mwj.inputs {
-            let (op, cols) = self.plan_operator(input)?;
+            let (op, cols, types) = self.plan_operator(input)?;
             let card = estimate_operator_cardinality(input, &self.store).unwrap_or(1000.0);
-            planned.push((op, cols, card));
+            planned.push((op, cols, types, card));
         }
 
         // Sort by cardinality (smallest first) so we build on smaller inputs
-        planned.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+        planned.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
 
         // Fold left-to-right with pairwise hash joins
-        let (mut current_op, mut current_cols, mut current_card) = planned.remove(0);
-        for (right_op, right_cols, right_card) in planned {
+        let (mut current_op, mut current_cols, mut current_types, mut current_card) =
+            planned.remove(0);
+        for (right_op, right_cols, right_types, right_card) in planned {
             let cardinalities = Some((current_card, right_card));
-            let (joined_op, joined_cols) = common::build_inner_join(
+            let (joined_op, joined_cols, joined_types) = common::build_inner_join(
                 current_op,
                 right_op,
                 &current_cols,
                 &right_cols,
-                derive_rdf_schema,
+                &current_types,
+                &right_types,
                 cardinalities,
             );
             // Rough estimate for cascaded join output
             current_card = (current_card * right_card * 0.1).max(1.0);
             current_op = joined_op;
             current_cols = joined_cols;
+            current_types = joined_types;
         }
 
-        Ok((current_op, current_cols))
+        Ok((current_op, current_cols, current_types))
     }
 
     /// Plans a UNION operator.
     fn plan_union(
         &self,
         union: &crate::query::plan::UnionOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         if union.inputs.is_empty() {
             return Err(Error::Internal("Empty UNION".to_string()));
         }
@@ -961,12 +1014,14 @@ impl RdfPlanner {
         // For INSERT operations, we execute all operators in sequence
         let mut operators: Vec<Box<dyn Operator>> = Vec::new();
         let mut columns = Vec::new();
+        let mut types = Vec::new();
 
         for (i, input) in union.inputs.iter().enumerate() {
-            let (op, cols) = self.plan_operator(input)?;
+            let (op, cols, tys) = self.plan_operator(input)?;
             operators.push(op);
             if i == 0 {
                 columns = cols;
+                types = tys;
             }
         }
 
@@ -977,19 +1032,20 @@ impl RdfPlanner {
                     .next()
                     .expect("single-element iterator"),
                 columns,
+                types,
             ));
         }
 
         // Create a chain operator that executes all operators in sequence
         let operator = Box::new(RdfUnionOperator::new(operators));
-        Ok((operator, columns))
+        Ok((operator, columns, types))
     }
 
     /// Plans an INSERT TRIPLE operator.
     fn plan_insert_triple(
         &self,
         insert: &InsertTripleOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         // Check if this is a pattern-based insert (has variables in the template).
         // Blank nodes are concrete values, not variables, so they don't trigger
         // the pattern-based path.
@@ -1000,7 +1056,7 @@ impl RdfPlanner {
         if has_variables {
             // Pattern-based insertion: need to query first, then insert each match
             if let Some(ref input) = insert.input {
-                let (input_op, input_columns) = self.plan_operator(input)?;
+                let (input_op, input_columns, _input_types) = self.plan_operator(input)?;
 
                 // Build column index map for variable substitution
                 let column_map: HashMap<String, usize> = input_columns
@@ -1026,7 +1082,7 @@ impl RdfPlanner {
                     self.cdc_epoch,
                 ));
 
-                return Ok((operator, Vec::new()));
+                return Ok((operator, Vec::new(), Vec::new()));
             }
         }
 
@@ -1050,7 +1106,7 @@ impl RdfPlanner {
         ));
 
         // Insert operations don't output columns
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Converts a TripleComponent to an RDF Term.
@@ -1104,7 +1160,7 @@ impl RdfPlanner {
     fn plan_delete_triple(
         &self,
         delete: &DeleteTripleOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         // Check if this is a pattern-based delete (has variables in the template)
         let has_variables = matches!(&delete.subject, TripleComponent::Variable(_))
             || matches!(&delete.predicate, TripleComponent::Variable(_))
@@ -1113,7 +1169,7 @@ impl RdfPlanner {
         if has_variables {
             // Pattern-based deletion: need to query first, then delete each match
             if let Some(ref input) = delete.input {
-                let (input_op, input_columns) = self.plan_operator(input)?;
+                let (input_op, input_columns, _input_types) = self.plan_operator(input)?;
 
                 // Build column index map for variable substitution
                 let column_map: HashMap<String, usize> = input_columns
@@ -1139,7 +1195,7 @@ impl RdfPlanner {
                     self.cdc_epoch,
                 ));
 
-                return Ok((operator, Vec::new()));
+                return Ok((operator, Vec::new(), Vec::new()));
             }
         }
 
@@ -1162,11 +1218,14 @@ impl RdfPlanner {
             self.cdc_epoch,
         ));
 
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Plans a CLEAR GRAPH operator.
-    fn plan_clear_graph(&self, clear: &ClearGraphOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_clear_graph(
+        &self,
+        clear: &ClearGraphOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         let operator = Box::new(RdfClearGraphOperator::new(
             Arc::clone(&self.store),
             clear.graph.clone(),
@@ -1174,14 +1233,14 @@ impl RdfPlanner {
             #[cfg(feature = "wal")]
             self.wal.clone(),
         ));
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Plans a CREATE GRAPH operator.
     fn plan_create_graph(
         &self,
         create: &CreateGraphOp,
-    ) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         let operator = Box::new(RdfCreateGraphOperator::new(
             Arc::clone(&self.store),
             create.graph.clone(),
@@ -1189,11 +1248,14 @@ impl RdfPlanner {
             #[cfg(feature = "wal")]
             self.wal.clone(),
         ));
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Plans a DROP GRAPH operator.
-    fn plan_drop_graph(&self, drop_op: &DropGraphOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_drop_graph(
+        &self,
+        drop_op: &DropGraphOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         let operator = Box::new(RdfDropGraphOperator::new(
             Arc::clone(&self.store),
             drop_op.graph.clone(),
@@ -1201,40 +1263,49 @@ impl RdfPlanner {
             #[cfg(feature = "wal")]
             self.wal.clone(),
         ));
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Plans a COPY graph operator.
-    fn plan_copy_graph(&self, copy: &CopyGraphOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_copy_graph(
+        &self,
+        copy: &CopyGraphOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         let operator = Box::new(RdfCopyGraphOperator::new(
             Arc::clone(&self.store),
             copy.source.clone(),
             copy.destination.clone(),
             copy.silent,
         ));
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Plans a MOVE graph operator.
-    fn plan_move_graph(&self, move_op: &MoveGraphOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_move_graph(
+        &self,
+        move_op: &MoveGraphOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         let operator = Box::new(RdfMoveGraphOperator::new(
             Arc::clone(&self.store),
             move_op.source.clone(),
             move_op.destination.clone(),
             move_op.silent,
         ));
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Plans an ADD graph operator.
-    fn plan_add_graph(&self, add: &AddGraphOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_add_graph(
+        &self,
+        add: &AddGraphOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         let operator = Box::new(RdfAddGraphOperator::new(
             Arc::clone(&self.store),
             add.source.clone(),
             add.destination.clone(),
             add.silent,
         ));
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 
     /// Plans a SPARQL MODIFY operator (DELETE/INSERT WHERE).
@@ -1243,9 +1314,12 @@ impl RdfPlanner {
     /// 1. Evaluate WHERE clause once to get bindings
     /// 2. Apply DELETE templates using those bindings
     /// 3. Apply INSERT templates using the SAME bindings
-    fn plan_modify(&self, modify: &ModifyOp) -> Result<(Box<dyn Operator>, Vec<String>)> {
+    fn plan_modify(
+        &self,
+        modify: &ModifyOp,
+    ) -> Result<(Box<dyn Operator>, Vec<String>, Vec<LogicalType>)> {
         // Plan the WHERE clause
-        let (where_op, where_columns) = self.plan_operator(&modify.where_clause)?;
+        let (where_op, where_columns, _where_types) = self.plan_operator(&modify.where_clause)?;
 
         // Build column index map for variable substitution
         let column_map: HashMap<String, usize> = where_columns
@@ -1266,7 +1340,7 @@ impl RdfPlanner {
             self.cdc_epoch,
         ));
 
-        Ok((operator, Vec::new()))
+        Ok((operator, Vec::new(), Vec::new()))
     }
 }
 
@@ -2674,6 +2748,8 @@ struct RdfTripleScanOperator {
     graph_context: GraphContext,
     /// Whether to emit a companion language-tag column after the object column.
     emit_companion_columns: bool,
+    /// Whether to also emit a companion datatype column (only when DATATYPE() is used).
+    emit_datatype_column: bool,
     /// Chunk size for batching.
     chunk_size: usize,
     /// Cached matching triples with graph names (lazily populated).
@@ -2690,6 +2766,7 @@ impl RdfTripleScanOperator {
         chunk_size: usize,
         graph_context: GraphContext,
         emit_companion_columns: bool,
+        emit_datatype_column: bool,
     ) -> Self {
         Self {
             store,
@@ -2697,6 +2774,7 @@ impl RdfTripleScanOperator {
             output_mask,
             graph_context,
             emit_companion_columns,
+            emit_datatype_column,
             chunk_size,
             triples: None,
             position: 0,
@@ -2798,7 +2876,7 @@ impl RdfTripleScanOperator {
     fn output_column_count(&self) -> usize {
         let base = self.output_mask.iter().filter(|&&b| b).count();
         if self.emit_companion_columns {
-            base + 2
+            base + if self.emit_datatype_column { 2 } else { 1 }
         } else {
             base
         }
@@ -2863,14 +2941,16 @@ impl Operator for RdfTripleScanOperator {
                     }
                     col_idx += 1;
 
-                    if let Some(col) = chunk.column_mut(col_idx) {
-                        let datatype = match triple.object() {
-                            Term::Literal(lit) => lit.datatype().to_string(),
-                            _ => String::new(),
-                        };
-                        col.push_string(datatype);
+                    if self.emit_datatype_column {
+                        if let Some(col) = chunk.column_mut(col_idx) {
+                            let datatype = match triple.object() {
+                                Term::Literal(lit) => lit.datatype().to_string(),
+                                _ => String::new(),
+                            };
+                            col.push_string(datatype);
+                        }
+                        col_idx += 1;
                     }
-                    col_idx += 1;
                 }
             }
             if self.output_mask[3] {
@@ -4245,10 +4325,90 @@ fn component_to_term(component: &TripleComponent) -> Option<Term> {
     }
 }
 
-/// Derives RDF schema (all Any type to handle mixed value types from
-/// BIND expressions, computed columns, and aggregates).
-fn derive_rdf_schema(columns: &[String]) -> Vec<LogicalType> {
-    columns.iter().map(|_| LogicalType::Any).collect()
+/// Checks whether a logical plan tree references LANG, LANGMATCHES, or DATATYPE
+/// functions. When true, the planner emits companion columns on triple scans.
+fn uses_lang_or_datatype(op: &LogicalOperator) -> bool {
+    use LogicalOperator::{
+        Aggregate, AntiJoin, Bind, Distinct, Filter, Join, LeftJoin, Limit, Project, Return, Skip,
+        Sort, TripleScan, Union, Unwind,
+    };
+    match op {
+        Filter(f) => expr_uses_lang_or_datatype(&f.predicate) || uses_lang_or_datatype(&f.input),
+        Project(p) => {
+            p.projections
+                .iter()
+                .any(|proj| expr_uses_lang_or_datatype(&proj.expression))
+                || uses_lang_or_datatype(&p.input)
+        }
+        Bind(b) => expr_uses_lang_or_datatype(&b.expression) || uses_lang_or_datatype(&b.input),
+        Aggregate(a) => {
+            a.aggregates.iter().any(|ae| {
+                ae.expression
+                    .as_ref()
+                    .is_some_and(expr_uses_lang_or_datatype)
+            }) || a.having.as_ref().is_some_and(expr_uses_lang_or_datatype)
+                || uses_lang_or_datatype(&a.input)
+        }
+        Return(r) => {
+            r.items
+                .iter()
+                .any(|item| expr_uses_lang_or_datatype(&item.expression))
+                || uses_lang_or_datatype(&r.input)
+        }
+        Sort(s) => {
+            s.keys
+                .iter()
+                .any(|k| expr_uses_lang_or_datatype(&k.expression))
+                || uses_lang_or_datatype(&s.input)
+        }
+        Join(j) => uses_lang_or_datatype(&j.left) || uses_lang_or_datatype(&j.right),
+        LeftJoin(j) => {
+            uses_lang_or_datatype(&j.left)
+                || uses_lang_or_datatype(&j.right)
+                || j.condition.as_ref().is_some_and(expr_uses_lang_or_datatype)
+        }
+        AntiJoin(j) => uses_lang_or_datatype(&j.left) || uses_lang_or_datatype(&j.right),
+        Union(u) => u.inputs.iter().any(uses_lang_or_datatype),
+        Distinct(d) => uses_lang_or_datatype(&d.input),
+        Limit(l) => uses_lang_or_datatype(&l.input),
+        Skip(s) => uses_lang_or_datatype(&s.input),
+        Unwind(u) => uses_lang_or_datatype(&u.input),
+        TripleScan(t) => t.input.as_ref().is_some_and(|i| uses_lang_or_datatype(i)),
+        // For any other operator, conservatively assume companion columns are needed
+        _ => false,
+    }
+}
+
+/// Checks whether a logical expression references LANG, LANGMATCHES, or DATATYPE.
+fn expr_uses_lang_or_datatype(expr: &LogicalExpression) -> bool {
+    match expr {
+        LogicalExpression::FunctionCall { name, args, .. } => {
+            let upper = name.to_uppercase();
+            if upper == "LANG" || upper == "LANGMATCHES" || upper == "DATATYPE" {
+                return true;
+            }
+            args.iter().any(expr_uses_lang_or_datatype)
+        }
+        LogicalExpression::Binary { left, right, .. } => {
+            expr_uses_lang_or_datatype(left) || expr_uses_lang_or_datatype(right)
+        }
+        LogicalExpression::Unary { operand, .. } => expr_uses_lang_or_datatype(operand),
+        LogicalExpression::List(items) => items.iter().any(expr_uses_lang_or_datatype),
+        LogicalExpression::Case {
+            operand,
+            when_clauses,
+            else_clause,
+        } => {
+            operand.as_deref().is_some_and(expr_uses_lang_or_datatype)
+                || when_clauses
+                    .iter()
+                    .any(|(w, t)| expr_uses_lang_or_datatype(w) || expr_uses_lang_or_datatype(t))
+                || else_clause
+                    .as_deref()
+                    .is_some_and(expr_uses_lang_or_datatype)
+        }
+        _ => false,
+    }
 }
 
 /// Quick cardinality estimate for a logical operator subtree.
@@ -4542,6 +4702,7 @@ mod tests {
                 scan_all_graphs: false,
                 dataset: None,
             },
+            false,
             false,
         );
 

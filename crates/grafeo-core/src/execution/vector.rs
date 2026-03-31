@@ -130,33 +130,61 @@ impl ValueVector {
 
     /// Pushes a boolean value.
     pub fn push_bool(&mut self, value: bool) {
-        if let VectorData::Bool(vec) = &mut self.data {
-            vec.push(value);
-            self.len += 1;
+        match &mut self.data {
+            VectorData::Bool(vec) => {
+                vec.push(value);
+                self.len += 1;
+            }
+            VectorData::Generic(vec) => {
+                vec.push(Value::Bool(value));
+                self.len += 1;
+            }
+            _ => {}
         }
     }
 
     /// Pushes an integer value.
     pub fn push_int64(&mut self, value: i64) {
-        if let VectorData::Int64(vec) = &mut self.data {
-            vec.push(value);
-            self.len += 1;
+        match &mut self.data {
+            VectorData::Int64(vec) => {
+                vec.push(value);
+                self.len += 1;
+            }
+            VectorData::Generic(vec) => {
+                vec.push(Value::Int64(value));
+                self.len += 1;
+            }
+            _ => {}
         }
     }
 
     /// Pushes a float value.
     pub fn push_float64(&mut self, value: f64) {
-        if let VectorData::Float64(vec) = &mut self.data {
-            vec.push(value);
-            self.len += 1;
+        match &mut self.data {
+            VectorData::Float64(vec) => {
+                vec.push(value);
+                self.len += 1;
+            }
+            VectorData::Generic(vec) => {
+                vec.push(Value::Float64(value));
+                self.len += 1;
+            }
+            _ => {}
         }
     }
 
     /// Pushes a string value.
     pub fn push_string(&mut self, value: impl Into<ArcStr>) {
-        if let VectorData::String(vec) = &mut self.data {
-            vec.push(value.into());
-            self.len += 1;
+        match &mut self.data {
+            VectorData::String(vec) => {
+                vec.push(value.into());
+                self.len += 1;
+            }
+            VectorData::Generic(vec) => {
+                vec.push(Value::String(value.into()));
+                self.len += 1;
+            }
+            _ => {}
         }
     }
 
