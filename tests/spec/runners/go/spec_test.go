@@ -42,6 +42,19 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// hasFeature checks if a feature or compound language key is available.
+// Handles compound keys like "graphql-rdf" by checking each part.
+func hasFeature(key string) bool {
+	if compiledFeatures[key] {
+		return true
+	}
+	// Compound language key: "graphql-rdf" requires both "graphql" and "rdf"
+	if key == "graphql-rdf" {
+		return compiledFeatures["graphql"] && compiledFeatures["rdf"]
+	}
+	return false
+}
+
 // ---------------------------------------------------------------------------
 // .gtest schema types
 // ---------------------------------------------------------------------------
@@ -1099,7 +1112,7 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 	// Check language availability
 	if language != "gql" && language != "" {
 		langKey := strings.ReplaceAll(language, "_", "-")
-		if !compiledFeatures[langKey] {
+		if !hasFeature(langKey) {
 			t.Skipf("language '%s' not available in this build", langKey)
 		}
 	}
@@ -1107,7 +1120,7 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 	// Check requires: skip if this build lacks the feature
 	for _, req := range gf.Meta.Requires {
 		key := strings.ReplaceAll(req, "_", "-")
-		if !compiledFeatures[key] {
+		if !hasFeature(key) {
 			t.Skipf("feature '%s' not available in this build", key)
 		}
 	}

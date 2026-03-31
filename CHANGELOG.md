@@ -2,62 +2,44 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.31] - 2026-03-31
+## [0.5.31] - 2026-03-32
 
-CompactStore: a read-optimized columnar graph store for memory-constrained environments. Thanks to [@temporaryfix](https://github.com/temporaryfix) for the design, prototype and implementation ([#199](https://github.com/GrafeoDB/grafeo/issues/199), [#204](https://github.com/GrafeoDB/grafeo/pull/204)).
+CompactStore: a read-optimized columnar graph store for memory-constrained environments. Thanks to [@temporaryfix](https://github.com/temporaryfix) for the design, prototype and implementation ([#199](https://github.com/GrafeoDB/grafeo/issues/199), [#204](https://github.com/GrafeoDB/grafeo/pull/204)). Also, all remaining syntax gaps covered by the gtest suite are now fully implemented!
 
 ### Added
 
-- **`compact-store` feature flag**: opt-in columnar read-only store for WASM, edge workers and embedded devices
-- **`CompactStore`**: per-label `NodeTable`s with typed columns (`BitPackedInts`, `DictionaryEncoding`, `BitVector`, `Int8Vector`), double-indexed `CsrAdjacency` (forward + backward) for O(degree) edge traversal, and zone-map skip optimization for predicate pushdown
-- **`CompactStoreBuilder`**: fluent API for constructing stores from raw data with build-time validation (column lengths, value ranges, sort order, vector dimension alignment)
-- **`GrafeoDB::with_read_store()`**: integration point accepting `Arc<dyn GraphStore>` for read-only external stores, all query languages work through it
+- **`compact-store` feature flag**: opt-in columnar read-only store for WASM, edge workers and embedded devices. Per-label `NodeTable`s with typed columns, double-indexed `CsrAdjacency` for O(degree) traversal, zone-map skip optimization, and a fluent `CompactStoreBuilder` API with build-time validation. Integrates via `GrafeoDB::with_read_store(Arc<dyn GraphStore>)`, all query languages work through it
 - **Benchmark**: `compact_vs_lpg` criterion bench comparing both stores on identical data
+- **`execute_language(language, query, params)` in Python and Node.js bindings**: generic dispatch for non-standard language keys (e.g. `"graphql-rdf"`) without needing dedicated methods
 - **SQL/PGQ UNION, INTERSECT, EXCEPT**: full set operation support between GRAPH_TABLE queries, with optional ALL modifier
-- **GraphQL multiple root fields**: `{ person { name } company { name } }` now translates all root fields via Union instead of silently dropping all but the first
-- **GraphQL variable/parameter substitution**: `$variable` references in arguments now emit `LogicalExpression::Parameter` instead of `Null`, with default value propagation from `query($limit: Int = 2)` declarations
+- **GraphQL multiple root fields and variable substitution**: `{ person { name } company { name } }` now translates all root fields via Union instead of dropping all but the first; `$variable` references emit `LogicalExpression::Parameter` with default value propagation from query declarations
 - **Binding spec runner `params:` support**: Python, Node.js, Go, and C# test runners now pass gtest `params:` fields to parameterized execution methods
+- **`DatabaseInfo.features`**: `db.info()` now returns a `features` array listing all compiled feature flags (e.g. `["gql", "cypher", "algos", "vector-index"]`), available in all bindings (Python, Node.js, WASM, C, Go, C#, Dart)
+- **WASM `lpg` and `rdf` build profiles**: two new named profiles join `browser` and `full`. `lpg` bundles all LPG query languages plus AI search; `rdf` bundles SPARQL and GraphQL over the RDF model
 
 ### Fixed
 
-- **GQL list slice syntax**: `[1..3]`, `[..2]`, `[3..]` now work; one-char lexer bug (`peek_char` instead of `current_char`) prevented `..` token recognition
-- **SPARQL MINUS with disjoint variables**: no longer removes all solutions; returns left side unchanged when no variables are shared (per SPARQL 1.1 spec)
-- **SPARQL language-tagged literal comparison**: `FILTER(?x = "Barcelona"@es)` now checks both lexical value and language tag instead of ignoring the tag
-- **SPARQL function evaluation in SELECT/BIND**: STRLEN, CONCAT, IF, COALESCE, arithmetic now work in projection and BIND contexts (fixed BIND ordering, `LogicalType::Any` in RDF planner, projection-before-ORDER-BY)
-- **SPARQL property path reflexive case**: `<p>*` and `<p>?` now include the subject itself (zero-length match) even when no outgoing edges exist
-- **Gremlin 3-hop dead end**: multi-hop traversal ending in empty no longer causes "Column not found" error
-- **Gremlin `values()` with no keys**: `g.V().values()` returns all property values instead of panicking
-- **Gremlin union with `values()` branches**: scalar values in union branches no longer silently coerced to `NodeId(0)` (fixed `LogicalType::Any` for scalar projections)
-- **Gremlin `path()` on empty traversal**: returns empty result set instead of "Column not found" error
-- **Cypher `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES`**: indexes now registered in the catalog, so they persist across statements and are visible to `SHOW INDEXES` and droppable by name
-- **SPARQL `DATATYPE()` companion columns**: `__datatype_` columns now track original XSD datatypes through triple scans, fixing `DATATYPE()` which previously always returned `xsd:string`
-- **SPARQL `DESCRIBE` CBD expansion**: `DESCRIBE <IRI>` and `DESCRIBE ?var WHERE { ... }` now return all triples where the described resource is the subject (Concise Bounded Description)
-- **SPARQL DELETE-only MODIFY with FILTER**: `DELETE { ... } WHERE { ... FILTER(...) }` now correctly applies the FILTER (fixed type mismatch in `value_to_term`)
-- **SPARQL VALUES with UNDEF**: multi-variable VALUES blocks containing UNDEF now produce correct partial bindings via filter-based union branches
-- **SPARQL `GRAPH ?g` isolation**: `GRAPH ?g { ... }` now scans only named graphs, excluding the default graph per SPARQL 1.1 spec section 13.3
-- **SPARQL `STRDT()` type conversion**: `STRDT("88", xsd:integer)` now produces a typed `Int64` value so `DATATYPE()` returns the correct IRI
-- **SPARQL subquery aggregation propagation**: inner `SELECT (COUNT(...) AS ?c)` subquery results now correctly propagate to outer query
-- **GraphQL aggregation**: `{ personCount }`, `{ personAggregate { sum_age avg_age } }`, and `{ person { _count } }` field patterns now emit proper aggregate operators
-- **SPARQL `FROM` / `FROM NAMED` enforcement**: dataset clauses now restrict which graphs are visible to triple scans per SPARQL 1.1 spec sections 13.1 and 13.2
-- **GQL `ANY` and `ANY SHORTEST` path search prefixes**: `MATCH ANY p = ...` returns one arbitrary matching path, `MATCH p = ANY SHORTEST ...` returns one shortest path, uses the existing shortest path BFS operator
-- **SPARQL `CLEAR ALL`**: clears both the default graph and all named graphs
-- **SPARQL anonymous blank node `[]` as subject**: `[ <pred> ?obj ; <pred2> ?obj2 ]` now parsed and expanded to triple patterns with a fresh blank node variable
-- **RDF GraphQL per-test language dispatch**: `language: graphql-rdf` in gtest routes through the RDF translator for mutation rejection testing
-- **RDF GraphQL pagination**: `first`/`limit`/`skip`/`offset` arguments now supported in the RDF GraphQL translator
+- **GQL list slice and path search**: `[1..3]`, `[..2]`, `[3..]` slices now work (one-char lexer bug); `MATCH ANY p = ...` and `MATCH p = ANY SHORTEST ...` path search prefixes now use the existing shortest-path BFS operator
+- **SPARQL pattern matching**: MINUS with disjoint variables returns left side unchanged per spec; `<p>*`/`<p>?` property paths include zero-length reflexive match; VALUES with UNDEF produces correct partial bindings; anonymous blank node `[]` as subject expanded correctly
+- **SPARQL function and type evaluation**: STRLEN, CONCAT, IF, COALESCE, arithmetic work in SELECT/BIND projections; `STRDT()` produces typed values; `DATATYPE()` companion columns track original XSD types through scans; subquery aggregation propagates to outer queries
+- **SPARQL graph management**: `GRAPH ?g` scans only named graphs per spec 13.3; `FROM`/`FROM NAMED` restrict visible graphs per spec 13.1-13.2; `CLEAR ALL` clears both default and named graphs; `DESCRIBE` returns Concise Bounded Description
+- **SPARQL updates and literals**: `DELETE { ... } WHERE { ... FILTER(...) }` applies the filter correctly; language-tagged literal comparison checks both value and tag
+- **Gremlin traversal fixes**: multi-hop dead end no longer causes "Column not found"; `values()` with no keys returns all properties; scalar values in union branches no longer coerced to `NodeId(0)`; `path()` on empty traversal returns empty result set
+- **Cypher `CREATE INDEX` / `DROP INDEX` / `SHOW INDEXES`**: indexes now registered in the catalog, persisting across statements
+- **GraphQL aggregation**: `personCount`, `personAggregate { sum_age }`, and `_count` field patterns now emit proper aggregate operators
+- **RDF GraphQL**: per-test `language: graphql-rdf` dispatch for mutation rejection testing; `first`/`limit`/`skip`/`offset` pagination in the RDF translator
 
 ### Performance
 
-- **RDF schema type propagation**: `plan_operator` now threads concrete `LogicalType`s (mostly `String`) through the entire plan tree instead of using `LogicalType::Any` everywhere, keeping triple scan data in `Vec<ArcStr>` (8 bytes/entry) through joins, sorts, and projections instead of re-boxing into `Vec<Value>` (40 bytes/entry)
+- **RDF schema type propagation**: `plan_operator` threads concrete `LogicalType`s through the entire plan tree instead of `LogicalType::Any`, keeping triple scan data in `Vec<ArcStr>` (8 bytes/entry) through joins, sorts, and projections instead of `Vec<Value>` (40 bytes/entry)
 
 ### Internal
 
-- **`ValueVector` push safety net**: `push_bool`, `push_int64`, `push_float64`, `push_string` now fall back to `VectorData::Generic` on type mismatch instead of silently dropping data
+- **Spec runner feature detection**: all 6 binding spec runners (Python, Node.js, WASM, C#, Dart, Go) now use `db.info().features` to detect available capabilities instead of probing for individual methods, eliminating false skips for non-language features like `algos` and `vector-index`
+- **`ValueVector` push safety net**: type-mismatched pushes now fall back to `VectorData::Generic` instead of silently dropping data
 - **`derive_rdf_schema` removed**: replaced by concrete type propagation through `plan_operator` return values
-- **`eval_function` split**: 1,687-line monolith in `filter.rs` refactored into a thin dispatcher and 9 focused category methods (graph element, type, collection, string, numeric, temporal, path, vector, session)
-- **`impl_algorithm!` macro**: declarative macro for `GraphAlgorithm` trait boilerplate, applied to 16 of 22 algorithm implementations
-- **`map_common_keywords!` macro**: shared macro for lexer keyword mapping, replacing 3 near-identical 30-44 arm match blocks
-- **`unescape_string` dedup**: 3 identical parser copies extracted to shared `keywords` module
-- **`extract_and_map` generic**: binding entity extraction deduped via generic function in `grafeo-bindings-common`
+- **`eval_function` split**: 1,687-line monolith refactored into a thin dispatcher and 9 focused category methods
+- **Dedup macros and utilities**: `impl_algorithm!` for `GraphAlgorithm` boilerplate (16 of 22 implementations), `map_common_keywords!` for shared lexer keyword mapping, `unescape_string` extracted to shared module, `extract_and_map` generic for binding entity extraction
 
 ## [0.5.30] - 2026-03-30
 

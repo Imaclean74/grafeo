@@ -337,6 +337,9 @@ public class SpecTests : IDisposable
     {
         if (requirement is "gql" or "") return true;
         var key = requirement.Replace('_', '-');
+        // Compound language key: "graphql-rdf" requires both "graphql" and "rdf"
+        if (key == "graphql-rdf")
+            return CompiledFeatures.Contains("graphql") && CompiledFeatures.Contains("rdf");
         return CompiledFeatures.Contains(key);
     }
 
@@ -760,12 +763,13 @@ public class SpecTests : IDisposable
         try
         {
             using var db = GrafeoDB.Memory();
-            var json = db.Info();
-            var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("features", out var arr))
+            var info = db.Info();
+            if (info.TryGetValue("features", out var featuresObj)
+                && featuresObj is IEnumerable<object?> features)
             {
-                return arr.EnumerateArray()
-                    .Select(e => e.GetString()!)
+                return features
+                    .Where(f => f is not null)
+                    .Select(f => f!.ToString()!)
                     .ToHashSet();
             }
         }

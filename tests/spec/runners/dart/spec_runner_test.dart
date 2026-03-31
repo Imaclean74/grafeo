@@ -56,7 +56,7 @@ Set<String> _getCompiledFeatures() {
   if (_compiledFeatures == null) {
     final db = GrafeoDB.memory();
     try {
-      final info = jsonDecode(db.info()) as Map<String, dynamic>;
+      final info = db.info();
       final features = info['features'] as List<dynamic>?;
       _compiledFeatures = features?.map((e) => e.toString()).toSet() ?? {};
     } finally {
@@ -78,12 +78,47 @@ bool _isAvailable(String requirement) {
 // =============================================================================
 
 /// Execute a query in the given [language] via `executeLanguage`.
-QueryResult _executeQuery(GrafeoDB db, String language, String query) {
+QueryResult _executeQuery(
+  GrafeoDB db,
+  String language,
+  String query, {
+  Map<String, String>? params,
+}) {
   final lang = _normaliseLanguage(language);
+  final coerced = _coerceParams(params);
   if (lang == 'gql' || lang.isEmpty) {
-    return db.execute(query);
+    return coerced != null
+        ? db.executeWithParams(query, coerced)
+        : db.execute(query);
   }
-  return db.executeLanguage(lang, query);
+  return db.executeLanguage(lang, query, params: coerced);
+}
+
+/// Coerce string param values to proper Dart types (int, double, bool).
+Map<String, dynamic>? _coerceParams(Map<String, String>? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final result = <String, dynamic>{};
+  for (final entry in raw.entries) {
+    final v = entry.value;
+    if (v == 'true') {
+      result[entry.key] = true;
+    } else if (v == 'false') {
+      result[entry.key] = false;
+    } else {
+      final asInt = int.tryParse(v);
+      if (asInt != null) {
+        result[entry.key] = asInt;
+      } else {
+        final asDouble = double.tryParse(v);
+        if (asDouble != null) {
+          result[entry.key] = asDouble;
+        } else {
+          result[entry.key] = v;
+        }
+      }
+    }
+  }
+  return result;
 }
 
 /// Load a .setup dataset file into [db] using GQL.
@@ -397,6 +432,7 @@ class _TestCase {
   _Expect expect;
   Map<String, String> variants;
   List<String> tags;
+  Map<String, String> params;
 
   _TestCase({
     this.name = '',
@@ -408,11 +444,13 @@ class _TestCase {
     _Expect? expect,
     Map<String, String>? variants,
     List<String>? tags,
+    Map<String, String>? params,
   })  : statements = statements ?? [],
         setup = setup ?? [],
         expect = expect ?? _Expect(),
         variants = variants ?? {},
-        tags = tags ?? [];
+        tags = tags ?? [],
+        params = params ?? {};
 }
 
 /// Parsed .gtest file.
@@ -555,7 +593,7 @@ _TestCase _parseSingleTest(_ParseContext ctx) {
         ctx.idx++;
       case 'params':
         ctx.idx++;
-        _parseMap(ctx, 6); // consume but discard (not used in Dart runner)
+        tc.params = _parseMap(ctx, 6);
       case 'expect':
         ctx.idx++;
         tc.expect = _parseExpectBlock(ctx);
@@ -905,7 +943,8 @@ void _runTestCase(GrafeoDB db, _TestCase tc, String language,
   // Execute all queries, capture last result
   late QueryResult result;
   for (final q in queries) {
-    result = _executeQuery(db, language, q);
+    result = _executeQuery(db, language, q,
+        params: tc.params.isNotEmpty ? tc.params : null);
   }
 
   // Column assertion (checked before value assertions)
