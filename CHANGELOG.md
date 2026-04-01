@@ -4,9 +4,34 @@ All notable changes to Grafeo, for future reference (and enjoyment).
 
 ## [0.5.32] - Unreleased
 
+Correctness hardening: aggregation fixes, Gremlin polish, crash recovery tests, and stress test expansion.
+
+### Added
+
+- **Gremlin `valueMap()` and `elementMap()` with no arguments**: `g.V().valueMap()` returns all properties as a map; `g.V().elementMap()` returns id, label, and all properties as a map
+- **WAL-disabled crash injection tests**: crash recovery tests for single-file format with WAL disabled
+- **High-contention stress tests**: concurrent MERGE, mixed read/write, and concurrent schema mutation scenarios
+- **gtest regression suite for 0.5.32**: GROUP BY on labels, GROUP BY on dates, ORDER BY column stripping, SPARQL ORDER BY STR(), Gremlin valueMap/elementMap
+- **4 real-world gtest datasets**: e-commerce (customers, orders, products, reviews), movie database (actors, directors, genres), IT infrastructure (services, servers, dependency chains), transportation network (cities, weighted routes, airports)
+- **GQL gap tests**: string predicates (CONTAINS, STARTS WITH, ENDS WITH), list functions (head, last, tail, range, slicing), CASE expressions (simple, searched, nested, in WHERE/ORDER BY), extended math (log, exp, power, trig, pi, e), advanced subqueries (EXISTS multi-hop, COUNT with filter, correlated), error scenarios (division by zero, NULL arithmetic, invalid CAST, overflow)
+- **GQL real-world query suites**: e-commerce analytics (customer spend, product recommendations, order funnels), infrastructure topology (dependency chains, impact analysis, latency paths), movie analytics (collaboration networks, genre breakdown, box office ROI), transportation routing (multi-hop paths, connectivity, population)
+- **Cypher gap tests**: schema constraints (UNIQUE, NOT NULL, NODE KEY, DROP/SHOW), advanced comprehensions (pattern comprehension with size, list comprehension, EXISTS/COUNT subqueries, CALL subqueries, FOREACH)
+- **Gremlin gap tests**: repeat/until/emit/times loops, side-effect steps (sack, aggregate, store, cap), local/barrier steps (all skipped, pending implementation)
+- **SQL/PGQ gap tests**: window functions (ROW_NUMBER, RANK, SUM OVER), CTEs, scalar subqueries, COALESCE/NULLIF (all skipped, pending implementation)
+- **SPARQL gap tests**: advanced subqueries (nested SELECT, aggregate feeding outer filter), CONSTRUCT/DESCRIBE output forms, ASK with property paths, nested OPTIONAL, VALUES with UNDEF
+- **Rosetta cross-language tests**: pattern matching and aggregation equivalence across GQL, Cypher, Gremlin, and SQL/PGQ using movie and e-commerce datasets
+- **Common cross-cutting tests**: error handling (syntax errors, type mismatches, delete constraints), numeric edge cases (int64 boundaries, Infinity, NaN, rounding), string operations (case conversion, substring, trim, replace, split, reverse, NULL propagation)
+
 ### Fixed
 
 - **Sibling CALL block scope collision**: same-named variables in sibling `CALL` blocks no longer clobber each other; the first block's aliased output was incorrectly resolved as a node ID instead of a scalar value, returning `NULL` ([#213](https://github.com/GrafeoDB/grafeo/issues/213))
+- **Push-based aggregator hash collisions**: `hash_value()` now uses discriminant tags for all `Value` variants, preventing cross-type collisions in GROUP BY (e.g., `Value::Map` and `Value::Null` no longer hash identically)
+- **Pull-based `GroupKeyPart` catch-all**: added `Date`, `Time`, `Timestamp`, `Duration`, `ZonedDatetime`, `Bytes`, and `Map` variants so GROUP BY on temporal and map values produces correct distinct groups instead of falling through to Debug-string comparison
+
+### Internal
+
+- **SPARQL ORDER BY STR() tests tightened**: removed error-accepting fallback from tests; `NullGraphStore` is correct for SPARQL expression evaluation since RDF values are already bound in columns
+- **Vector search `$ne`/`$nin` NULL semantics documented**: nodes missing the filtered property are excluded (SQL three-valued NULL semantics); added documentation note and regression test
 
 ## [0.5.31] - 2026-04-01
 
