@@ -156,7 +156,7 @@ impl CdcLog {
 
     /// Returns the next HLC timestamp from this log's clock.
     ///
-    /// Used by [`CdcGraphStore`] to assign timestamps to buffered events.
+    /// Used by `CdcGraphStore` to assign timestamps to buffered events.
     pub fn next_timestamp(&self) -> HlcTimestamp {
         self.clock.now()
     }

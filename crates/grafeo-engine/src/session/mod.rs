@@ -265,7 +265,7 @@ impl Session {
 
     /// Sets the CDC log for this session (shared with the database).
     ///
-    /// Wraps the current write store with a [`CdcGraphStore`] decorator so
+    /// Wraps the current write store with a `CdcGraphStore` decorator so
     /// that all session mutations (INSERT, SET, DELETE via query execution)
     /// buffer CDC events. The buffer is flushed to the `CdcLog` on commit
     /// and discarded on rollback.

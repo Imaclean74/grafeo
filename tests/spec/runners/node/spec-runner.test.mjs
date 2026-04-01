@@ -174,6 +174,7 @@ for (const filePath of gtestFiles) {
         for (const [lang, query] of Object.entries(tc.variants)) {
           it(`${tc.name}_${lang}`, async (ctx) => {
             if (!GRAFEO_AVAILABLE) return ctx.skip()
+            if (tc.skip) return ctx.skip()
             const db = GrafeoDB.create()
             try {
               if (!isAvailable(db, lang)) return ctx.skip()

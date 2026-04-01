@@ -1051,6 +1051,10 @@ void main() {
             final lang = entry.key;
             final variantQuery = entry.value;
             test('${tc.name}_$lang', () {
+              if (tc.skip != null) {
+                markTestSkipped('skipped in .gtest: ${tc.skip}');
+                return;
+              }
               if (!_isAvailable(lang)) {
                 markTestSkipped('Language "$lang" not available');
                 return;

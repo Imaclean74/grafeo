@@ -175,6 +175,28 @@ func valueToString(v interface{}) string {
 		return "null"
 	}
 	switch val := v.(type) {
+	case json.Number:
+		// Try int64 first to preserve full precision for large integers,
+		// fall back to float64 for decimal values.
+		if i, err := val.Int64(); err == nil {
+			return strconv.FormatInt(i, 10)
+		}
+		if f, err := val.Float64(); err == nil {
+			if math.IsNaN(f) {
+				return "NaN"
+			}
+			if math.IsInf(f, 1) {
+				return "Infinity"
+			}
+			if math.IsInf(f, -1) {
+				return "-Infinity"
+			}
+			if f == math.Trunc(f) && math.Abs(f) < (1<<53) {
+				return strconv.FormatInt(int64(f), 10)
+			}
+			return strconv.FormatFloat(f, 'f', -1, 64)
+		}
+		return val.String()
 	case bool:
 		if val {
 			return "true"
@@ -1155,6 +1177,9 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 	if len(tc.Statements) > 0 {
 		queries = tc.Statements
 	} else if query != "" {
+		queries = []string{query}
+	} else if tc.Expect.Error != nil {
+		// Allow empty-string queries for error tests (e.g. empty input)
 		queries = []string{query}
 	} else {
 		t.Fatalf("No query or statements in test %q", tc.Name)

@@ -200,6 +200,7 @@ for (const filePath of gtestFiles) {
         for (const [lang, query] of Object.entries(tc.variants)) {
           it(`${tc.name}_${lang}`, (ctx) => {
             if (!WASM_AVAILABLE) return ctx.skip()
+            if (tc.skip) return ctx.skip()
             const db = new Database()
             if (!isAvailable(db, lang)) return ctx.skip()
             if (meta.dataset && meta.dataset !== 'empty') {
