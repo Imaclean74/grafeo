@@ -121,7 +121,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: describe_specific_iri
-    skip: "DESCRIBE returns 1 row instead of expected 2 (CBD not fully expanding all triples)"
     setup:
       - |
         INSERT DATA {
@@ -135,7 +134,6 @@ tests:
       count: 2
 
   - name: describe_variable_with_where
-    skip: "DESCRIBE returns 1 row instead of expected 2 (CBD not fully expanding all triples)"
     setup:
       - |
         INSERT DATA {
@@ -150,6 +148,103 @@ tests:
       }
     expect:
       count: 2
+
+  - name: describe_returns_nothing_for_unknown_iri
+    # DESCRIBE on an IRI with no triples must return zero rows.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/alix> <http://ex.org/name> "Alix" .
+        }
+    query: |
+      DESCRIBE <http://ex.org/nonexistent>
+    expect:
+      count: 0
+
+  - name: describe_multiple_iris
+    # DESCRIBE with two IRIs returns the union of their descriptions.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/alix> <http://ex.org/name> "Alix" .
+          <http://ex.org/alix> <http://ex.org/city> "Amsterdam" .
+          <http://ex.org/gus> <http://ex.org/name> "Gus" .
+          <http://ex.org/gus> <http://ex.org/city> "Berlin" .
+          <http://ex.org/vincent> <http://ex.org/name> "Vincent" .
+        }
+    query: |
+      DESCRIBE <http://ex.org/alix> <http://ex.org/gus>
+    expect:
+      count: 4
+
+  - name: describe_variable_where_no_match
+    # DESCRIBE ?x WHERE { ... } with no matching pattern returns zero rows.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/alix> <http://ex.org/name> "Alix" .
+        }
+    query: |
+      DESCRIBE ?x WHERE {
+        ?x <http://ex.org/nonexistent> ?y .
+      }
+    expect:
+      count: 0
+
+  - name: construct_preserves_template_structure
+    # CONSTRUCT remaps predicate from the template, not the WHERE clause.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/alix> <http://ex.org/firstName> "Alix" .
+          <http://ex.org/gus> <http://ex.org/firstName> "Gus" .
+        }
+    query: |
+      CONSTRUCT {
+        ?person <http://schema.org/name> ?name .
+      } WHERE {
+        ?person <http://ex.org/firstName> ?name .
+      }
+    expect:
+      count: 2
+
+  - name: construct_with_filter_restricts_output
+    # Only matching rows from WHERE produce CONSTRUCT output.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/alix> <http://ex.org/score> "90" .
+          <http://ex.org/gus> <http://ex.org/score> "40" .
+          <http://ex.org/vincent> <http://ex.org/score> "85" .
+        }
+    query: |
+      CONSTRUCT {
+        ?person <http://ex.org/passed> "true" .
+      } WHERE {
+        ?person <http://ex.org/score> ?score .
+        FILTER (?score > "50")
+      }
+    expect:
+      count: 2
+
+  - name: construct_with_multiple_bindings
+    # CONSTRUCT with WHERE producing multiple bindings emits one triple per
+    # binding row.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/alix> <http://ex.org/name> "Alix" .
+          <http://ex.org/gus> <http://ex.org/name> "Gus" .
+          <http://ex.org/vincent> <http://ex.org/name> "Vincent" .
+        }
+    query: |
+      CONSTRUCT {
+        ?s <http://ex.org/label> ?name .
+      } WHERE {
+        ?s <http://ex.org/name> ?name .
+      }
+    expect:
+      count: 3
 
   # ---------------------------------------------------------------------------
   # PREFIX resolution
@@ -244,7 +339,6 @@ tests:
         - [Mia]
 
   - name: subquery_with_aggregation_feeding_outer
-    skip: "subquery COUNT() aggregation value not propagated to outer query (returns empty string)"
     setup:
       - |
         INSERT DATA {

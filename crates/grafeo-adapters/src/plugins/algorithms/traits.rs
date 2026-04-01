@@ -262,6 +262,99 @@ impl<V> DistanceMap<V> for HashMap<NodeId, V> {
 }
 
 // ============================================================================
+// impl_algorithm! Macro
+// ============================================================================
+
+/// Generates a `GraphAlgorithm` trait implementation with the standard boilerplate.
+///
+/// # Syntax
+///
+/// ```ignore
+/// impl_algorithm! {
+///     StructName,
+///     name: "algorithm_name",
+///     description: "What the algorithm does",
+///     params: params_fn,            // fn() -> &'static [ParameterDef]
+///     execute(store, params) { ... } // body that returns Result<AlgorithmResult>
+/// }
+/// ```
+///
+/// For algorithms with no parameters, use `params: &[]` instead of a function name.
+/// If the execute body does not use `params`, prefix it with `_` to silence warnings:
+///
+/// ```ignore
+/// impl_algorithm! {
+///     StructName,
+///     name: "algorithm_name",
+///     description: "What the algorithm does",
+///     params: &[],
+///     execute(store, _params) { ... }
+/// }
+/// ```
+macro_rules! impl_algorithm {
+    (
+        $struct_name:ty,
+        name: $name:expr,
+        description: $desc:expr,
+        params: &[],
+        execute($store:ident, $params:ident) $body:block
+    ) => {
+        impl $crate::plugins::algorithms::GraphAlgorithm for $struct_name {
+            fn name(&self) -> &str {
+                $name
+            }
+
+            fn description(&self) -> &str {
+                $desc
+            }
+
+            fn parameters(&self) -> &[super::super::ParameterDef] {
+                &[]
+            }
+
+            fn execute(
+                &self,
+                $store: &dyn grafeo_core::graph::GraphStore,
+                $params: &super::super::Parameters,
+            ) -> grafeo_common::utils::error::Result<super::super::AlgorithmResult> {
+                $body
+            }
+        }
+    };
+    (
+        $struct_name:ty,
+        name: $name:expr,
+        description: $desc:expr,
+        params: $params_fn:expr,
+        execute($store:ident, $params:ident) $body:block
+    ) => {
+        impl $crate::plugins::algorithms::GraphAlgorithm for $struct_name {
+            fn name(&self) -> &str {
+                $name
+            }
+
+            fn description(&self) -> &str {
+                $desc
+            }
+
+            fn parameters(&self) -> &[super::super::ParameterDef] {
+                $params_fn()
+            }
+
+            fn execute(
+                &self,
+                $store: &dyn grafeo_core::graph::GraphStore,
+                $params: &super::super::Parameters,
+            ) -> grafeo_common::utils::error::Result<super::super::AlgorithmResult> {
+                $body
+            }
+        }
+    };
+}
+
+pub(crate) use impl_algorithm;
+
+// ============================================================================
 // Result Builders
 // ============================================================================
 

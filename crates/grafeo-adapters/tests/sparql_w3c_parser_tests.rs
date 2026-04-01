@@ -157,7 +157,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "anonymous blank node [] as subject not yet supported in parser"]
     fn sec4_anonymous_blank_node() {
         let query = r#"SELECT ?name WHERE { [ <http://xmlns.com/foaf/0.1/name> ?name ] }"#;
         let result = sparql::parse(query);
@@ -165,7 +164,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "anonymous blank node [] as subject not yet supported in parser"]
     fn sec4_anonymous_blank_node_with_properties() {
         let query = r#"
             SELECT ?name ?age WHERE {

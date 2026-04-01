@@ -6,6 +6,7 @@ package grafeo_test
 import (
 	"bufio"
 	"crypto/md5"
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -18,6 +19,41 @@ import (
 
 	grafeo "github.com/GrafeoDB/grafeo/crates/bindings/go"
 )
+
+// ---------------------------------------------------------------------------
+// Compiled features (cached once per test run)
+// ---------------------------------------------------------------------------
+
+// compiledFeatures is populated in TestMain and holds the features compiled
+// into the grafeo-c library (e.g. "gql", "cypher", "algos").
+var compiledFeatures = map[string]bool{}
+
+func TestMain(m *testing.M) {
+	db, err := grafeo.OpenInMemory()
+	if err == nil {
+		info, err := db.Info()
+		if err == nil {
+			for _, f := range info.Features {
+				compiledFeatures[f] = true
+			}
+		}
+		db.Close()
+	}
+	os.Exit(m.Run())
+}
+
+// hasFeature checks if a feature or compound language key is available.
+// Handles compound keys like "graphql-rdf" by checking each part.
+func hasFeature(key string) bool {
+	if compiledFeatures[key] {
+		return true
+	}
+	// Compound language key: "graphql-rdf" requires both "graphql" and "rdf"
+	if key == "graphql-rdf" {
+		return compiledFeatures["graphql"] && compiledFeatures["rdf"]
+	}
+	return false
+}
 
 // ---------------------------------------------------------------------------
 // .gtest schema types
@@ -49,6 +85,7 @@ type TestCase struct {
 	Params     map[string]string
 	Tags       []string
 	Skip       string
+	Language   string
 	Expect     Expect
 	Variants   map[string]string
 }
@@ -89,6 +126,42 @@ func executeQuery(db *grafeo.Database, language, query string) (*grafeo.QueryRes
 		return db.Execute(query)
 	}
 	return db.ExecuteLanguage(key, query, "")
+}
+
+// executeQueryWithParams runs a query in the specified language with JSON params.
+func executeQueryWithParams(db *grafeo.Database, language, query, paramsJSON string) (*grafeo.QueryResult, error) {
+	key := dispatchKey(language)
+	if key == "gql" {
+		return db.ExecuteWithParams(query, paramsJSON)
+	}
+	return db.ExecuteLanguage(key, query, paramsJSON)
+}
+
+// coerceParamsToJSON converts the string-typed params map from gtest files into
+// a JSON string with properly typed values (int, float, bool, or string).
+func coerceParamsToJSON(params map[string]string) string {
+	if len(params) == 0 {
+		return ""
+	}
+	typed := make(map[string]interface{}, len(params))
+	for k, v := range params {
+		if n, err := strconv.Atoi(v); err == nil {
+			typed[k] = n
+		} else if f, err := strconv.ParseFloat(v, 64); err == nil {
+			typed[k] = f
+		} else if v == "true" {
+			typed[k] = true
+		} else if v == "false" {
+			typed[k] = false
+		} else {
+			typed[k] = v
+		}
+	}
+	data, err := json.Marshal(typed)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
 
 // ---------------------------------------------------------------------------
@@ -626,6 +699,9 @@ func parseSingleTest(ctx *parseContext) TestCase {
 		case "skip":
 			tc.Skip = unquote(value)
 			ctx.idx++
+		case "language":
+			tc.Language = unquote(value)
+			ctx.idx++
 		case "setup":
 			ctx.idx++
 			tc.Setup = parseStringList(ctx)
@@ -1024,20 +1100,28 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 		t.Skipf("skipped in .gtest: %s", tc.Skip)
 	}
 
-	// Determine language
+	// Determine language: per-test override > rosetta variant > file meta
 	language := variantLang
+	if language == "" && tc.Language != "" {
+		language = tc.Language
+	}
 	if language == "" {
 		language = gf.Meta.Language
 	}
 
-	// Check requires: skip if language is not supported
-	// (We cannot introspect available features at the Go level, so we try
-	// to execute and skip on specific errors. However, we do skip known
-	// unsupported dispatch keys proactively.)
+	// Check language availability
+	if language != "gql" && language != "" {
+		langKey := strings.ReplaceAll(language, "_", "-")
+		if !hasFeature(langKey) {
+			t.Skipf("language '%s' not available in this build", langKey)
+		}
+	}
+
+	// Check requires: skip if this build lacks the feature
 	for _, req := range gf.Meta.Requires {
-		if req == "rdf" && language != "sparql" {
-			// rdf requirement is only relevant for SPARQL tests
-			continue
+		key := strings.ReplaceAll(req, "_", "-")
+		if !hasFeature(key) {
+			t.Skipf("feature '%s' not available in this build", key)
 		}
 	}
 
@@ -1078,9 +1162,12 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 
 	exp := tc.Expect
 
+	// Coerce params to JSON for the last query
+	paramsJSON := coerceParamsToJSON(tc.Params)
+
 	// Error tests
 	if exp.Error != nil {
-		runErrorTest(t, db, language, queries, *exp.Error)
+		runErrorTest(t, db, language, queries, *exp.Error, paramsJSON)
 		return
 	}
 
@@ -1095,8 +1182,13 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 		}
 	}
 
-	// Last query: capture result
-	result, err := executeQuery(db, language, queries[len(queries)-1])
+	// Last query: capture result (with params if provided)
+	var result *grafeo.QueryResult
+	if paramsJSON != "" {
+		result, err = executeQueryWithParams(db, language, queries[len(queries)-1], paramsJSON)
+	} else {
+		result, err = executeQuery(db, language, queries[len(queries)-1])
+	}
 	if err != nil {
 		if isUnsupportedLanguageError(err) {
 			t.Skipf("Language %q not available: %v", language, err)
@@ -1132,7 +1224,7 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 }
 
 // runErrorTest executes queries expecting the last one to produce an error.
-func runErrorTest(t *testing.T, db *grafeo.Database, language string, queries []string, expectedSubstr string) {
+func runErrorTest(t *testing.T, db *grafeo.Database, language string, queries []string, expectedSubstr string, paramsJSON string) {
 	t.Helper()
 
 	// Execute all-but-last normally
@@ -1145,8 +1237,13 @@ func runErrorTest(t *testing.T, db *grafeo.Database, language string, queries []
 		}
 	}
 
-	// Last query should fail
-	_, err := executeQuery(db, language, queries[len(queries)-1])
+	// Last query should fail (with params if provided)
+	var err error
+	if paramsJSON != "" {
+		_, err = executeQueryWithParams(db, language, queries[len(queries)-1], paramsJSON)
+	} else {
+		_, err = executeQuery(db, language, queries[len(queries)-1])
+	}
 	if err == nil {
 		t.Fatalf("Expected error containing %q but query succeeded", expectedSubstr)
 	}

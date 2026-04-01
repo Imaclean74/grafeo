@@ -15,7 +15,7 @@ use grafeo_core::graph::GraphStore;
 use grafeo_core::graph::lpg::LpgStore;
 
 use super::super::{AlgorithmResult, ParameterDef, ParameterType, Parameters};
-use super::traits::{GraphAlgorithm, NodeValueResultBuilder};
+use super::traits::{GraphAlgorithm, NodeValueResultBuilder, impl_algorithm};
 
 // ============================================================================
 // Degree Centrality
@@ -448,20 +448,12 @@ fn pagerank_params() -> &'static [ParameterDef] {
 /// PageRank algorithm wrapper for the plugin registry.
 pub struct PageRankAlgorithm;
 
-impl GraphAlgorithm for PageRankAlgorithm {
-    fn name(&self) -> &str {
-        "pagerank"
-    }
-
-    fn description(&self) -> &str {
-        "PageRank algorithm for measuring node importance"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        pagerank_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    PageRankAlgorithm,
+    name: "pagerank",
+    description: "PageRank algorithm for measuring node importance",
+    params: pagerank_params,
+    execute(store, params) {
         let damping = params.get_float("damping").unwrap_or(0.85);
         let max_iter = params.get_int("max_iterations").unwrap_or(100) as usize;
         let tolerance = params.get_float("tolerance").unwrap_or(1e-6);
@@ -495,20 +487,12 @@ fn betweenness_params() -> &'static [ParameterDef] {
 /// Betweenness centrality algorithm wrapper.
 pub struct BetweennessCentralityAlgorithm;
 
-impl GraphAlgorithm for BetweennessCentralityAlgorithm {
-    fn name(&self) -> &str {
-        "betweenness_centrality"
-    }
-
-    fn description(&self) -> &str {
-        "Betweenness centrality using Brandes' algorithm"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        betweenness_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    BetweennessCentralityAlgorithm,
+    name: "betweenness_centrality",
+    description: "Betweenness centrality using Brandes' algorithm",
+    params: betweenness_params,
+    execute(store, params) {
         let normalized = params.get_bool("normalized").unwrap_or(true);
 
         let scores = betweenness_centrality(store, normalized);
@@ -541,20 +525,12 @@ fn closeness_params() -> &'static [ParameterDef] {
 /// Closeness centrality algorithm wrapper.
 pub struct ClosenessCentralityAlgorithm;
 
-impl GraphAlgorithm for ClosenessCentralityAlgorithm {
-    fn name(&self) -> &str {
-        "closeness_centrality"
-    }
-
-    fn description(&self) -> &str {
-        "Closeness centrality based on shortest path distances"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        closeness_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    ClosenessCentralityAlgorithm,
+    name: "closeness_centrality",
+    description: "Closeness centrality based on shortest path distances",
+    params: closeness_params,
+    execute(store, params) {
         let wf_improved = params.get_bool("wf_improved").unwrap_or(false);
 
         let scores = closeness_centrality(store, wf_improved);

@@ -5,10 +5,10 @@
 use super::common::{wrap_distinct, wrap_filter, wrap_limit, wrap_skip, wrap_sort};
 use crate::query::plan::{
     AddGraphOp, AggregateExpr, AggregateFunction, AggregateOp, AntiJoinOp, BinaryOp, BindOp,
-    ClearGraphOp, CopyGraphOp, CreateGraphOp, DeleteTripleOp, DropGraphOp, InsertTripleOp, JoinOp,
-    JoinType, LeftJoinOp, LoadGraphOp, LogicalExpression, LogicalOperator, LogicalPlan, ModifyOp,
-    MoveGraphOp, ProjectOp, Projection, SortKey, SortOrder, TripleComponent, TripleScanOp,
-    TripleTemplate, UnaryOp, UnionOp,
+    ClearGraphOp, CopyGraphOp, CreateGraphOp, DatasetRestriction, DeleteTripleOp, DropGraphOp,
+    InsertTripleOp, JoinOp, JoinType, LeftJoinOp, LoadGraphOp, LogicalExpression, LogicalOperator,
+    LogicalPlan, ModifyOp, MoveGraphOp, ProjectOp, Projection, SortKey, SortOrder, TripleComponent,
+    TripleScanOp, TripleTemplate, UnaryOp, UnionOp,
 };
 use grafeo_adapters::query::sparql::{self, ast};
 use grafeo_common::types::Value;
@@ -58,6 +58,8 @@ struct SparqlTranslator {
     graph_context_stack: Vec<TripleComponent>,
     /// Unique ID for this query (used for blank node scoping).
     query_id: u32,
+    /// Dataset restriction from FROM / FROM NAMED clauses, if any.
+    dataset: Option<DatasetRestriction>,
 }
 
 impl SparqlTranslator {
@@ -68,6 +70,7 @@ impl SparqlTranslator {
             anon_counter: 0,
             graph_context_stack: Vec::new(),
             query_id: QUERY_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
+            dataset: None,
         }
     }
 
@@ -93,8 +96,14 @@ impl SparqlTranslator {
     }
 
     fn translate_select(&mut self, select: &ast::SelectQuery) -> Result<LogicalPlan> {
+        // Apply dataset restriction from FROM / FROM NAMED clauses
+        self.dataset = self.translate_dataset_clause(&select.dataset);
+
         // Start with the WHERE clause pattern
         let mut plan = self.translate_graph_pattern(&select.where_clause)?;
+
+        // Clear dataset after translating the WHERE clause
+        self.dataset = None;
 
         // Check if projection contains aggregates (handles both explicit GROUP BY and implicit aggregation)
         let has_aggregates = Self::has_aggregates_in_projection(&select.projection);
@@ -131,7 +140,21 @@ impl SparqlTranslator {
             });
         }
 
-        // Apply ORDER BY
+        // Apply projection before ORDER BY so that computed aliases
+        // (e.g. `SELECT (CONCAT(?a, ?b) AS ?full) ... ORDER BY ?full`)
+        // are available to the sort operator.
+        if !has_aggregates {
+            let projections = self.translate_projection(&select.projection)?;
+            if !projections.is_empty() {
+                plan = LogicalOperator::Project(ProjectOp {
+                    projections,
+                    input: Box::new(plan),
+                    pass_through_input: false,
+                });
+            }
+        }
+
+        // Apply ORDER BY (after projection so aliases are resolvable)
         if let Some(order_by) = &select.solution_modifiers.order_by {
             let keys = order_by
                 .iter()
@@ -148,18 +171,6 @@ impl SparqlTranslator {
                 .collect::<Result<Vec<_>>>()?;
 
             plan = wrap_sort(plan, keys);
-        }
-
-        // Apply projection before DISTINCT (so dedup operates on projected columns only)
-        if !has_aggregates {
-            let projections = self.translate_projection(&select.projection)?;
-            if !projections.is_empty() {
-                plan = LogicalOperator::Project(ProjectOp {
-                    projections,
-                    input: Box::new(plan),
-                    pass_through_input: false,
-                });
-            }
         }
 
         // Apply DISTINCT/REDUCED (after projection, before OFFSET/LIMIT)
@@ -181,8 +192,14 @@ impl SparqlTranslator {
     }
 
     fn translate_ask(&mut self, ask: &ast::AskQuery) -> Result<LogicalPlan> {
+        // Apply dataset restriction from FROM / FROM NAMED clauses
+        self.dataset = self.translate_dataset_clause(&ask.dataset);
+
         // ASK returns true if the pattern has any matches
         let plan = self.translate_graph_pattern(&ask.where_clause)?;
+
+        // Clear dataset after translating the WHERE clause
+        self.dataset = None;
 
         // Limit to 1 result for efficiency
         let plan = wrap_limit(plan, 1);
@@ -191,9 +208,15 @@ impl SparqlTranslator {
     }
 
     fn translate_construct(&mut self, construct: &ast::ConstructQuery) -> Result<LogicalPlan> {
+        // Apply dataset restriction from FROM / FROM NAMED clauses
+        self.dataset = self.translate_dataset_clause(&construct.dataset);
+
         // For CONSTRUCT, we need to evaluate the WHERE pattern and then
         // produce triples according to the template
         let plan = self.translate_graph_pattern(&construct.where_clause)?;
+
+        // Clear dataset after translating the WHERE clause
+        self.dataset = None;
 
         // Apply solution modifiers
         let mut plan = plan;
@@ -206,14 +229,45 @@ impl SparqlTranslator {
     }
 
     fn translate_describe(&mut self, describe: &ast::DescribeQuery) -> Result<LogicalPlan> {
-        // DESCRIBE returns information about resources
-        if let Some(where_clause) = &describe.where_clause {
-            let plan = self.translate_graph_pattern(where_clause)?;
-            Ok(LogicalPlan::new(plan))
-        } else {
-            // DESCRIBE with just IRIs - create a scan for each resource
-            Ok(LogicalPlan::new(LogicalOperator::Empty))
+        // Apply dataset restriction from FROM / FROM NAMED clauses
+        self.dataset = self.translate_dataset_clause(&describe.dataset);
+
+        // DESCRIBE implements Concise Bounded Description (CBD):
+        // Return all triples where the described resource is the subject.
+        let pred_var = format!("__describe_p{}", self.next_anon());
+        let obj_var = format!("__describe_o{}", self.next_anon());
+
+        let mut cbd_scans: Vec<LogicalOperator> = Vec::new();
+        for resource in &describe.resources {
+            let subject = match resource {
+                ast::VariableOrIri::Iri(iri) => TripleComponent::Iri(self.resolve_iri(iri)),
+                ast::VariableOrIri::Variable(name) => TripleComponent::Variable(name.clone()),
+            };
+            cbd_scans.push(self.make_triple_scan(
+                subject,
+                TripleComponent::Variable(pred_var.clone()),
+                TripleComponent::Variable(obj_var.clone()),
+                None,
+            ));
         }
+
+        let cbd_plan = if cbd_scans.len() == 1 {
+            cbd_scans.into_iter().next().expect("single CBD scan")
+        } else {
+            LogicalOperator::Union(UnionOp { inputs: cbd_scans })
+        };
+
+        let plan = if let Some(where_clause) = &describe.where_clause {
+            let where_plan = self.translate_graph_pattern(where_clause)?;
+            self.join_patterns(where_plan, cbd_plan)
+        } else {
+            cbd_plan
+        };
+
+        // Clear dataset after translating the WHERE clause
+        self.dataset = None;
+
+        Ok(LogicalPlan::new(plan))
     }
 
     // ==================== SPARQL Update Translation ====================
@@ -570,23 +624,21 @@ impl SparqlTranslator {
             ast::GraphPattern::Basic(triples) => self.translate_basic_pattern(triples),
 
             ast::GraphPattern::Group(patterns) => {
-                // Categorize patterns by type for proper composition
-                let mut basic_patterns: Vec<&ast::GraphPattern> = Vec::new();
+                // Process patterns in document order so that BIND, OPTIONAL,
+                // MINUS, etc. see the variables introduced by preceding
+                // patterns. FILTER and FILTER NOT EXISTS/EXISTS scope over
+                // the entire group (SPARQL spec), so they are collected and
+                // applied last.
                 let mut filter_exprs: Vec<&ast::Expression> = Vec::new();
-                let mut optional_patterns: Vec<&ast::GraphPattern> = Vec::new();
-                let mut minus_patterns: Vec<&ast::GraphPattern> = Vec::new();
-                let mut bind_patterns: Vec<(&ast::Expression, &String)> = Vec::new();
-
-                // Track NOT EXISTS / EXISTS patterns for join-level handling
                 let mut not_exists_patterns: Vec<&ast::GraphPattern> = Vec::new();
                 let mut exists_patterns: Vec<&ast::GraphPattern> = Vec::new();
+
+                let mut plan = LogicalOperator::Empty;
 
                 for p in patterns {
                     match p {
                         ast::GraphPattern::Filter(expr) => {
-                            // Extract FILTER NOT EXISTS / FILTER EXISTS into join
-                            // operations instead of filter predicates, since the
-                            // physical filter does not support subquery evaluation.
+                            // Collect filters for group-level application
                             match expr {
                                 ast::Expression::NotExists(inner) => {
                                     not_exists_patterns.push(inner);
@@ -597,59 +649,95 @@ impl SparqlTranslator {
                                 _ => filter_exprs.push(expr),
                             }
                         }
-                        ast::GraphPattern::Optional(inner) => optional_patterns.push(inner),
-                        ast::GraphPattern::Minus(inner) => minus_patterns.push(inner),
                         ast::GraphPattern::Bind {
                             expression,
                             variable,
-                        } => bind_patterns.push((expression, variable)),
-                        _ => basic_patterns.push(p),
+                        } => {
+                            let expr = self.translate_expression(expression)?;
+                            plan = LogicalOperator::Bind(BindOp {
+                                expression: expr,
+                                variable: variable.clone(),
+                                input: Box::new(plan),
+                            });
+                        }
+                        ast::GraphPattern::Optional(inner) => {
+                            let inner_plan = self.translate_graph_pattern(inner)?;
+                            if matches!(plan, LogicalOperator::Empty) {
+                                plan = inner_plan;
+                            } else {
+                                plan = LogicalOperator::LeftJoin(LeftJoinOp {
+                                    left: Box::new(plan),
+                                    right: Box::new(inner_plan),
+                                    condition: None,
+                                });
+                            }
+                        }
+                        ast::GraphPattern::Minus(inner) => {
+                            let inner_plan = self.translate_graph_pattern(inner)?;
+                            if !matches!(plan, LogicalOperator::Empty) {
+                                plan = LogicalOperator::AntiJoin(AntiJoinOp {
+                                    left: Box::new(plan),
+                                    right: Box::new(inner_plan),
+                                });
+                            }
+                        }
+                        // InlineData with UNDEF entries: translate as a Union of
+                        // filtered copies of the base plan.
+                        ast::GraphPattern::InlineData(data)
+                            if data
+                                .values
+                                .iter()
+                                .any(|row| row.iter().any(Option::is_none)) =>
+                        {
+                            if matches!(plan, LogicalOperator::Empty) {
+                                plan = self.translate_graph_pattern(
+                                    &ast::GraphPattern::InlineData(data.clone()),
+                                )?;
+                            } else {
+                                let mut branches = Vec::new();
+                                for row in &data.values {
+                                    let mut conditions: Vec<LogicalExpression> = Vec::new();
+                                    for (var, val) in data.variables.iter().zip(row.iter()) {
+                                        if let Some(dv) = val {
+                                            let value = self.data_value_to_value(dv);
+                                            conditions.push(LogicalExpression::Binary {
+                                                left: Box::new(LogicalExpression::Variable(
+                                                    var.clone(),
+                                                )),
+                                                op: BinaryOp::Eq,
+                                                right: Box::new(LogicalExpression::Literal(value)),
+                                            });
+                                        }
+                                    }
+                                    if conditions.is_empty() {
+                                        branches.push(plan.clone());
+                                    } else {
+                                        let combined = conditions
+                                            .into_iter()
+                                            .reduce(|acc, c| LogicalExpression::Binary {
+                                                left: Box::new(acc),
+                                                op: BinaryOp::And,
+                                                right: Box::new(c),
+                                            })
+                                            .expect("conditions non-empty");
+                                        branches.push(wrap_filter(plan.clone(), combined));
+                                    }
+                                }
+                                plan = if branches.len() == 1 {
+                                    branches.into_iter().next().expect("single branch")
+                                } else {
+                                    LogicalOperator::Union(UnionOp { inputs: branches })
+                                };
+                            }
+                        }
+                        _ => {
+                            let p_plan = self.translate_graph_pattern(p)?;
+                            plan = self.join_patterns(plan, p_plan);
+                        }
                     }
                 }
 
-                // 1. Translate and join basic/required patterns
-                let mut plan = LogicalOperator::Empty;
-                for p in basic_patterns {
-                    let p_plan = self.translate_graph_pattern(p)?;
-                    plan = self.join_patterns(plan, p_plan);
-                }
-
-                // 2. Apply BIND expressions (adds computed columns)
-                for (expression, variable) in bind_patterns {
-                    let expr = self.translate_expression(expression)?;
-                    plan = LogicalOperator::Bind(BindOp {
-                        expression: expr,
-                        variable: variable.clone(),
-                        input: Box::new(plan),
-                    });
-                }
-
-                // 3. Apply OPTIONAL patterns (left outer joins)
-                for inner in optional_patterns {
-                    let inner_plan = self.translate_graph_pattern(inner)?;
-                    if matches!(plan, LogicalOperator::Empty) {
-                        plan = inner_plan;
-                    } else {
-                        plan = LogicalOperator::LeftJoin(LeftJoinOp {
-                            left: Box::new(plan),
-                            right: Box::new(inner_plan),
-                            condition: None,
-                        });
-                    }
-                }
-
-                // 4. Apply MINUS patterns (anti joins)
-                for inner in minus_patterns {
-                    let inner_plan = self.translate_graph_pattern(inner)?;
-                    if !matches!(plan, LogicalOperator::Empty) {
-                        plan = LogicalOperator::AntiJoin(AntiJoinOp {
-                            left: Box::new(plan),
-                            right: Box::new(inner_plan),
-                        });
-                    }
-                }
-
-                // 4b. Apply FILTER NOT EXISTS as anti joins
+                // Apply FILTER NOT EXISTS as anti joins
                 for inner in not_exists_patterns {
                     let inner_plan = self.translate_graph_pattern(inner)?;
                     if !matches!(plan, LogicalOperator::Empty) {
@@ -827,13 +915,12 @@ impl SparqlTranslator {
 
                 let step = if self.is_simple_path(path) {
                     let pred = self.translate_property_path(path)?;
-                    LogicalOperator::TripleScan(TripleScanOp {
-                        subject: current_subject.clone(),
-                        predicate: pred,
-                        object: next_object.clone(),
-                        graph: graph.clone(),
-                        input: None,
-                    })
+                    self.make_triple_scan(
+                        current_subject.clone(),
+                        pred,
+                        next_object.clone(),
+                        graph.clone(),
+                    )
                 } else {
                     // Complex path (ZeroOrMore, OneOrMore, etc.): recurse
                     let sub_triple = ast::TriplePattern {
@@ -860,13 +947,12 @@ impl SparqlTranslator {
             let mut branches = Vec::new();
             for alt_path in alternatives {
                 let pred = self.translate_property_path(alt_path)?;
-                branches.push(LogicalOperator::TripleScan(TripleScanOp {
-                    subject: subject.clone(),
-                    predicate: pred,
-                    object: object.clone(),
-                    graph: graph.clone(),
-                    input: None,
-                }));
+                branches.push(self.make_triple_scan(
+                    subject.clone(),
+                    pred,
+                    object.clone(),
+                    graph.clone(),
+                ));
             }
 
             return Ok(LogicalOperator::Union(UnionOp { inputs: branches }));
@@ -906,13 +992,12 @@ impl SparqlTranslator {
         let predicate = self.translate_property_path(&triple.predicate)?;
         let object = self.translate_triple_term(&triple.object)?;
 
-        Ok(LogicalOperator::TripleScan(TripleScanOp {
+        Ok(self.make_triple_scan(
             subject,
             predicate,
             object,
-            graph: self.graph_context_stack.last().cloned(),
-            input: None,
-        }))
+            self.graph_context_stack.last().cloned(),
+        ))
     }
 
     fn translate_triple_term(&mut self, term: &ast::TripleTerm) -> Result<TripleComponent> {
@@ -1634,13 +1719,12 @@ impl SparqlTranslator {
                             excluded: &[&ast::Iri]|
          -> Result<LogicalOperator> {
             let pred_var = format!("_:neg_pred{}", translator.next_anon());
-            let scan = LogicalOperator::TripleScan(TripleScanOp {
-                subject: subj,
-                predicate: TripleComponent::Variable(pred_var.clone()),
-                object: obj,
-                graph: graph.clone(),
-                input: None,
-            });
+            let scan = translator.make_triple_scan(
+                subj,
+                TripleComponent::Variable(pred_var.clone()),
+                obj,
+                graph.clone(),
+            );
 
             if excluded.is_empty() {
                 return Ok(scan);
@@ -1735,42 +1819,14 @@ impl SparqlTranslator {
 
         let mut branches = Vec::new();
 
-        // 0-hop: reflexive matches from subjects of the predicate
-        let fresh_obj = TripleComponent::Variable(format!("_:refl{}", self.next_anon()));
-        let pred = self.translate_property_path(inner_path)?;
-        let subj_scan = LogicalOperator::TripleScan(TripleScanOp {
-            subject: subject.clone(),
-            predicate: pred,
-            object: fresh_obj,
-            graph: graph.clone(),
-            input: None,
-        });
-        let subj_reflexive = self.project_reflexive(&subject, &object, subj_scan)?;
-        branches.push(subj_reflexive);
+        // 0-hop reflexive branches
+        self.add_reflexive_branches(&subject, &object, inner_path, &graph, &mut branches)?;
 
-        // 0-hop: reflexive matches from objects of the predicate.
-        // Only needed when the subject is a variable (unbound). When the subject is
-        // a fixed term (IRI/Literal), the subject reflexive branch already handles
-        // the 0-hop case, and this branch would produce spurious matches.
-        if matches!(&subject, TripleComponent::Variable(_)) {
-            let fresh_subj = TripleComponent::Variable(format!("_:refl{}", self.next_anon()));
-            let pred2 = self.translate_property_path(inner_path)?;
-            let obj_scan = LogicalOperator::TripleScan(TripleScanOp {
-                subject: fresh_subj,
-                predicate: pred2,
-                object: object.clone(),
-                graph: graph.clone(),
-                input: None,
-            });
-            let obj_reflexive = self.project_reflexive_from_object(&subject, &object, obj_scan)?;
-            branches.push(obj_reflexive);
-        }
-
-        // 1+ hops: same as OneOrMore
+        // 1+ hops: same as OneOrMore (wrapped in projection to match reflexive column count)
         for depth in 1..=MAX_DEPTH {
             let branch =
                 self.translate_fixed_depth_path(inner_path, &subject, &object, &graph, depth)?;
-            branches.push(branch);
+            branches.push(self.project_path_endpoints(&subject, &object, branch));
         }
 
         let union = LogicalOperator::Union(UnionOp { inputs: branches });
@@ -1793,41 +1849,80 @@ impl SparqlTranslator {
 
         let mut branches = Vec::new();
 
-        // 0-hop: reflexive matches from subjects of the predicate
-        let fresh_obj = TripleComponent::Variable(format!("_:refl{}", self.next_anon()));
-        let pred = self.translate_property_path(inner_path)?;
-        let subj_scan = LogicalOperator::TripleScan(TripleScanOp {
-            subject: subject.clone(),
-            predicate: pred,
-            object: fresh_obj,
-            graph: graph.clone(),
-            input: None,
-        });
-        let subj_reflexive = self.project_reflexive(&subject, &object, subj_scan)?;
-        branches.push(subj_reflexive);
+        // 0-hop reflexive branches
+        self.add_reflexive_branches(&subject, &object, inner_path, &graph, &mut branches)?;
 
-        // 0-hop: reflexive matches from objects of the predicate.
-        // Only needed when the subject is a variable (see zero_or_more for rationale).
-        if matches!(&subject, TripleComponent::Variable(_)) {
-            let fresh_subj = TripleComponent::Variable(format!("_:refl{}", self.next_anon()));
-            let pred2 = self.translate_property_path(inner_path)?;
-            let obj_scan = LogicalOperator::TripleScan(TripleScanOp {
-                subject: fresh_subj,
-                predicate: pred2,
-                object: object.clone(),
-                graph: graph.clone(),
-                input: None,
-            });
-            let obj_reflexive = self.project_reflexive_from_object(&subject, &object, obj_scan)?;
-            branches.push(obj_reflexive);
-        }
-
-        // 1-hop: exactly one traversal of the predicate
+        // 1-hop: exactly one traversal of the predicate (wrapped to match reflexive column count)
         let one_hop = self.translate_fixed_depth_path(inner_path, &subject, &object, &graph, 1)?;
-        branches.push(one_hop);
+        branches.push(self.project_path_endpoints(&subject, &object, one_hop));
 
         let union = LogicalOperator::Union(UnionOp { inputs: branches });
         Ok(wrap_distinct(union))
+    }
+
+    /// Adds 0-hop reflexive branches for `ZeroOrMore` and `ZeroOrOne` paths.
+    fn add_reflexive_branches(
+        &mut self,
+        subject: &TripleComponent,
+        object: &TripleComponent,
+        inner_path: &ast::PropertyPath,
+        graph: &Option<TripleComponent>,
+        branches: &mut Vec<LogicalOperator>,
+    ) -> Result<()> {
+        if matches!(subject, TripleComponent::Variable(_)) {
+            let fresh_obj = TripleComponent::Variable(format!("_:refl{}", self.next_anon()));
+            let pred = self.translate_property_path(inner_path)?;
+            let subj_scan = self.make_triple_scan(subject.clone(), pred, fresh_obj, graph.clone());
+            let subj_reflexive = self.project_reflexive(subject, object, subj_scan)?;
+            branches.push(subj_reflexive);
+
+            let fresh_subj = TripleComponent::Variable(format!("_:refl{}", self.next_anon()));
+            let pred2 = self.translate_property_path(inner_path)?;
+            let obj_scan = self.make_triple_scan(fresh_subj, pred2, object.clone(), graph.clone());
+            let obj_reflexive = self.project_reflexive_from_object(subject, object, obj_scan)?;
+            branches.push(obj_reflexive);
+        } else if let TripleComponent::Variable(obj_var) = object {
+            let subj_expr = self.triple_component_to_expression(subject);
+            let reflexive = LogicalOperator::Bind(BindOp {
+                expression: subj_expr,
+                variable: obj_var.clone(),
+                input: Box::new(LogicalOperator::Empty),
+            });
+            branches.push(reflexive);
+        }
+        Ok(())
+    }
+
+    /// Wraps a depth-branch operator in a projection that outputs only the
+    /// subject and object variables, stripping companion columns so that all
+    /// union branches have consistent column counts for DISTINCT.
+    fn project_path_endpoints(
+        &self,
+        subject: &TripleComponent,
+        object: &TripleComponent,
+        input: LogicalOperator,
+    ) -> LogicalOperator {
+        let mut projections = Vec::new();
+        if let TripleComponent::Variable(s) = subject {
+            projections.push(Projection {
+                expression: LogicalExpression::Variable(s.clone()),
+                alias: Some(s.clone()),
+            });
+        }
+        if let TripleComponent::Variable(o) = object {
+            projections.push(Projection {
+                expression: LogicalExpression::Variable(o.clone()),
+                alias: Some(o.clone()),
+            });
+        }
+        if projections.is_empty() {
+            return input;
+        }
+        LogicalOperator::Project(ProjectOp {
+            projections,
+            input: Box::new(input),
+            pass_through_input: false,
+        })
     }
 
     /// Translates a property path at a fixed depth (number of hops).
@@ -1844,13 +1939,12 @@ impl SparqlTranslator {
     ) -> Result<LogicalOperator> {
         if depth == 1 {
             let predicate = self.translate_property_path(path)?;
-            return Ok(LogicalOperator::TripleScan(TripleScanOp {
-                subject: subject.clone(),
+            return Ok(self.make_triple_scan(
+                subject.clone(),
                 predicate,
-                object: object.clone(),
-                graph: graph.clone(),
-                input: None,
-            }));
+                object.clone(),
+                graph.clone(),
+            ));
         }
 
         // Multiple hops: chain triple scans with intermediate variables
@@ -1866,13 +1960,12 @@ impl SparqlTranslator {
             };
 
             let predicate = self.translate_property_path(path)?;
-            let scan = LogicalOperator::TripleScan(TripleScanOp {
-                subject: current_subject,
+            let scan = self.make_triple_scan(
+                current_subject,
                 predicate,
-                object: next_object.clone(),
-                graph: graph.clone(),
-                input: None,
-            });
+                next_object.clone(),
+                graph.clone(),
+            );
 
             if first {
                 plan = scan;
@@ -1965,6 +2058,53 @@ impl SparqlTranslator {
                 LogicalExpression::Literal(Value::String(format!("_:{label}").into()))
             }
         }
+    }
+
+    /// Converts a parsed `DatasetClause` into a `DatasetRestriction` for the logical plan.
+    fn translate_dataset_clause(
+        &self,
+        dataset: &Option<ast::DatasetClause>,
+    ) -> Option<DatasetRestriction> {
+        let clause = dataset.as_ref()?;
+
+        let default_graphs: Vec<String> = clause
+            .default_graphs
+            .iter()
+            .map(|iri| self.resolve_iri(iri))
+            .collect();
+        let named_graphs: Vec<String> = clause
+            .named_graphs
+            .iter()
+            .map(|iri| self.resolve_iri(iri))
+            .collect();
+
+        // Only create a restriction if at least one FROM or FROM NAMED is present
+        if default_graphs.is_empty() && named_graphs.is_empty() {
+            return None;
+        }
+
+        Some(DatasetRestriction {
+            default_graphs,
+            named_graphs,
+        })
+    }
+
+    /// Creates a `TripleScanOp` with the current graph context and dataset restriction.
+    fn make_triple_scan(
+        &self,
+        subject: TripleComponent,
+        predicate: TripleComponent,
+        object: TripleComponent,
+        graph: Option<TripleComponent>,
+    ) -> LogicalOperator {
+        LogicalOperator::TripleScan(TripleScanOp {
+            subject,
+            predicate,
+            object,
+            graph,
+            input: None,
+            dataset: self.dataset.clone(),
+        })
     }
 
     fn next_anon(&mut self) -> u32 {

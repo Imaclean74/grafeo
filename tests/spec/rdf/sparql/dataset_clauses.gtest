@@ -20,7 +20,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: from_specifies_default_graph
-    skip: "FROM clause not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -40,7 +39,6 @@ tests:
         - [http://ex.org/gus]
 
   - name: from_multiple_default_graphs
-    skip: "FROM clause not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -66,7 +64,6 @@ tests:
       count: 2
 
   - name: from_restricts_visible_data
-    skip: "FROM clause not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -128,7 +125,6 @@ tests:
         - [http://ex.org/alix, Amsterdam]
 
   - name: from_named_multiple
-    skip: "FROM NAMED not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -162,7 +158,6 @@ tests:
       count: 2
 
   - name: from_named_with_graph_variable
-    skip: "FROM NAMED not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -200,7 +195,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: from_and_from_named_combined
-    skip: "FROM and FROM NAMED not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -288,7 +282,6 @@ tests:
       count: 2
 
   - name: from_named_excludes_unlisted_graph
-    skip: "FROM NAMED not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -315,7 +308,6 @@ tests:
       empty: true
 
   - name: from_same_graph_twice_no_duplicates
-    skip: "FROM clause not enforced at execution level"
     setup:
       - |
         INSERT DATA {
@@ -336,7 +328,6 @@ tests:
         - [Butch]
 
   - name: from_named_graph_variable_binds_iri
-    skip: "FROM NAMED not enforced at execution level"
     setup:
       - |
         INSERT DATA {

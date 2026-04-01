@@ -1008,6 +1008,11 @@ impl GqlTranslator {
                     | ast::PathSearchPrefix::ShortestKGroups(_)
             )
         );
+        // ANY returns any single matching path (not necessarily shortest)
+        let use_any_limit = matches!(
+            &match_clause.search_prefix,
+            Some(ast::PathSearchPrefix::Any)
+        );
 
         // Collect variables for each pattern to detect shared variables
         let pattern_vars: Vec<HashSet<String>> = match_clause
@@ -1027,6 +1032,17 @@ impl GqlTranslator {
             // translate independently and join; otherwise chain as before.
             let pattern_input = if shared.is_empty() { plan.take() } else { None };
 
+            // Check per-pattern search prefix (e.g., p = ANY SHORTEST (...))
+            let per_pattern_shortest = matches!(
+                &aliased_pattern.search_prefix,
+                Some(
+                    ast::PathSearchPrefix::AnyShortest
+                        | ast::PathSearchPrefix::AllShortest
+                        | ast::PathSearchPrefix::ShortestK(_)
+                        | ast::PathSearchPrefix::ShortestKGroups(_)
+                )
+            );
+
             let pattern_plan = if let Some(path_function) = &aliased_pattern.path_function {
                 self.translate_shortest_path(
                     &aliased_pattern.pattern,
@@ -1034,8 +1050,12 @@ impl GqlTranslator {
                     *path_function,
                     pattern_input,
                 )?
-            } else if use_shortest {
-                let pf = match &match_clause.search_prefix {
+            } else if use_shortest || per_pattern_shortest {
+                let prefix = aliased_pattern
+                    .search_prefix
+                    .as_ref()
+                    .or(match_clause.search_prefix.as_ref());
+                let pf = match prefix {
                     Some(ast::PathSearchPrefix::AllShortest) => ast::PathFunction::AllShortestPaths,
                     _ => ast::PathFunction::ShortestPath,
                 };
@@ -1079,12 +1099,21 @@ impl GqlTranslator {
             bound_vars.extend(current_vars.iter().cloned());
         }
 
-        plan.ok_or_else(|| {
+        let mut result = plan.ok_or_else(|| {
             Error::Query(QueryError::new(
                 QueryErrorKind::Semantic,
                 "Empty MATCH clause",
             ))
-        })
+        })?;
+
+        // ANY (without SHORTEST): wrap in LIMIT 1 to return a single matching path.
+        // ANY SHORTEST uses ShortestPathOperator which inherently returns one
+        // path per source/target pair, so no LIMIT 1 wrapper is needed.
+        if use_any_limit {
+            result = wrap_limit(result, 1);
+        }
+
+        Ok(result)
     }
 
     /// Translates `CALL { subquery }` to an Apply operator with proper scope.

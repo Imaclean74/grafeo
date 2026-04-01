@@ -1017,6 +1017,35 @@ impl JsGrafeoDB {
     ) -> Result<QueryResult> {
         self.execute_language_impl("sparql", query, params).await
     }
+
+    /// Execute a query in a named language (e.g. `"graphql-rdf"`).
+    #[napi(js_name = "executeLanguage")]
+    pub async fn execute_language(
+        &self,
+        language: String,
+        query: String,
+        params: Option<serde_json::Value>,
+    ) -> Result<QueryResult> {
+        let db = self.inner.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let db = db.read();
+            execute_language_query(&db, &query, &language, params.as_ref())
+        })
+        .await
+        .map_err(|e| napi::Error::from_reason(e.to_string()))??;
+
+        let db = self.inner.read();
+        let (nodes, edges) = extract_entities(&result, &db);
+
+        Ok(QueryResult::with_metrics(
+            result.columns,
+            result.rows,
+            nodes,
+            edges,
+            result.execution_time_ms,
+            result.rows_scanned,
+        ))
+    }
 }
 
 /// Execute a query in a given language with optional JSON params.
@@ -1077,16 +1106,11 @@ pub(crate) fn extract_entities(
     result: &EngineQueryResult,
     _db: &GrafeoDB,
 ) -> (Vec<JsNode>, Vec<JsEdge>) {
-    let (raw_nodes, raw_edges) = grafeo_bindings_common::entity::extract_entities(result);
-    let nodes = raw_nodes
-        .into_iter()
-        .map(|n| JsNode::new(n.id, n.labels, n.properties))
-        .collect();
-    let edges = raw_edges
-        .into_iter()
-        .map(|e| JsEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties))
-        .collect();
-    (nodes, edges)
+    grafeo_bindings_common::entity::extract_and_map(
+        result,
+        |n| JsNode::new(n.id, n.labels, n.properties),
+        |e| JsEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties),
+    )
 }
 
 /// Convert a Grafeo Value to serde_json::Value.

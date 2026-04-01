@@ -4,6 +4,7 @@
 //! and physical execution. Both GQL and Cypher queries are translated to this
 //! common representation.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use grafeo_common::types::Value;
@@ -75,6 +76,10 @@ pub struct LogicalPlan {
     pub explain: bool,
     /// When true, execute the query and return per-operator runtime metrics.
     pub profile: bool,
+    /// Default parameter values from variable declarations (e.g., GraphQL
+    /// `query($limit: Int = 2)`). The processor merges these with caller-supplied
+    /// params, giving caller values higher precedence.
+    pub default_params: HashMap<String, Value>,
 }
 
 impl LogicalPlan {
@@ -84,6 +89,7 @@ impl LogicalPlan {
             root,
             explain: false,
             profile: false,
+            default_params: HashMap::new(),
         }
     }
 
@@ -93,6 +99,7 @@ impl LogicalPlan {
             root,
             explain: true,
             profile: false,
+            default_params: HashMap::new(),
         }
     }
 
@@ -102,6 +109,7 @@ impl LogicalPlan {
             root,
             explain: false,
             profile: true,
+            default_params: HashMap::new(),
         }
     }
 }
@@ -1399,6 +1407,21 @@ pub struct RemoveLabelOp {
 
 // ==================== RDF/SPARQL Operators ====================
 
+/// SPARQL dataset restriction from FROM / FROM NAMED clauses.
+///
+/// When present, restricts which graphs are visible to a triple scan:
+/// - `default_graphs`: IRIs whose union forms the default graph (basic patterns).
+/// - `named_graphs`: IRIs that enumerate the available named graphs (GRAPH patterns).
+#[derive(Debug, Clone, Default)]
+pub struct DatasetRestriction {
+    /// FROM IRIs: the default graph is the union of these named graphs.
+    /// Empty means no FROM clause was specified (unrestricted default graph).
+    pub default_graphs: Vec<String>,
+    /// FROM NAMED IRIs: only these named graphs are available to GRAPH patterns.
+    /// Empty means no FROM NAMED clause was specified (all named graphs visible).
+    pub named_graphs: Vec<String>,
+}
+
 /// Scan RDF triples matching a pattern.
 #[derive(Debug, Clone)]
 pub struct TripleScanOp {
@@ -1412,6 +1435,8 @@ pub struct TripleScanOp {
     pub graph: Option<TripleComponent>,
     /// Input operator (for chained patterns).
     pub input: Option<Box<LogicalOperator>>,
+    /// Dataset restriction from SPARQL FROM / FROM NAMED clauses.
+    pub dataset: Option<DatasetRestriction>,
 }
 
 /// A component of a triple pattern.

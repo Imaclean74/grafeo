@@ -3,6 +3,7 @@
 // Discovers all .gtest files under tests/spec/, parses them, and creates
 // parameterized xUnit tests that execute queries and assert expected results.
 
+using System;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -38,17 +39,8 @@ public class SpecTests : IDisposable
     /// <summary>Path to the datasets directory.</summary>
     private static readonly string DatasetsDir = Path.Combine(SpecDir, "datasets");
 
-    /// <summary>Map of language names to GrafeoDB method names for availability checks.</summary>
-    private static readonly Dictionary<string, string> LanguageMethods = new()
-    {
-        ["gql"] = "Execute",
-        ["cypher"] = "ExecuteCypher",
-        ["gremlin"] = "ExecuteGremlin",
-        ["graphql"] = "ExecuteGraphql",
-        ["sparql"] = "ExecuteSparql",
-        ["sql-pgq"] = "ExecuteSql",
-        ["sql_pgq"] = "ExecuteSql",
-    };
+    /// <summary>Cached set of compiled feature flags from db.Info().</summary>
+    private static readonly HashSet<string> CompiledFeatures = LoadCompiledFeatures();
 
     private GrafeoDB? _db;
 
@@ -90,14 +82,14 @@ public class SpecTests : IDisposable
         Assert.NotNull(tc);
 
         var meta = gtestFile.Meta;
-        var language = variantLang ?? meta.Language;
+        var language = variantLang ?? tc.Language ?? meta.Language;
 
         // Check language availability
         if (language != "gql" && language != "")
         {
-            if (!HasLanguageMethod(language))
+            if (!HasFeature(language))
             {
-                Skip.If(true, $"Language '{language}' not available in this build");
+                Skip.If(true, $"Feature '{language}' not available in this build");
                 return;
             }
         }
@@ -105,9 +97,9 @@ public class SpecTests : IDisposable
         // Check requires
         foreach (var req in meta.Requires)
         {
-            if (!HasLanguageMethod(req))
+            if (!HasFeature(req))
             {
-                Skip.If(true, $"Required language '{req}' not available");
+                Skip.If(true, $"Required feature '{req}' not available");
                 return;
             }
         }
@@ -134,12 +126,15 @@ public class SpecTests : IDisposable
 
             Assert.True(queries.Count > 0, $"No query or statements in test '{tc.Name}'");
 
+            // Coerce params (only applied to the last query)
+            var parameters = CoerceParams(tc.Params);
+
             var expect = tc.Expect;
 
             // Error tests
             if (expect.Error is not null)
             {
-                RunErrorTest(_db, language, queries, expect.Error);
+                RunErrorTest(_db, language, queries, expect.Error, parameters);
                 return;
             }
 
@@ -147,8 +142,8 @@ public class SpecTests : IDisposable
             for (var i = 0; i < queries.Count - 1; i++)
                 ExecuteQuery(_db, language, queries[i]);
 
-            // Last query: capture result
-            var result = ExecuteQuery(_db, language, queries[^1]);
+            // Last query: capture result (with params if present)
+            var result = ExecuteQuery(_db, language, queries[^1], parameters);
 
             // Column assertion
             if (expect.Columns.Count > 0)
@@ -255,9 +250,24 @@ public class SpecTests : IDisposable
     // Query execution
     // =========================================================================
 
-    /// <summary>Execute a query in the specified language.</summary>
-    private static QueryResult ExecuteQuery(GrafeoDB db, string language, string query)
+    /// <summary>Execute a query in the specified language, optionally with parameters.</summary>
+    private static QueryResult ExecuteQuery(
+        GrafeoDB db, string language, string query,
+        Dictionary<string, object?>? parameters = null)
     {
+        // When parameters are provided, use the universal ExecuteLanguage path
+        // which supports all languages with params in a single call.
+        if (parameters is not null)
+        {
+            var lang = language switch
+            {
+                "" => "gql",
+                "sql-pgq" or "sql_pgq" => "sql",
+                _ => language,
+            };
+            return db.ExecuteLanguage(lang, query, parameters);
+        }
+
         return language switch
         {
             "gql" or "" => db.Execute(query),
@@ -283,12 +293,55 @@ public class SpecTests : IDisposable
         return result;
     }
 
-    /// <summary>Check if a language method exists on GrafeoDB.</summary>
-    private static bool HasLanguageMethod(string language)
+    /// <summary>
+    /// Coerce raw string parameter values to typed C# objects.
+    /// Mirrors the Rust build.rs coercion order: int, float, bool, string.
+    /// Returns null when the params dict is empty (so callers can skip it).
+    /// </summary>
+    private static Dictionary<string, object?>? CoerceParams(Dictionary<string, string> rawParams)
     {
-        if (!LanguageMethods.TryGetValue(language, out var methodName))
-            return false;
-        return typeof(GrafeoDB).GetMethod(methodName, [typeof(string)]) is not null;
+        if (rawParams.Count == 0)
+            return null;
+
+        var coerced = new Dictionary<string, object?>(rawParams.Count);
+        foreach (var (key, value) in rawParams)
+        {
+            if (long.TryParse(value, System.Globalization.NumberStyles.Integer,
+                    System.Globalization.CultureInfo.InvariantCulture, out var l))
+            {
+                coerced[key] = l;
+            }
+            else if (double.TryParse(value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var d))
+            {
+                coerced[key] = d;
+            }
+            else if (value == "true")
+            {
+                coerced[key] = true;
+            }
+            else if (value == "false")
+            {
+                coerced[key] = false;
+            }
+            else
+            {
+                coerced[key] = value;
+            }
+        }
+
+        return coerced;
+    }
+
+    /// <summary>Check if a feature (language or capability) is available.</summary>
+    private static bool HasFeature(string requirement)
+    {
+        if (requirement is "gql" or "") return true;
+        var key = requirement.Replace('_', '-');
+        // Compound language key: "graphql-rdf" requires both "graphql" and "rdf"
+        if (key == "graphql-rdf")
+            return CompiledFeatures.Contains("graphql") && CompiledFeatures.Contains("rdf");
+        return CompiledFeatures.Contains(key);
     }
 
     // =========================================================================
@@ -316,15 +369,16 @@ public class SpecTests : IDisposable
     // =========================================================================
 
     private static void RunErrorTest(
-        GrafeoDB db, string language, List<string> queries, string expectedSubstring)
+        GrafeoDB db, string language, List<string> queries, string expectedSubstring,
+        Dictionary<string, object?>? parameters = null)
     {
         // Execute all-but-last normally
         for (var i = 0; i < queries.Count - 1; i++)
             ExecuteQuery(db, language, queries[i]);
 
-        // Last query should fail
+        // Last query should fail (with params if present)
         var ex = Assert.ThrowsAny<Exception>(() =>
-            ExecuteQuery(db, language, queries[^1]));
+            ExecuteQuery(db, language, queries[^1], parameters));
         Assert.Contains(expectedSubstring, ex.Message);
     }
 
@@ -703,6 +757,43 @@ public class SpecTests : IDisposable
         {
             return false;
         }
+    }
+
+    private static HashSet<string> LoadCompiledFeatures()
+    {
+        try
+        {
+            using var db = GrafeoDB.Memory();
+            var info = db.Info();
+            if (info.TryGetValue("features", out var featuresObj)
+                && featuresObj is IEnumerable<object?> features)
+            {
+                return features
+                    .Where(f => f is not null)
+                    .Select(f => f!.ToString()!)
+                    .ToHashSet();
+            }
+        }
+        catch (DllNotFoundException)
+        {
+            // Native library not available
+        }
+        catch (BadImageFormatException)
+        {
+            // Native library not available
+        }
+        catch (TypeInitializationException ex)
+        {
+            if (ex.InnerException is DllNotFoundException or BadImageFormatException)
+            {
+                // Native library not available
+            }
+            else
+            {
+                throw;
+            }
+        }
+        return [];
     }
 
     private static string FindRepoRoot()

@@ -67,46 +67,78 @@ async function loadDataset(db, datasetName) {
   }
 }
 
+/**
+ * Coerce raw param string values to proper JS types.
+ * Mirrors the type coercion in crates/grafeo-spec-tests/build.rs.
+ */
+function coerceParams(rawParams) {
+  if (!rawParams || Object.keys(rawParams).length === 0) return undefined
+  const result = {}
+  for (const [key, val] of Object.entries(rawParams)) {
+    if (val === 'true') {
+      result[key] = true
+    } else if (val === 'false') {
+      result[key] = false
+    } else {
+      const num = Number(val)
+      if (!isNaN(num) && val.trim() !== '') {
+        result[key] = num
+      } else {
+        result[key] = val
+      }
+    }
+  }
+  return result
+}
+
 /** Execute a query in the specified language. */
-async function executeQuery(db, language, query) {
+async function executeQuery(db, language, query, params) {
   switch (language) {
     case 'gql':
     case '':
-      return db.execute(query)
+      return params ? db.execute(query, params) : db.execute(query)
     case 'cypher':
       if (!db.executeCypher) throw new Error('Cypher not available')
-      return db.executeCypher(query)
+      return params ? db.executeCypher(query, params) : db.executeCypher(query)
     case 'gremlin':
       if (!db.executeGremlin) throw new Error('Gremlin not available')
-      return db.executeGremlin(query)
+      return params ? db.executeGremlin(query, params) : db.executeGremlin(query)
     case 'graphql':
       if (!db.executeGraphql) throw new Error('GraphQL not available')
-      return db.executeGraphql(query)
+      return params ? db.executeGraphql(query, params) : db.executeGraphql(query)
     case 'sparql':
       if (!db.executeSparql) throw new Error('SPARQL not available')
-      return db.executeSparql(query)
+      return params ? db.executeSparql(query, params) : db.executeSparql(query)
     case 'sql-pgq':
     case 'sql_pgq':
       if (!db.executeSql) throw new Error('SQL/PGQ not available')
-      return db.executeSql(query)
+      return params ? db.executeSql(query, params) : db.executeSql(query)
     default:
+      if (db.executeLanguage) return db.executeLanguage(language, query)
       throw new Error(`Unsupported language: ${language}`)
   }
 }
 
-/** Check if a language method is available on the GrafeoDB instance. */
-function isLanguageAvailable(db, language) {
-  switch (language) {
-    case 'gql': case '': return true
-    case 'cypher': return typeof db.executeCypher === 'function'
-    case 'gremlin': return typeof db.executeGremlin === 'function'
-    case 'graphql': return typeof db.executeGraphql === 'function'
-    case 'sparql': return typeof db.executeSparql === 'function'
-    case 'rdf': return typeof db.executeSparql === 'function'
-    case 'sql-pgq': case 'sql_pgq': return typeof db.executeSql === 'function'
-    case 'sparql': return typeof db.executeSparql === 'function'
-    default: return false
+/** Cached set of compiled feature flags, populated on first use. */
+let _features = null
+function getFeatures(db) {
+  if (!_features) {
+    const info = db.info()
+    _features = new Set(info.features || [])
   }
+  return _features
+}
+
+/** Check if a language or feature requirement is available. */
+function isAvailable(db, requirement) {
+  if (requirement === 'gql' || requirement === '') return true
+  const key = requirement.replace(/_/g, '-')
+  // Compound language keys: "graphql-rdf" requires both "graphql" and "rdf"
+  if (key === 'graphql-rdf') {
+    const f = getFeatures(db)
+    return f.has('graphql') && f.has('rdf')
+  }
+  return getFeatures(db).has(key)
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +176,7 @@ for (const filePath of gtestFiles) {
             if (!GRAFEO_AVAILABLE) return ctx.skip()
             const db = GrafeoDB.create()
             try {
-              if (!isLanguageAvailable(db, lang)) return ctx.skip()
+              if (!isAvailable(db, lang)) return ctx.skip()
               if (meta.dataset && meta.dataset !== 'empty') {
                 await loadDataset(db, meta.dataset)
               }
@@ -166,11 +198,11 @@ for (const filePath of gtestFiles) {
         const db = GrafeoDB.create()
         try {
           // Check language availability
-          if (!isLanguageAvailable(db, meta.language)) return ctx.skip()
+          if (!isAvailable(db, meta.language)) return ctx.skip()
 
-          // Check requires: skip if binding does not expose the required method
+          // Check requires: skip if the compiled build lacks the feature
           for (const req of meta.requires) {
-            if (!isLanguageAvailable(db, req)) return ctx.skip()
+            if (!isAvailable(db, req)) return ctx.skip()
           }
 
           // Load dataset
@@ -178,7 +210,7 @@ for (const filePath of gtestFiles) {
             await loadDataset(db, meta.dataset)
           }
 
-          await runTestCase(db, tc, meta.language, meta.language || 'gql')
+          await runTestCase(db, tc, tc.language || meta.language, meta.language || 'gql')
         } finally {
           db.close()
         }
@@ -196,6 +228,9 @@ async function runTestCase(db, tc, language, setupLanguage) {
 
   const exp = tc.expect
 
+  // Coerce params (only applied to the final query)
+  const params = coerceParams(tc.params)
+
   // Determine queries
   const queries = tc.statements.length > 0 ? tc.statements : tc.query ? [tc.query] : []
   if (queries.length === 0) throw new Error(`No query or statements in test '${tc.name}'`)
@@ -206,7 +241,7 @@ async function runTestCase(db, tc, language, setupLanguage) {
       await executeQuery(db, language, queries[i])
     }
     try {
-      await executeQuery(db, language, queries[queries.length - 1])
+      await executeQuery(db, language, queries[queries.length - 1], params)
       throw new Error(`Expected error containing '${exp.error}' but query succeeded`)
     } catch (err) {
       if (err.message.startsWith('Expected error')) throw err
@@ -218,7 +253,8 @@ async function runTestCase(db, tc, language, setupLanguage) {
   // Execute all queries, capture last result
   let result
   for (let i = 0; i < queries.length; i++) {
-    result = await executeQuery(db, language, queries[i])
+    const isLast = i === queries.length - 1
+    result = await executeQuery(db, language, queries[i], isLast ? params : undefined)
   }
 
   // Column assertion (checked before value assertions)

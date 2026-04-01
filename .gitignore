@@ -46,9 +46,16 @@ package-lock.json
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# ── Native library artifacts (copied for local testing) ──────────────
+grafeo_c.dll
+grafeo_c.dylib
+libgrafeo_c.so
+
 # ── WASM ──────────────────────────────────────────────────────────────
 pkg/
 pkg-lite/
+pkg-lpg/
+pkg-rdf/
 
 # ── C# / .NET ───────────────────────────────────────────────────────
 **/obj/

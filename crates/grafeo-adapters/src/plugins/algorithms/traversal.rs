@@ -7,15 +7,14 @@ use std::collections::VecDeque;
 use std::sync::OnceLock;
 
 use grafeo_common::types::{NodeId, Value};
-use grafeo_common::utils::error::Result;
 use grafeo_common::utils::hash::{FxHashMap, FxHashSet};
 use grafeo_core::graph::Direction;
 use grafeo_core::graph::GraphStore;
 #[cfg(test)]
 use grafeo_core::graph::lpg::LpgStore;
 
-use super::super::{AlgorithmResult, ParameterDef, ParameterType, Parameters};
-use super::traits::{Control, GraphAlgorithm, NodeValueResultBuilder, TraversalEvent};
+use super::super::{AlgorithmResult, ParameterDef, ParameterType};
+use super::traits::{Control, NodeValueResultBuilder, TraversalEvent, impl_algorithm};
 
 // ============================================================================
 // BFS Implementation
@@ -382,20 +381,12 @@ fn bfs_params() -> &'static [ParameterDef] {
 /// BFS algorithm wrapper for the plugin registry.
 pub struct BfsAlgorithm;
 
-impl GraphAlgorithm for BfsAlgorithm {
-    fn name(&self) -> &str {
-        "bfs"
-    }
-
-    fn description(&self) -> &str {
-        "Breadth-first search traversal from a starting node"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        bfs_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    BfsAlgorithm,
+    name: "bfs",
+    description: "Breadth-first search traversal from a starting node",
+    params: bfs_params,
+    execute(store, params) {
         let start_id = params.get_int("start").ok_or_else(|| {
             grafeo_common::utils::error::Error::InvalidValue("start parameter required".to_string())
         })?;
@@ -436,20 +427,12 @@ fn dfs_params() -> &'static [ParameterDef] {
 /// DFS algorithm wrapper for the plugin registry.
 pub struct DfsAlgorithm;
 
-impl GraphAlgorithm for DfsAlgorithm {
-    fn name(&self) -> &str {
-        "dfs"
-    }
-
-    fn description(&self) -> &str {
-        "Depth-first search traversal from a starting node"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        dfs_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    DfsAlgorithm,
+    name: "dfs",
+    description: "Depth-first search traversal from a starting node",
+    params: dfs_params,
+    execute(store, params) {
         let start_id = params.get_int("start").ok_or_else(|| {
             grafeo_common::utils::error::Error::InvalidValue("start parameter required".to_string())
         })?;

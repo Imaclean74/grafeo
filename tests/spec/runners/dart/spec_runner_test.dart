@@ -49,25 +49,28 @@ String _normaliseLanguage(String lang) {
   };
 }
 
-/// Check whether a language is available by attempting a no-op query.
-/// Results are cached per language for the lifetime of the test run.
-final _languageAvailability = <String, bool>{};
+/// Cached set of compiled feature flags from db.info().
+Set<String>? _compiledFeatures;
 
-bool _isLanguageAvailable(String language) {
-  final key = _normaliseLanguage(language);
-  if (key == 'gql' || key.isEmpty) return true;
-  return _languageAvailability.putIfAbsent(key, () {
+Set<String> _getCompiledFeatures() {
+  if (_compiledFeatures == null) {
     final db = GrafeoDB.memory();
     try {
-      // Try a minimal query; if the language is not compiled in, this throws.
-      db.executeLanguage(key, 'MATCH (n) RETURN n LIMIT 0');
-      return true;
-    } on GrafeoException {
-      return false;
+      final info = db.info();
+      final features = info['features'] as List<dynamic>?;
+      _compiledFeatures = features?.map((e) => e.toString()).toSet() ?? {};
     } finally {
       db.close();
     }
-  });
+  }
+  return _compiledFeatures!;
+}
+
+/// Check whether a language or feature requirement is available.
+bool _isAvailable(String requirement) {
+  final key = _normaliseLanguage(requirement).replaceAll('_', '-');
+  if (key == 'gql' || key.isEmpty) return true;
+  return _getCompiledFeatures().contains(key);
 }
 
 // =============================================================================
@@ -75,12 +78,47 @@ bool _isLanguageAvailable(String language) {
 // =============================================================================
 
 /// Execute a query in the given [language] via `executeLanguage`.
-QueryResult _executeQuery(GrafeoDB db, String language, String query) {
+QueryResult _executeQuery(
+  GrafeoDB db,
+  String language,
+  String query, {
+  Map<String, String>? params,
+}) {
   final lang = _normaliseLanguage(language);
+  final coerced = _coerceParams(params);
   if (lang == 'gql' || lang.isEmpty) {
-    return db.execute(query);
+    return coerced != null
+        ? db.executeWithParams(query, coerced)
+        : db.execute(query);
   }
-  return db.executeLanguage(lang, query);
+  return db.executeLanguage(lang, query, params: coerced);
+}
+
+/// Coerce string param values to proper Dart types (int, double, bool).
+Map<String, dynamic>? _coerceParams(Map<String, String>? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final result = <String, dynamic>{};
+  for (final entry in raw.entries) {
+    final v = entry.value;
+    if (v == 'true') {
+      result[entry.key] = true;
+    } else if (v == 'false') {
+      result[entry.key] = false;
+    } else {
+      final asInt = int.tryParse(v);
+      if (asInt != null) {
+        result[entry.key] = asInt;
+      } else {
+        final asDouble = double.tryParse(v);
+        if (asDouble != null) {
+          result[entry.key] = asDouble;
+        } else {
+          result[entry.key] = v;
+        }
+      }
+    }
+  }
+  return result;
 }
 
 /// Load a .setup dataset file into [db] using GQL.
@@ -390,9 +428,11 @@ class _TestCase {
   List<String> statements;
   List<String> setup;
   String? skip;
+  String? language;
   _Expect expect;
   Map<String, String> variants;
   List<String> tags;
+  Map<String, String> params;
 
   _TestCase({
     this.name = '',
@@ -400,14 +440,17 @@ class _TestCase {
     List<String>? statements,
     List<String>? setup,
     this.skip,
+    this.language,
     _Expect? expect,
     Map<String, String>? variants,
     List<String>? tags,
+    Map<String, String>? params,
   })  : statements = statements ?? [],
         setup = setup ?? [],
         expect = expect ?? _Expect(),
         variants = variants ?? {},
-        tags = tags ?? [];
+        tags = tags ?? [],
+        params = params ?? {};
 }
 
 /// Parsed .gtest file.
@@ -536,6 +579,9 @@ _TestCase _parseSingleTest(_ParseContext ctx) {
       case 'skip':
         tc.skip = _unquote(value);
         ctx.idx++;
+      case 'language':
+        tc.language = _unquote(value);
+        ctx.idx++;
       case 'setup':
         ctx.idx++;
         tc.setup = _parseStringList(ctx);
@@ -547,7 +593,7 @@ _TestCase _parseSingleTest(_ParseContext ctx) {
         ctx.idx++;
       case 'params':
         ctx.idx++;
-        _parseMap(ctx, 6); // consume but discard (not used in Dart runner)
+        tc.params = _parseMap(ctx, 6);
       case 'expect':
         ctx.idx++;
         tc.expect = _parseExpectBlock(ctx);
@@ -897,7 +943,8 @@ void _runTestCase(GrafeoDB db, _TestCase tc, String language,
   // Execute all queries, capture last result
   late QueryResult result;
   for (final q in queries) {
-    result = _executeQuery(db, language, q);
+    result = _executeQuery(db, language, q,
+        params: tc.params.isNotEmpty ? tc.params : null);
   }
 
   // Column assertion (checked before value assertions)
@@ -1004,7 +1051,7 @@ void main() {
             final lang = entry.key;
             final variantQuery = entry.value;
             test('${tc.name}_$lang', () {
-              if (!_isLanguageAvailable(lang)) {
+              if (!_isAvailable(lang)) {
                 markTestSkipped('Language "$lang" not available');
                 return;
               }
@@ -1038,7 +1085,7 @@ void main() {
           }
 
           // Check language availability
-          if (!_isLanguageAvailable(meta.language)) {
+          if (!_isAvailable(meta.language)) {
             markTestSkipped(
               'Language "${meta.language}" not available',
             );
@@ -1047,7 +1094,7 @@ void main() {
 
           // Check requires
           for (final req in meta.requires) {
-            if (!_isLanguageAvailable(req)) {
+            if (!_isAvailable(req)) {
               markTestSkipped(
                 'Required language "$req" not available',
               );
@@ -1062,7 +1109,7 @@ void main() {
               _loadDataset(db, meta.dataset);
             }
 
-            _runTestCase(db, tc, meta.language);
+            _runTestCase(db, tc, tc.language ?? meta.language);
           } finally {
             db.close();
           }

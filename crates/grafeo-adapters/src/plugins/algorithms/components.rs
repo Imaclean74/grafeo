@@ -12,7 +12,7 @@ use grafeo_core::graph::GraphStore;
 use grafeo_core::graph::lpg::LpgStore;
 
 use super::super::{AlgorithmResult, ParameterDef, Parameters};
-use super::traits::{ComponentResultBuilder, GraphAlgorithm};
+use super::traits::{ComponentResultBuilder, GraphAlgorithm, impl_algorithm};
 
 // ============================================================================
 // Union-Find Data Structure
@@ -367,20 +367,12 @@ pub fn is_dag(store: &dyn GraphStore) -> bool {
 /// Connected components algorithm wrapper.
 pub struct ConnectedComponentsAlgorithm;
 
-impl GraphAlgorithm for ConnectedComponentsAlgorithm {
-    fn name(&self) -> &str {
-        "connected_components"
-    }
-
-    fn description(&self) -> &str {
-        "Find connected components (undirected) or weakly connected components (directed)"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        &[]
-    }
-
-    fn execute(&self, store: &dyn GraphStore, _params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    ConnectedComponentsAlgorithm,
+    name: "connected_components",
+    description: "Find connected components (undirected) or weakly connected components (directed)",
+    params: &[],
+    execute(store, _params) {
         let components = connected_components(store);
 
         let mut builder = ComponentResultBuilder::with_capacity(components.len());
@@ -395,20 +387,12 @@ impl GraphAlgorithm for ConnectedComponentsAlgorithm {
 /// Strongly connected components algorithm wrapper.
 pub struct StronglyConnectedComponentsAlgorithm;
 
-impl GraphAlgorithm for StronglyConnectedComponentsAlgorithm {
-    fn name(&self) -> &str {
-        "strongly_connected_components"
-    }
-
-    fn description(&self) -> &str {
-        "Find strongly connected components using Tarjan's algorithm"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        &[]
-    }
-
-    fn execute(&self, store: &dyn GraphStore, _params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    StronglyConnectedComponentsAlgorithm,
+    name: "strongly_connected_components",
+    description: "Find strongly connected components using Tarjan's algorithm",
+    params: &[],
+    execute(store, _params) {
         let components = strongly_connected_components(store);
 
         let mut builder = ComponentResultBuilder::with_capacity(components.len());

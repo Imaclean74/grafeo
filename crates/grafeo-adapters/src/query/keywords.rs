@@ -122,6 +122,44 @@ pub enum CommonKeyword {
     End,
 }
 
+/// Generates a `map_common_keyword` function that maps [`CommonKeyword`] variants
+/// to the local `TokenKind` enum.
+///
+/// Listed keywords produce `TokenKind::$name`; unlisted keywords fall through
+/// to `TokenKind::Identifier`.
+///
+/// # Example
+///
+/// ```ignore
+/// map_common_keywords! { Match, Return, Where }
+/// ```
+///
+/// expands to:
+///
+/// ```ignore
+/// fn map_common_keyword(kw: CommonKeyword) -> TokenKind {
+///     match kw {
+///         CommonKeyword::Match  => TokenKind::Match,
+///         CommonKeyword::Return => TokenKind::Return,
+///         CommonKeyword::Where  => TokenKind::Where,
+///         _ => TokenKind::Identifier,
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! map_common_keywords {
+    ( $( $kw:ident ),+ $(,)? ) => {
+        fn map_common_keyword(kw: $crate::query::keywords::CommonKeyword) -> TokenKind {
+            use $crate::query::keywords::CommonKeyword;
+            #[allow(unreachable_patterns)]
+            match kw {
+                $( CommonKeyword::$kw => TokenKind::$kw, )+
+                _ => TokenKind::Identifier,
+            }
+        }
+    };
+}
+
 impl CommonKeyword {
     /// Recognizes a keyword from its uppercase text.
     ///
@@ -203,6 +241,33 @@ impl CommonKeyword {
     pub fn is_keyword(text: &str) -> bool {
         Self::from_uppercase(text).is_some()
     }
+}
+
+/// Unescapes backslash-escaped characters in a string literal.
+#[must_use]
+pub fn unescape_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => result.push('\n'),
+                Some('r') => result.push('\r'),
+                Some('t') => result.push('\t'),
+                Some('\\') => result.push('\\'),
+                Some('\'') => result.push('\''),
+                Some('"') => result.push('"'),
+                Some(other) => {
+                    result.push('\\');
+                    result.push(other);
+                }
+                None => result.push('\\'),
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
 
 #[cfg(test)]

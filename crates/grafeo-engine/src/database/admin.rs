@@ -72,6 +72,43 @@ impl super::GrafeoDB {
             path: self.config.path.clone(),
             wal_enabled: self.config.wal_enabled,
             version: env!("CARGO_PKG_VERSION").to_string(),
+            features: {
+                let mut f = vec!["gql".into()];
+                if cfg!(feature = "cypher") {
+                    f.push("cypher".into());
+                }
+                if cfg!(feature = "sparql") {
+                    f.push("sparql".into());
+                }
+                if cfg!(feature = "gremlin") {
+                    f.push("gremlin".into());
+                }
+                if cfg!(feature = "graphql") {
+                    f.push("graphql".into());
+                }
+                if cfg!(feature = "sql-pgq") {
+                    f.push("sql-pgq".into());
+                }
+                if cfg!(feature = "rdf") {
+                    f.push("rdf".into());
+                }
+                if cfg!(feature = "algos") {
+                    f.push("algos".into());
+                }
+                if cfg!(feature = "vector-index") {
+                    f.push("vector-index".into());
+                }
+                if cfg!(feature = "text-index") {
+                    f.push("text-index".into());
+                }
+                if cfg!(feature = "hybrid-search") {
+                    f.push("hybrid-search".into());
+                }
+                if cfg!(feature = "cdc") {
+                    f.push("cdc".into());
+                }
+                f
+            },
         }
     }
 

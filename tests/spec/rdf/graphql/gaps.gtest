@@ -1,7 +1,7 @@
-# GraphQL implementation gaps on RDF-like data
+# GraphQL advanced features on RDF-like data
 #
-# Documents known RDF-specific limitations in the GraphQL translator.
-# All tests are skipped with reason strings explaining the gap.
+# Covers: variable substitution, directives (@skip/@include), multiple root
+# fields, aggregation, deep nesting, variable defaults, and mutation rejection.
 
 meta:
   language: graphql
@@ -18,24 +18,22 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: variable_substitution_string
-    skip: "Variable substitution not yet wired in the GraphQL translator"
     query: |
       query GetPerson($personName: String!) {
         person(name: $personName) { name age }
       }
-    variables:
+    params:
       personName: "Alix"
     expect:
       rows:
         - [Alix, 30]
 
   - name: variable_substitution_int
-    skip: "Variable substitution not yet wired in the GraphQL translator"
     query: |
       query GetByAge($minAge: Int!) {
         person(age_gte: $minAge) { name age }
       }
-    variables:
+    params:
       minAge: 30
     expect:
       count: 3
@@ -66,7 +64,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: multiple_root_fields
-    skip: "Only the first root field is processed, subsequent root fields are ignored"
     query: |
       query {
         person { name }
@@ -81,21 +78,18 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: aggregation_count
-    skip: "Aggregation functions not supported in GraphQL translator"
     query: "{ personCount: person { _count } }"
     expect:
       rows:
         - [5]
 
   - name: aggregation_avg_age
-    skip: "Aggregation functions not supported in GraphQL translator"
     query: "{ person { _avg(field: age) } }"
     expect:
       rows:
         - [30]
 
   - name: aggregation_sum_age
-    skip: "Aggregation functions not supported in GraphQL translator"
     query: "{ person { _sum(field: age) } }"
     expect:
       rows:
@@ -106,7 +100,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: deeply_nested_four_levels
-    skip: "Deep nesting (4+ levels) fails with column resolution error"
     query: |
       query {
         person(name: "Alix") {
@@ -123,14 +116,13 @@ tests:
         }
       }
     expect:
-      empty: true
+      count: 1
 
   # ---------------------------------------------------------------------------
   # Variable with default value
   # ---------------------------------------------------------------------------
 
   - name: variable_with_default_value
-    skip: "Variable declarations with defaults not wired to parameter expressions"
     query: "query($limit: Int = 2) { person(first: $limit) { name } }"
     expect:
       count: 2
@@ -140,23 +132,22 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: multiple_root_fields_combined
-    skip: "Only first root field executed, subsequent silently dropped"
     query: "{ person(name: \"Alix\") { name } organization { name } }"
     expect:
       count: 2
 
   # ---------------------------------------------------------------------------
-  # RDF mutation rejection (test harness routes through LPG translator)
+  # RDF mutation rejection (routed through RDF translator via per-test language)
   # ---------------------------------------------------------------------------
 
   - name: rdf_create_mutation_rejected
-    skip: "Test harness uses LPG translator which accepts mutations; RDF translator rejects them"
+    language: graphql-rdf
     query: "mutation { createPerson(name: \"Test\") { name } }"
     expect:
       error: "Only Query"
 
   - name: rdf_delete_mutation_rejected
-    skip: "Test harness uses LPG translator which accepts mutations; RDF translator rejects them"
+    language: graphql-rdf
     query: "mutation { deletePerson(name: \"Alix\") }"
     expect:
       error: "Only Query"

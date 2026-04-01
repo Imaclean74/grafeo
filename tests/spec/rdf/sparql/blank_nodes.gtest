@@ -116,7 +116,6 @@ tests:
         - [Vincent]
 
   - name: anonymous_blank_node_with_properties
-    skip: "anonymous blank node [] as subject not yet supported in parser"
     setup:
       - |
         INSERT DATA {

@@ -135,7 +135,6 @@ tests:
       empty: true
 
   - name: clear_all
-    skip: "CLEAR ALL not yet executed"
     # Insert triples into both default and named graphs, CLEAR ALL, verify all empty.
     setup:
       - |

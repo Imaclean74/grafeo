@@ -6,33 +6,8 @@
 #[allow(clippy::wildcard_imports)]
 use super::ast::*;
 use super::lexer::{Lexer, Token, TokenKind};
+use crate::query::keywords::unescape_string;
 use grafeo_common::utils::error::{QueryError, QueryErrorKind, Result};
-
-/// Unescapes backslash-escaped characters in a string literal.
-fn unescape_string(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.next() {
-                Some('n') => result.push('\n'),
-                Some('r') => result.push('\r'),
-                Some('t') => result.push('\t'),
-                Some('\\') => result.push('\\'),
-                Some('\'') => result.push('\''),
-                Some('"') => result.push('"'),
-                Some(other) => {
-                    result.push('\\');
-                    result.push(other);
-                }
-                None => result.push('\\'),
-            }
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
 
 /// SQL/PGQ query parser.
 pub struct Parser<'a> {
@@ -65,7 +40,34 @@ impl<'a> Parser<'a> {
         let stmt = match self.current.kind {
             TokenKind::Create => self.parse_create_statement()?,
             TokenKind::Call => self.parse_call_statement()?,
-            _ => Statement::Select(self.parse_select_statement()?),
+            _ => {
+                let select = self.parse_select_statement()?;
+
+                // Check for set operations: UNION, INTERSECT, EXCEPT
+                if let Some(op_kind) = self.current_set_operation() {
+                    self.advance(); // consume UNION/INTERSECT/EXCEPT
+
+                    // Check for optional ALL
+                    let all = if self.current.kind == TokenKind::All {
+                        self.advance();
+                        true
+                    } else {
+                        false
+                    };
+
+                    let right = self.parse_select_statement()?;
+
+                    Statement::SetOperation(SetOperationStatement {
+                        left: select,
+                        operation: op_kind,
+                        all,
+                        right,
+                        span: None,
+                    })
+                } else {
+                    Statement::Select(select)
+                }
+            }
         };
 
         // Allow optional trailing semicolon
@@ -78,6 +80,16 @@ impl<'a> Parser<'a> {
         }
 
         Ok(stmt)
+    }
+
+    /// Returns the set operation kind if the current token is a set operation keyword.
+    fn current_set_operation(&self) -> Option<SetOperationKind> {
+        match self.current.kind {
+            TokenKind::Union => Some(SetOperationKind::Union),
+            TokenKind::Intersect => Some(SetOperationKind::Intersect),
+            TokenKind::Except => Some(SetOperationKind::Except),
+            _ => None,
+        }
     }
 
     // ==================== Statement Parsing ====================

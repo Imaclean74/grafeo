@@ -7,16 +7,15 @@ use std::collections::BinaryHeap;
 use std::sync::OnceLock;
 
 use grafeo_common::types::{EdgeId, NodeId, Value};
-use grafeo_common::utils::error::Result;
 use grafeo_common::utils::hash::FxHashMap;
 use grafeo_core::graph::Direction;
 use grafeo_core::graph::GraphStore;
 #[cfg(test)]
 use grafeo_core::graph::lpg::LpgStore;
 
-use super::super::{AlgorithmResult, ParameterDef, ParameterType, Parameters};
+use super::super::{AlgorithmResult, ParameterDef, ParameterType};
 use super::components::UnionFind;
-use super::traits::{GraphAlgorithm, MinScored};
+use super::traits::{MinScored, impl_algorithm};
 
 // ============================================================================
 // Edge Weight Extraction
@@ -293,20 +292,12 @@ fn kruskal_params() -> &'static [ParameterDef] {
 /// Kruskal's MST algorithm wrapper.
 pub struct KruskalAlgorithm;
 
-impl GraphAlgorithm for KruskalAlgorithm {
-    fn name(&self) -> &str {
-        "kruskal"
-    }
-
-    fn description(&self) -> &str {
-        "Kruskal's Minimum Spanning Tree algorithm"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        kruskal_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    KruskalAlgorithm,
+    name: "kruskal",
+    description: "Kruskal's Minimum Spanning Tree algorithm",
+    params: kruskal_params,
+    execute(store, params) {
         let weight_prop = params.get_string("weight");
 
         let result = kruskal(store, weight_prop);
@@ -358,20 +349,12 @@ fn prim_params() -> &'static [ParameterDef] {
 /// Prim's MST algorithm wrapper.
 pub struct PrimAlgorithm;
 
-impl GraphAlgorithm for PrimAlgorithm {
-    fn name(&self) -> &str {
-        "prim"
-    }
-
-    fn description(&self) -> &str {
-        "Prim's Minimum Spanning Tree algorithm"
-    }
-
-    fn parameters(&self) -> &[ParameterDef] {
-        prim_params()
-    }
-
-    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+impl_algorithm! {
+    PrimAlgorithm,
+    name: "prim",
+    description: "Prim's Minimum Spanning Tree algorithm",
+    params: prim_params,
+    execute(store, params) {
         let weight_prop = params.get_string("weight");
         let start = params.get_int("start").map(|id| NodeId::new(id as u64));
 

@@ -39,8 +39,8 @@ wasm-bindgen-test = "0.3"
 default = ["browser"]
 gql = ["grafeo-engine/gql"]
 cypher = ["grafeo-engine/cypher"]
-rdf = ["grafeo-engine/rdf", "dep:grafeo-core", "grafeo-core/rdf"]
-sparql = ["grafeo-engine/sparql", "rdf"]
+rdf-model = ["grafeo-engine/rdf", "dep:grafeo-core", "grafeo-core/rdf"]
+sparql = ["grafeo-engine/sparql", "rdf-model"]
 gremlin = ["grafeo-engine/gremlin"]
 graphql = ["grafeo-engine/graphql"]
 sql-pgq = ["grafeo-engine/sql-pgq"]
@@ -50,8 +50,10 @@ hybrid-search = ["grafeo-engine/hybrid-search"]
 languages = ["gql", "cypher", "sparql", "gremlin", "graphql", "sql-pgq"]
 ai = ["vector-index", "text-index", "hybrid-search"]
 # Named profiles
-browser = ["gql", "grafeo-engine/regex-lite"]  # GQL + regex-lite (~507 KB gzip)
-full = ["languages", "ai"]  # All languages + AI search
+browser = ["gql", "grafeo-engine/regex-lite"]       # GQL only (~507 KB gzip)
+lpg = ["languages", "ai", "grafeo-engine/regex"]    # All LPG languages + AI search
+rdf = ["sparql", "graphql", "grafeo-engine/regex-lite"]  # SPARQL + GraphQL over RDF
+full = ["languages", "ai"]                          # All languages + AI search
 
 [lints]
 workspace = true

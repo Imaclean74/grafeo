@@ -1552,7 +1552,27 @@ impl ExpressionPredicate {
         chunk: &DataChunk,
         row: usize,
     ) -> Option<Value> {
-        match name.to_lowercase().as_str() {
+        let name_lower = name.to_lowercase();
+        let name = name_lower.as_str();
+        self.eval_graph_element_fn(name, args, chunk, row)
+            .or_else(|| self.eval_type_fn(name, args, chunk, row))
+            .or_else(|| self.eval_collection_fn(name, args, chunk, row))
+            .or_else(|| self.eval_string_fn(name, args, chunk, row))
+            .or_else(|| self.eval_numeric_fn(name, args, chunk, row))
+            .or_else(|| self.eval_temporal_fn(name, args, chunk, row))
+            .or_else(|| self.eval_path_fn(name, args, chunk, row))
+            .or_else(|| self.eval_vector_fn(name, args, chunk, row))
+            .or_else(|| self.eval_session_fn(name, args, chunk, row))
+    }
+
+    fn eval_graph_element_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
             "id" => {
                 if args.len() != 1 {
                     return None;
@@ -1624,37 +1644,161 @@ impl ExpressionPredicate {
                 }
                 None
             }
-            "size" | "length" | "cardinality" => {
+            "startnode" | "start_node" => {
+                // startNode(edge) - returns the source node ID
                 if args.len() != 1 {
                     return None;
                 }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::List(items) => Some(Value::Int64(items.len() as i64)),
-                    Value::String(s) => Some(Value::Int64(s.len() as i64)),
-                    Value::Path { edges, .. } => Some(Value::Int64(edges.len() as i64)),
-                    _ => None,
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    let edge_id = col.get_edge_id(row)?;
+                    let edge = self.resolve_edge(edge_id)?;
+                    return Some(Value::Int64(edge.src.0 as i64));
                 }
+                None
             }
-            "coalesce" => {
-                for arg in args {
-                    if let Some(val) = self.eval_expr(arg, chunk, row)
-                        && !matches!(val, Value::Null)
+            "endnode" | "end_node" => {
+                // endNode(edge) - returns the destination node ID
+                if args.len() != 1 {
+                    return None;
+                }
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    let edge_id = col.get_edge_id(row)?;
+                    let edge = self.resolve_edge(edge_id)?;
+                    return Some(Value::Int64(edge.dst.0 as i64));
+                }
+                None
+            }
+            "property_exists" => {
+                // property_exists(entity, key) - checks if a property key exists on an entity
+                if args.len() != 2 {
+                    return None;
+                }
+                let Value::String(key) = self.eval_expr(&args[1], chunk, row)? else {
+                    return None;
+                };
+                // Try node first, then edge
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    if let Some(nid) = col.get_node_id(row)
+                        && let Some(node) = self.resolve_node(nid)
                     {
-                        return Some(val);
+                        let exists = node
+                            .properties
+                            .iter()
+                            .any(|(k, _)| k.as_str() == key.as_str());
+                        return Some(Value::Bool(exists));
+                    }
+                    if let Some(eid) = col.get_edge_id(row)
+                        && let Some(edge) = self.resolve_edge(eid)
+                    {
+                        let exists = edge
+                            .properties
+                            .iter()
+                            .any(|(k, _)| k.as_str() == key.as_str());
+                        return Some(Value::Bool(exists));
                     }
                 }
-                Some(Value::Null)
+                Some(Value::Bool(false))
             }
-            "exists" => {
+            "haslabel" => {
+                // hasLabel(node, label) - checks if a node has a specific label
+                if args.len() != 2 {
+                    return None;
+                }
+                // First arg is the node variable
+                let node_id = if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_node_id(row)?
+                } else {
+                    return None;
+                };
+                // Second arg is the label to check
+                let Value::String(label) = self.eval_expr(&args[1], chunk, row)? else {
+                    return None;
+                };
+                // Check if the node has this label
+                let node = self.resolve_node(node_id)?;
+                let has_label = node.labels.iter().any(|l| l.as_str() == label.as_str());
+                Some(Value::Bool(has_label))
+            }
+            "issource" => {
+                // isSource(node, edge) - checks if node is the source of edge
+                if args.len() != 2 {
+                    return None;
+                }
+                let node_id = if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_node_id(row)?
+                } else {
+                    return None;
+                };
+                let edge_id = if let FilterExpression::Variable(var) = &args[1] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_edge_id(row)?
+                } else {
+                    return None;
+                };
+                let edge = self.resolve_edge(edge_id)?;
+                Some(Value::Bool(edge.src == node_id))
+            }
+            "isdestination" => {
+                // isDestination(node, edge) - checks if node is the destination of edge
+                if args.len() != 2 {
+                    return None;
+                }
+                let node_id = if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_node_id(row)?
+                } else {
+                    return None;
+                };
+                let edge_id = if let FilterExpression::Variable(var) = &args[1] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    col.get_edge_id(row)?
+                } else {
+                    return None;
+                };
+                let edge = self.resolve_edge(edge_id)?;
+                Some(Value::Bool(edge.dst == node_id))
+            }
+            "isdirected" => {
+                // isDirected(edge) - checks if an edge is directed (always true in LPG)
                 if args.len() != 1 {
                     return None;
                 }
-                let val = self.eval_expr(&args[0], chunk, row);
-                Some(Value::Bool(
-                    val.is_some() && !matches!(val, Some(Value::Null)),
-                ))
+                // In LPG, all edges are directed
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    // If the column contains an edge ID, it's directed
+                    if col.get_edge_id(row).is_some() {
+                        return Some(Value::Bool(true));
+                    }
+                }
+                Some(Value::Bool(false))
             }
+            _ => None,
+        }
+    }
+
+    fn eval_type_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
             "tostring" => {
                 if args.len() != 1 {
                     return None;
@@ -1709,27 +1853,41 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            "haslabel" => {
-                // hasLabel(node, label) - checks if a node has a specific label
+            "tolist" => {
+                // toList(value) - wraps a scalar in a single-element list, or returns list as-is
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(_) => Some(val),
+                    Value::Null => Some(Value::Null),
+                    other => Some(Value::List(vec![other].into())),
+                }
+            }
+            "totypedlist" => {
+                // toTypedList(value, element_type) - coerces value to a list with typed elements
                 if args.len() != 2 {
                     return None;
                 }
-                // First arg is the node variable
-                let node_id = if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    col.get_node_id(row)?
-                } else {
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                let Value::String(elem_type) = self.eval_expr(&args[1], chunk, row)? else {
                     return None;
                 };
-                // Second arg is the label to check
-                let Value::String(label) = self.eval_expr(&args[1], chunk, row)? else {
-                    return None;
+                if matches!(val, Value::Null) {
+                    return Some(Value::Null);
+                }
+                // Wrap scalar in a list first
+                let items = match val {
+                    Value::List(items) => items.to_vec(),
+                    other => vec![other],
                 };
-                // Check if the node has this label
-                let node = self.resolve_node(node_id)?;
-                let has_label = node.labels.iter().any(|l| l.as_str() == label.as_str());
-                Some(Value::Bool(has_label))
+                // Coerce each element to the target type
+                let coerced: Option<Vec<Value>> = items
+                    .into_iter()
+                    .map(|v| Self::coerce_to_type(v, &elem_type))
+                    .collect();
+                coerced.map(|v| Value::List(v.into()))
             }
             "istyped" => {
                 // isTyped(value, type_name) - checks if a value has a specific GQL type
@@ -1767,93 +1925,212 @@ impl ExpressionPredicate {
                 };
                 Some(Value::Bool(matches))
             }
-            "isdirected" => {
-                // isDirected(edge) - checks if an edge is directed (always true in LPG)
+            _ => None,
+        }
+    }
+
+    fn eval_collection_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
+            "size" | "length" | "cardinality" => {
                 if args.len() != 1 {
                     return None;
                 }
-                // In LPG, all edges are directed
-                if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    // If the column contains an edge ID, it's directed
-                    if col.get_edge_id(row).is_some() {
-                        return Some(Value::Bool(true));
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => Some(Value::Int64(items.len() as i64)),
+                    Value::String(s) => Some(Value::Int64(s.len() as i64)),
+                    Value::Path { edges, .. } => Some(Value::Int64(edges.len() as i64)),
+                    _ => None,
+                }
+            }
+            "coalesce" => {
+                for arg in args {
+                    if let Some(val) = self.eval_expr(arg, chunk, row)
+                        && !matches!(val, Value::Null)
+                    {
+                        return Some(val);
                     }
                 }
-                Some(Value::Bool(false))
+                Some(Value::Null)
             }
-            "startnode" | "start_node" => {
-                // startNode(edge) - returns the source node ID
+            "exists" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row);
+                Some(Value::Bool(
+                    val.is_some() && !matches!(val, Some(Value::Null)),
+                ))
+            }
+            "keys" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                // keys(n) on a node variable: get property keys from the store
+                if let FilterExpression::Variable(var) = &args[0] {
+                    let col_idx = *self.variable_columns.get(var)?;
+                    let col = chunk.column(col_idx)?;
+                    if let Some(node_id) = col.get_node_id(row) {
+                        let node = self.resolve_node(node_id)?;
+                        let keys: Vec<Value> = node
+                            .properties
+                            .iter()
+                            .map(|(k, _)| Value::String(k.as_str().into()))
+                            .collect();
+                        return Some(Value::List(keys.into()));
+                    }
+                }
+                // keys(map) on a map value
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::Map(map) => {
+                        let keys: Vec<Value> = map
+                            .keys()
+                            .map(|k| Value::String(k.as_str().into()))
+                            .collect();
+                        Some(Value::List(keys.into()))
+                    }
+                    _ => None,
+                }
+            }
+            "properties" => {
                 if args.len() != 1 {
                     return None;
                 }
                 if let FilterExpression::Variable(var) = &args[0] {
                     let col_idx = *self.variable_columns.get(var)?;
                     let col = chunk.column(col_idx)?;
-                    let edge_id = col.get_edge_id(row)?;
-                    let edge = self.resolve_edge(edge_id)?;
-                    return Some(Value::Int64(edge.src.0 as i64));
+                    if let Some(node_id) = col.get_node_id(row) {
+                        let node = self.resolve_node(node_id)?;
+                        let map: std::collections::BTreeMap<PropertyKey, Value> = node
+                            .properties
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        return Some(Value::Map(Arc::new(map)));
+                    } else if let Some(edge_id) = col.get_edge_id(row) {
+                        let edge = self.resolve_edge(edge_id)?;
+                        let map: std::collections::BTreeMap<PropertyKey, Value> = edge
+                            .properties
+                            .iter()
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        return Some(Value::Map(Arc::new(map)));
+                    }
                 }
                 None
             }
-            "endnode" | "end_node" => {
-                // endNode(edge) - returns the destination node ID
+            // property_values(n) returns all property values of a node or edge as a flat list.
+            // Used by Gremlin values() with no keys.
+            "property_values" => {
                 if args.len() != 1 {
                     return None;
                 }
                 if let FilterExpression::Variable(var) = &args[0] {
                     let col_idx = *self.variable_columns.get(var)?;
                     let col = chunk.column(col_idx)?;
-                    let edge_id = col.get_edge_id(row)?;
-                    let edge = self.resolve_edge(edge_id)?;
-                    return Some(Value::Int64(edge.dst.0 as i64));
+                    if let Some(node_id) = col.get_node_id(row) {
+                        let node = self.resolve_node(node_id)?;
+                        let vals: Vec<Value> =
+                            node.properties.iter().map(|(_, v)| v.clone()).collect();
+                        return Some(Value::List(vals.into()));
+                    } else if let Some(edge_id) = col.get_edge_id(row) {
+                        let edge = self.resolve_edge(edge_id)?;
+                        let vals: Vec<Value> =
+                            edge.properties.iter().map(|(_, v)| v.clone()).collect();
+                        return Some(Value::List(vals.into()));
+                    }
                 }
                 None
             }
-            "issource" => {
-                // isSource(node, edge) - checks if node is the source of edge
-                if args.len() != 2 {
+            "head" => {
+                // head(list) - returns the first element of a list
+                if args.len() != 1 {
                     return None;
                 }
-                let node_id = if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    col.get_node_id(row)?
-                } else {
-                    return None;
-                };
-                let edge_id = if let FilterExpression::Variable(var) = &args[1] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    col.get_edge_id(row)?
-                } else {
-                    return None;
-                };
-                let edge = self.resolve_edge(edge_id)?;
-                Some(Value::Bool(edge.src == node_id))
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => items.first().cloned(),
+                    _ => None,
+                }
             }
-            "isdestination" => {
-                // isDestination(node, edge) - checks if node is the destination of edge
-                if args.len() != 2 {
+            "tail" => {
+                // tail(list) - returns all elements except the first
+                if args.len() != 1 {
                     return None;
                 }
-                let node_id = if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    col.get_node_id(row)?
-                } else {
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => {
+                        if items.is_empty() {
+                            Some(Value::List(vec![].into()))
+                        } else {
+                            Some(Value::List(items[1..].to_vec().into()))
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            "last" => {
+                // last(list) - returns the last element of a list
+                if args.len() != 1 {
                     return None;
-                };
-                let edge_id = if let FilterExpression::Variable(var) = &args[1] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    col.get_edge_id(row)?
-                } else {
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => items.last().cloned(),
+                    _ => None,
+                }
+            }
+            "reverse" => {
+                // reverse(list) - returns the list in reverse order
+                if args.len() != 1 {
                     return None;
-                };
-                let edge = self.resolve_edge(edge_id)?;
-                Some(Value::Bool(edge.dst == node_id))
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => {
+                        let reversed: Vec<Value> = items.iter().rev().cloned().collect();
+                        Some(Value::List(reversed.into()))
+                    }
+                    Value::String(s) => {
+                        let reversed: String = s.chars().rev().collect();
+                        Some(Value::String(reversed.into()))
+                    }
+                    _ => None,
+                }
+            }
+            // vector(list) - converts a list of numbers to a Vector
+            "vector" => {
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::List(items) => {
+                        let floats: Vec<f32> = items
+                            .iter()
+                            .filter_map(|v| match v {
+                                Value::Float64(f) => Some(*f as f32),
+                                Value::Int64(i) => Some(*i as f32),
+                                _ => None,
+                            })
+                            .collect();
+                        if floats.len() == items.len() {
+                            Some(Value::Vector(floats.into()))
+                        } else {
+                            None
+                        }
+                    }
+                    Value::Vector(v) => Some(Value::Vector(v)),
+                    _ => None,
+                }
             }
             "all_different" => {
                 // ALL_DIFFERENT - ISO GQL predicate (G113)
@@ -1947,265 +2224,85 @@ impl ExpressionPredicate {
                 }
                 Some(Value::Bool(true))
             }
-            "property_exists" => {
-                // property_exists(entity, key) - checks if a property key exists on an entity
-                if args.len() != 2 {
+            "range" => {
+                if args.len() < 2 || args.len() > 3 {
                     return None;
                 }
-                let Value::String(key) = self.eval_expr(&args[1], chunk, row)? else {
+                let start = self.eval_expr(&args[0], chunk, row)?;
+                let stop = self.eval_expr(&args[1], chunk, row)?;
+                let Value::Int64(start_val) = start else {
                     return None;
                 };
-                // Try node first, then edge
-                if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    if let Some(nid) = col.get_node_id(row)
-                        && let Some(node) = self.resolve_node(nid)
-                    {
-                        let exists = node
-                            .properties
-                            .iter()
-                            .any(|(k, _)| k.as_str() == key.as_str());
-                        return Some(Value::Bool(exists));
+                let Value::Int64(end_val) = stop else {
+                    return None;
+                };
+                let step = if args.len() == 3 {
+                    let s = self.eval_expr(&args[2], chunk, row)?;
+                    let Value::Int64(sv) = s else {
+                        return None;
+                    };
+                    if sv == 0 {
+                        return None;
                     }
-                    if let Some(eid) = col.get_edge_id(row)
-                        && let Some(edge) = self.resolve_edge(eid)
-                    {
-                        let exists = edge
-                            .properties
-                            .iter()
-                            .any(|(k, _)| k.as_str() == key.as_str());
-                        return Some(Value::Bool(exists));
+                    sv
+                } else {
+                    1
+                };
+                let mut result = Vec::new();
+                let mut current = start_val;
+                if step > 0 {
+                    while current <= end_val {
+                        result.push(Value::Int64(current));
+                        current += step;
+                    }
+                } else {
+                    while current >= end_val {
+                        result.push(Value::Int64(current));
+                        current += step;
                     }
                 }
-                Some(Value::Bool(false))
+                Some(Value::List(result.into()))
             }
-            "head" => {
-                // head(list) - returns the first element of a list
-                if args.len() != 1 {
+            "string_join" => {
+                // string_join(list, separator) - join list elements with separator
+                if args.len() != 2 {
                     return None;
                 }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::List(items) => items.first().cloned(),
-                    _ => None,
-                }
-            }
-            "tail" => {
-                // tail(list) - returns all elements except the first
-                if args.len() != 1 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::List(items) => {
-                        if items.is_empty() {
-                            Some(Value::List(vec![].into()))
-                        } else {
-                            Some(Value::List(items[1..].to_vec().into()))
-                        }
-                    }
-                    _ => None,
-                }
-            }
-            "last" => {
-                // last(list) - returns the last element of a list
-                if args.len() != 1 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::List(items) => items.last().cloned(),
-                    _ => None,
-                }
-            }
-            "reverse" => {
-                // reverse(list) - returns the list in reverse order
-                if args.len() != 1 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::List(items) => {
-                        let reversed: Vec<Value> = items.iter().rev().cloned().collect();
-                        Some(Value::List(reversed.into()))
-                    }
-                    Value::String(s) => {
-                        let reversed: String = s.chars().rev().collect();
-                        Some(Value::String(reversed.into()))
-                    }
-                    _ => None,
-                }
-            }
-            // vector(list) - converts a list of numbers to a Vector
-            "vector" => {
-                if args.len() != 1 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::List(items) => {
-                        let floats: Vec<f32> = items
+                let list_val = self.eval_expr(&args[0], chunk, row)?;
+                let sep_val = self.eval_expr(&args[1], chunk, row)?;
+                match (list_val, sep_val) {
+                    (Value::List(items), Value::String(sep)) => {
+                        let sep_str: &str = &sep;
+                        let joined: String = items
                             .iter()
                             .filter_map(|v| match v {
-                                Value::Float64(f) => Some(*f as f32),
-                                Value::Int64(i) => Some(*i as f32),
-                                _ => None,
+                                Value::String(s) => Some(s.to_string()),
+                                Value::Int64(i) => Some(i.to_string()),
+                                Value::Float64(f) => Some(f.to_string()),
+                                Value::Bool(b) => Some(b.to_string()),
+                                Value::Null => None,
+                                other => Some(format!("{other}")),
                             })
-                            .collect();
-                        if floats.len() == items.len() {
-                            Some(Value::Vector(floats.into()))
-                        } else {
-                            None
-                        }
+                            .collect::<Vec<String>>()
+                            .join(sep_str);
+                        Some(Value::String(joined.into()))
                     }
-                    Value::Vector(v) => Some(Value::Vector(v)),
+                    (Value::Null, _) | (_, Value::Null) => Some(Value::Null),
                     _ => None,
                 }
             }
-            // Vector distance / similarity functions (SIMD-accelerated)
-            "cosine_similarity" => {
-                if args.len() != 2 {
-                    return None;
-                }
-                let a_val = self.eval_expr(&args[0], chunk, row)?;
-                let b_val = self.eval_expr(&args[1], chunk, row)?;
-                let a = a_val.as_vector()?;
-                let b = b_val.as_vector()?;
-                if a.len() != b.len() {
-                    return None;
-                }
-                Some(Value::Float64(
-                    crate::index::vector::cosine_similarity(a, b) as f64,
-                ))
-            }
-            "euclidean_distance" => {
-                if args.len() != 2 {
-                    return None;
-                }
-                let a_val = self.eval_expr(&args[0], chunk, row)?;
-                let b_val = self.eval_expr(&args[1], chunk, row)?;
-                let a = a_val.as_vector()?;
-                let b = b_val.as_vector()?;
-                if a.len() != b.len() {
-                    return None;
-                }
-                Some(Value::Float64(
-                    crate::index::vector::euclidean_distance(a, b) as f64,
-                ))
-            }
-            "dot_product" => {
-                if args.len() != 2 {
-                    return None;
-                }
-                let a_val = self.eval_expr(&args[0], chunk, row)?;
-                let b_val = self.eval_expr(&args[1], chunk, row)?;
-                let a = a_val.as_vector()?;
-                let b = b_val.as_vector()?;
-                if a.len() != b.len() {
-                    return None;
-                }
-                Some(Value::Float64(
-                    crate::index::vector::dot_product(a, b) as f64
-                ))
-            }
-            "manhattan_distance" => {
-                if args.len() != 2 {
-                    return None;
-                }
-                let a_val = self.eval_expr(&args[0], chunk, row)?;
-                let b_val = self.eval_expr(&args[1], chunk, row)?;
-                let a = a_val.as_vector()?;
-                let b = b_val.as_vector()?;
-                if a.len() != b.len() {
-                    return None;
-                }
-                Some(Value::Float64(
-                    crate::index::vector::manhattan_distance(a, b) as f64,
-                ))
-            }
-            // --- String functions ---
-            "keys" => {
-                if args.len() != 1 {
-                    return None;
-                }
-                // keys(n) on a node variable: get property keys from the store
-                if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    if let Some(node_id) = col.get_node_id(row) {
-                        let node = self.resolve_node(node_id)?;
-                        let keys: Vec<Value> = node
-                            .properties
-                            .iter()
-                            .map(|(k, _)| Value::String(k.as_str().into()))
-                            .collect();
-                        return Some(Value::List(keys.into()));
-                    }
-                }
-                // keys(map) on a map value
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::Map(map) => {
-                        let keys: Vec<Value> = map
-                            .keys()
-                            .map(|k| Value::String(k.as_str().into()))
-                            .collect();
-                        Some(Value::List(keys.into()))
-                    }
-                    _ => None,
-                }
-            }
-            "properties" => {
-                if args.len() != 1 {
-                    return None;
-                }
-                if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    if let Some(node_id) = col.get_node_id(row) {
-                        let node = self.resolve_node(node_id)?;
-                        let map: std::collections::BTreeMap<PropertyKey, Value> = node
-                            .properties
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
-                        return Some(Value::Map(Arc::new(map)));
-                    } else if let Some(edge_id) = col.get_edge_id(row) {
-                        let edge = self.resolve_edge(edge_id)?;
-                        let map: std::collections::BTreeMap<PropertyKey, Value> = edge
-                            .properties
-                            .iter()
-                            .map(|(k, v)| (k.clone(), v.clone()))
-                            .collect();
-                        return Some(Value::Map(Arc::new(map)));
-                    }
-                }
-                None
-            }
-            // property_values(n) returns all property values of a node or edge as a flat list.
-            // Used by Gremlin values() with no keys.
-            "property_values" => {
-                if args.len() != 1 {
-                    return None;
-                }
-                if let FilterExpression::Variable(var) = &args[0] {
-                    let col_idx = *self.variable_columns.get(var)?;
-                    let col = chunk.column(col_idx)?;
-                    if let Some(node_id) = col.get_node_id(row) {
-                        let node = self.resolve_node(node_id)?;
-                        let vals: Vec<Value> =
-                            node.properties.iter().map(|(_, v)| v.clone()).collect();
-                        return Some(Value::List(vals.into()));
-                    } else if let Some(edge_id) = col.get_edge_id(row) {
-                        let edge = self.resolve_edge(edge_id)?;
-                        let vals: Vec<Value> =
-                            edge.properties.iter().map(|(_, v)| v.clone()).collect();
-                        return Some(Value::List(vals.into()));
-                    }
-                }
-                None
-            }
+            _ => None,
+        }
+    }
+
+    fn eval_string_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
             "trim" => {
                 if args.len() == 1 {
                     // Simple trim(string) - trim whitespace
@@ -2346,7 +2443,108 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            // --- Numeric functions ---
+            "left" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                let len = self.eval_expr(&args[1], chunk, row)?;
+                match (&val, &len) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        let result: String = s.chars().take(n).collect();
+                        Some(Value::String(result.into()))
+                    }
+                    _ => None,
+                }
+            }
+            "right" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                let len = self.eval_expr(&args[1], chunk, row)?;
+                match (&val, &len) {
+                    (Value::String(s), Value::Int64(n)) => {
+                        let n = (*n).max(0) as usize;
+                        let char_count = s.chars().count();
+                        let skip = char_count.saturating_sub(n);
+                        let result: String = s.chars().skip(skip).collect();
+                        Some(Value::String(result.into()))
+                    }
+                    _ => None,
+                }
+            }
+            "octet_length" | "byte_length" => {
+                // octet_length(string) - byte length
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => Some(Value::Int64(s.len() as i64)),
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "normalize" => {
+                // normalize(string) - returns the string as-is (NFC normalization).
+                // Rust strings are valid UTF-8; full NFC normalization requires the
+                // unicode-normalization crate, which is deferred to Phase 2.
+                if args.len() != 1 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                match val {
+                    Value::String(s) => Some(Value::String(s)),
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            "isnormalized" => {
+                // IS [NFC|NFD|NFKC|NFKD] NORMALIZED - check Unicode normalization form.
+                // Args: (string_value) or (string_value, form_name)
+                // Default form is NFC when not specified.
+                if args.is_empty() || args.len() > 2 {
+                    return None;
+                }
+                let val = self.eval_expr(&args[0], chunk, row)?;
+                let form = if args.len() == 2 {
+                    match self.eval_expr(&args[1], chunk, row)? {
+                        Value::String(s) => s.to_uppercase(),
+                        _ => return None,
+                    }
+                } else {
+                    "NFC".to_string()
+                };
+                match val {
+                    Value::String(ref s) => {
+                        use unicode_normalization::UnicodeNormalization;
+                        let normalized = match form.as_str() {
+                            "NFC" => s.nfc().collect::<String>() == s.as_ref(),
+                            "NFD" => s.nfd().collect::<String>() == s.as_ref(),
+                            "NFKC" => s.nfkc().collect::<String>() == s.as_ref(),
+                            "NFKD" => s.nfkd().collect::<String>() == s.as_ref(),
+                            _ => return None,
+                        };
+                        Some(Value::Bool(normalized))
+                    }
+                    Value::Null => Some(Value::Null),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_numeric_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
             "abs" => {
                 if args.len() != 1 {
                     return None;
@@ -2402,93 +2600,6 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            "rand" | "random" => {
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                row.hash(&mut hasher);
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .ok()?
-                    .as_nanos()
-                    .hash(&mut hasher);
-                let hash = hasher.finish();
-                let random = (hash as f64) / (u64::MAX as f64);
-                Some(Value::Float64(random))
-            }
-            // --- Collection functions ---
-            "range" => {
-                if args.len() < 2 || args.len() > 3 {
-                    return None;
-                }
-                let start = self.eval_expr(&args[0], chunk, row)?;
-                let stop = self.eval_expr(&args[1], chunk, row)?;
-                let Value::Int64(start_val) = start else {
-                    return None;
-                };
-                let Value::Int64(end_val) = stop else {
-                    return None;
-                };
-                let step = if args.len() == 3 {
-                    let s = self.eval_expr(&args[2], chunk, row)?;
-                    let Value::Int64(sv) = s else {
-                        return None;
-                    };
-                    if sv == 0 {
-                        return None;
-                    }
-                    sv
-                } else {
-                    1
-                };
-                let mut result = Vec::new();
-                let mut current = start_val;
-                if step > 0 {
-                    while current <= end_val {
-                        result.push(Value::Int64(current));
-                        current += step;
-                    }
-                } else {
-                    while current >= end_val {
-                        result.push(Value::Int64(current));
-                        current += step;
-                    }
-                }
-                Some(Value::List(result.into()))
-            }
-            // --- String functions (left, right) ---
-            "left" => {
-                if args.len() != 2 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                let len = self.eval_expr(&args[1], chunk, row)?;
-                match (&val, &len) {
-                    (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
-                        let result: String = s.chars().take(n).collect();
-                        Some(Value::String(result.into()))
-                    }
-                    _ => None,
-                }
-            }
-            "right" => {
-                if args.len() != 2 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                let len = self.eval_expr(&args[1], chunk, row)?;
-                match (&val, &len) {
-                    (Value::String(s), Value::Int64(n)) => {
-                        let n = (*n).max(0) as usize;
-                        let char_count = s.chars().count();
-                        let skip = char_count.saturating_sub(n);
-                        let result: String = s.chars().skip(skip).collect();
-                        Some(Value::String(result.into()))
-                    }
-                    _ => None,
-                }
-            }
-            // --- Numeric functions (sign, log, log10, exp, e, pi) ---
             "sign" => {
                 if args.len() != 1 {
                     return None;
@@ -2525,6 +2636,19 @@ impl ExpressionPredicate {
                     _ => return None,
                 };
                 Some(Value::Float64(base.powf(exponent)))
+            }
+            "rand" | "random" => {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                row.hash(&mut hasher);
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_nanos()
+                    .hash(&mut hasher);
+                let hash = hasher.finish();
+                let random = (hash as f64) / (u64::MAX as f64);
+                Some(Value::Float64(random))
             }
             "log" | "ln" => {
                 if args.len() != 1 {
@@ -2572,7 +2696,6 @@ impl ExpressionPredicate {
             }
             "e" => Some(Value::Float64(std::f64::consts::E)),
             "pi" => Some(Value::Float64(std::f64::consts::PI)),
-            // --- Trigonometric functions ---
             "sin" => {
                 if args.len() != 1 {
                     return None;
@@ -2679,7 +2802,18 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            // Temporal constructors and accessors
+            _ => None,
+        }
+    }
+
+    fn eval_temporal_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
             "date" | "todate" => {
                 if args.is_empty() {
                     return Some(Value::Date(grafeo_common::types::Date::today()));
@@ -2844,7 +2978,6 @@ impl ExpressionPredicate {
             "timestamp" => Some(Value::Int64(
                 grafeo_common::types::Timestamp::now().as_millis(),
             )),
-            // Component extraction
             "year" => {
                 let val = self.eval_expr(args.first()?, chunk, row)?;
                 match val {
@@ -2911,7 +3044,6 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            // --- Temporal truncation ---
             "date_trunc" | "truncate" => {
                 if args.len() < 2 {
                     return None;
@@ -2929,7 +3061,18 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            // --- Path constructor ---
+            _ => None,
+        }
+    }
+
+    fn eval_path_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
             "path" => {
                 if args.len() == 2 {
                     // path(nodes_list, edges_list) - construct from component lists
@@ -2969,7 +3112,6 @@ impl ExpressionPredicate {
                     })
                 }
             }
-            // --- Path decomposition functions ---
             "nodes" => {
                 // nodes(path) - extracts nodes from a path value
                 if args.len() != 1 {
@@ -3004,7 +3146,6 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            // --- Path predicate functions (ISO GQL) ---
             "isacyclic" => {
                 // isAcyclic(path) - true if no node appears more than once
                 if args.len() != 1 {
@@ -3068,81 +3209,90 @@ impl ExpressionPredicate {
                     _ => None,
                 }
             }
-            // --- GQL ISO standard functions ---
-            "normalize" => {
-                // normalize(string) - returns the string as-is (NFC normalization).
-                // Rust strings are valid UTF-8; full NFC normalization requires the
-                // unicode-normalization crate, which is deferred to Phase 2.
-                if args.len() != 1 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::String(s) => Some(Value::String(s)),
-                    Value::Null => Some(Value::Null),
-                    _ => None,
-                }
-            }
-            "isnormalized" => {
-                // IS [NFC|NFD|NFKC|NFKD] NORMALIZED - check Unicode normalization form.
-                // Args: (string_value) or (string_value, form_name)
-                // Default form is NFC when not specified.
-                if args.is_empty() || args.len() > 2 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                let form = if args.len() == 2 {
-                    match self.eval_expr(&args[1], chunk, row)? {
-                        Value::String(s) => s.to_uppercase(),
-                        _ => return None,
-                    }
-                } else {
-                    "NFC".to_string()
-                };
-                match val {
-                    Value::String(ref s) => {
-                        use unicode_normalization::UnicodeNormalization;
-                        let normalized = match form.as_str() {
-                            "NFC" => s.nfc().collect::<String>() == s.as_ref(),
-                            "NFD" => s.nfd().collect::<String>() == s.as_ref(),
-                            "NFKC" => s.nfkc().collect::<String>() == s.as_ref(),
-                            "NFKD" => s.nfkd().collect::<String>() == s.as_ref(),
-                            _ => return None,
-                        };
-                        Some(Value::Bool(normalized))
-                    }
-                    Value::Null => Some(Value::Null),
-                    _ => None,
-                }
-            }
-            "string_join" => {
-                // string_join(list, separator) - join list elements with separator
+            _ => None,
+        }
+    }
+
+    fn eval_vector_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
+            "cosine_similarity" => {
                 if args.len() != 2 {
                     return None;
                 }
-                let list_val = self.eval_expr(&args[0], chunk, row)?;
-                let sep_val = self.eval_expr(&args[1], chunk, row)?;
-                match (list_val, sep_val) {
-                    (Value::List(items), Value::String(sep)) => {
-                        let sep_str: &str = &sep;
-                        let joined: String = items
-                            .iter()
-                            .filter_map(|v| match v {
-                                Value::String(s) => Some(s.to_string()),
-                                Value::Int64(i) => Some(i.to_string()),
-                                Value::Float64(f) => Some(f.to_string()),
-                                Value::Bool(b) => Some(b.to_string()),
-                                Value::Null => None,
-                                other => Some(format!("{other}")),
-                            })
-                            .collect::<Vec<String>>()
-                            .join(sep_str);
-                        Some(Value::String(joined.into()))
-                    }
-                    (Value::Null, _) | (_, Value::Null) => Some(Value::Null),
-                    _ => None,
+                let a_val = self.eval_expr(&args[0], chunk, row)?;
+                let b_val = self.eval_expr(&args[1], chunk, row)?;
+                let a = a_val.as_vector()?;
+                let b = b_val.as_vector()?;
+                if a.len() != b.len() {
+                    return None;
                 }
+                Some(Value::Float64(
+                    crate::index::vector::cosine_similarity(a, b) as f64,
+                ))
             }
+            "euclidean_distance" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let a_val = self.eval_expr(&args[0], chunk, row)?;
+                let b_val = self.eval_expr(&args[1], chunk, row)?;
+                let a = a_val.as_vector()?;
+                let b = b_val.as_vector()?;
+                if a.len() != b.len() {
+                    return None;
+                }
+                Some(Value::Float64(
+                    crate::index::vector::euclidean_distance(a, b) as f64,
+                ))
+            }
+            "dot_product" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let a_val = self.eval_expr(&args[0], chunk, row)?;
+                let b_val = self.eval_expr(&args[1], chunk, row)?;
+                let a = a_val.as_vector()?;
+                let b = b_val.as_vector()?;
+                if a.len() != b.len() {
+                    return None;
+                }
+                Some(Value::Float64(
+                    crate::index::vector::dot_product(a, b) as f64
+                ))
+            }
+            "manhattan_distance" => {
+                if args.len() != 2 {
+                    return None;
+                }
+                let a_val = self.eval_expr(&args[0], chunk, row)?;
+                let b_val = self.eval_expr(&args[1], chunk, row)?;
+                let a = a_val.as_vector()?;
+                let b = b_val.as_vector()?;
+                if a.len() != b.len() {
+                    return None;
+                }
+                Some(Value::Float64(
+                    crate::index::vector::manhattan_distance(a, b) as f64,
+                ))
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_session_fn(
+        &self,
+        name: &str,
+        args: &[FilterExpression],
+        chunk: &DataChunk,
+        row: usize,
+    ) -> Option<Value> {
+        match name {
             "session_user" => {
                 // session_user() - returns the current session user
                 // For embedded databases, returns a default user string
@@ -3165,54 +3315,6 @@ impl ExpressionPredicate {
             "info" => Some(self.session_context.db_info.get().clone()),
             // Grafeo extension: schema() returns schema metadata as a map
             "schema" => Some(self.session_context.schema_info.get().clone()),
-            "octet_length" | "byte_length" => {
-                // octet_length(string) - byte length
-                if args.len() != 1 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::String(s) => Some(Value::Int64(s.len() as i64)),
-                    Value::Null => Some(Value::Null),
-                    _ => None,
-                }
-            }
-            "tolist" => {
-                // toList(value) - wraps a scalar in a single-element list, or returns list as-is
-                if args.len() != 1 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                match val {
-                    Value::List(_) => Some(val),
-                    Value::Null => Some(Value::Null),
-                    other => Some(Value::List(vec![other].into())),
-                }
-            }
-            "totypedlist" => {
-                // toTypedList(value, element_type) - coerces value to a list with typed elements
-                if args.len() != 2 {
-                    return None;
-                }
-                let val = self.eval_expr(&args[0], chunk, row)?;
-                let Value::String(elem_type) = self.eval_expr(&args[1], chunk, row)? else {
-                    return None;
-                };
-                if matches!(val, Value::Null) {
-                    return Some(Value::Null);
-                }
-                // Wrap scalar in a list first
-                let items = match val {
-                    Value::List(items) => items.to_vec(),
-                    other => vec![other],
-                };
-                // Coerce each element to the target type
-                let coerced: Option<Vec<Value>> = items
-                    .into_iter()
-                    .map(|v| Self::coerce_to_type(v, &elem_type))
-                    .collect();
-                coerced.map(|v| Value::List(v.into()))
-            }
             "nullif" => {
                 // NULLIF(expr1, expr2) - returns NULL if expr1 = expr2, else expr1
                 if args.len() != 2 {
@@ -3229,7 +3331,7 @@ impl ExpressionPredicate {
                     Some(val1)
                 }
             }
-            _ => None, // Unknown function
+            _ => None,
         }
     }
 

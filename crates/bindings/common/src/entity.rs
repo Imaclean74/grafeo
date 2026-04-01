@@ -40,6 +40,23 @@ pub struct RawEdge {
     pub properties: HashMap<PropertyKey, Value>,
 }
 
+/// Extracts entities from a [`QueryResult`] and maps them to binding-specific
+/// types in one pass.
+///
+/// This is a convenience wrapper around [`extract_entities`] that applies
+/// `map_node` and `map_edge` to each extracted [`RawNode`] and [`RawEdge`],
+/// avoiding repetitive boilerplate in every language binding.
+pub fn extract_and_map<N, E>(
+    result: &QueryResult,
+    map_node: impl Fn(RawNode) -> N,
+    map_edge: impl Fn(RawEdge) -> E,
+) -> (Vec<N>, Vec<E>) {
+    let (raw_nodes, raw_edges) = extract_entities(result);
+    let nodes = raw_nodes.into_iter().map(map_node).collect();
+    let edges = raw_edges.into_iter().map(map_edge).collect();
+    (nodes, edges)
+}
+
 /// Scans all values in a [`QueryResult`] for maps that look like resolved nodes
 /// or edges, deduplicates by ID, and returns the extracted entities.
 ///

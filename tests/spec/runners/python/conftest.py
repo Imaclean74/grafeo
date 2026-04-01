@@ -56,6 +56,21 @@ _LANGUAGE_METHODS: Dict[str, str] = {
     "sql_pgq": "execute_sql",
 }
 
+# Cached set of compiled feature flags from db.info()["features"]
+_compiled_features: Optional[set] = None
+
+
+def _get_compiled_features() -> set:
+    """Return the set of features compiled into the grafeo binary."""
+    global _compiled_features
+    if _compiled_features is None:
+        db = grafeo.GrafeoDB()
+        info = db.info()
+        _compiled_features = set(info.get("features", []))
+        db.close()
+    return _compiled_features
+
+
 # Repo root: tests/spec/runners/python/conftest.py -> five .parent calls
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 
@@ -145,20 +160,25 @@ class GtestItem(pytest.Item):
         if tc.skip is not None:
             pytest.skip(f"skipped in .gtest: {tc.skip}")
 
-        # Determine language
-        language = self.variant_lang or meta.language or "gql"
+        # Determine language: per-test override > rosetta variant > file meta
+        language = self.variant_lang or tc.language or meta.language or "gql"
 
-        # Check requires: skip if the binding does not expose the method
+        # Check requires: skip if the compiled build lacks the feature
         all_requires = list(meta.requires)
         if language not in ("gql", "") and language not in all_requires:
             all_requires.append(language)
 
+        features = _get_compiled_features()
         for req in all_requires:
-            method_name = _LANGUAGE_METHODS.get(req)
-            if method_name and not hasattr(grafeo.GrafeoDB, method_name):
-                pytest.skip(
-                    f"grafeo build does not support '{req}' (no {method_name} method)"
-                )
+            key = req.replace("_", "-")
+            if key == "gql":
+                continue
+            # Compound language keys: "graphql-rdf" requires both "graphql" and "rdf"
+            if key == "graphql-rdf":
+                if "graphql" not in features or "rdf" not in features:
+                    pytest.skip(f"grafeo build does not include '{key}' feature")
+            elif key not in features:
+                pytest.skip(f"grafeo build does not include '{key}' feature")
 
         # Fresh database per test
         db = grafeo.GrafeoDB()
@@ -186,17 +206,20 @@ class GtestItem(pytest.Item):
 
         expect = tc.expect
 
+        # Coerce params (only applied to the last query)
+        params = _coerce_params(tc.params)
+
         # Error tests
         if expect.error is not None:
-            self._run_error_test(db, language, queries, expect.error)
+            self._run_error_test(db, language, queries, expect.error, params)
             return
 
         # Execute all-but-last as fire-and-forget
         for q in queries[:-1]:
             _execute(db, language, q)
 
-        # Last query: capture result
-        result = _execute(db, language, queries[-1])
+        # Last query: capture result (with params if present)
+        result = _execute(db, language, queries[-1], params)
 
         # Column assertion (checked before value assertions)
         if expect.columns:
@@ -224,15 +247,16 @@ class GtestItem(pytest.Item):
         language: str,
         queries: List[str],
         expected_substr: str,
+        params=None,
     ) -> None:
         """Execute queries expecting the last one to raise an error."""
         # Execute all-but-last normally
         for q in queries[:-1]:
             _execute(db, language, q)
 
-        # Last query should fail
+        # Last query should fail (with params if present)
         try:
-            _execute(db, language, queries[-1])
+            _execute(db, language, queries[-1], params)
         except Exception as exc:
             assert_error(exc, expected_substr)
         else:
@@ -269,13 +293,57 @@ def _load_dataset(db, dataset_name: str) -> None:
         db.execute(trimmed)
 
 
-def _execute(db, language: str, query: str):
+def _coerce_params(raw_params: Dict[str, str]) -> Optional[Dict[str, object]]:
+    """Convert string param values to typed Python values.
+
+    Mirrors the Rust build.rs coercion order: int, float, bool, string.
+    Returns None when the params dict is empty (so callers can skip it).
+    """
+    if not raw_params:
+        return None
+    coerced: Dict[str, object] = {}
+    for key, value in raw_params.items():
+        # int first
+        try:
+            coerced[key] = int(value)
+            continue
+        except (ValueError, TypeError):
+            pass  # not an int, try next coercion type
+        # float second
+        try:
+            coerced[key] = float(value)
+            continue
+        except (ValueError, TypeError):
+            pass  # not a float, try next coercion type
+        # bool third
+        if value == "true":
+            coerced[key] = True
+            continue
+        if value == "false":
+            coerced[key] = False
+            continue
+        # fall back to string
+        coerced[key] = value
+    return coerced
+
+
+def _execute(db, language: str, query: str, params=None):
     """Execute a query in the specified language, returning the QueryResult."""
-    method_name = _LANGUAGE_METHODS.get(language, "execute")
-    method = getattr(db, method_name, None)
+    method_name = _LANGUAGE_METHODS.get(language)
+    if method_name is not None:
+        method = getattr(db, method_name, None)
+        if method is None:
+            pytest.skip(
+                f"grafeo build does not support language '{language}' "
+                f"(no {method_name} method)"
+            )
+        if params is not None:
+            return method(query, params)
+        return method(query)
+    # Fall back to generic execute_language for non-standard languages
+    method = getattr(db, "execute_language", None)
     if method is None:
-        pytest.skip(
-            f"grafeo build does not support language '{language}' "
-            f"(no {method_name} method)"
-        )
-    return method(query)
+        pytest.skip(f"grafeo build does not support language '{language}'")
+    if params is not None:
+        return method(language, query, params)
+    return method(language, query)

@@ -88,6 +88,7 @@ struct TestCase {
     setup: Vec<String>,
     params: HashMap<String, String>,
     tags: Vec<String>,
+    language: Option<String>,
     skip: Option<String>,
     expect: Expect,
     variants: HashMap<String, String>,
@@ -226,6 +227,7 @@ fn parse_single_test(lines: &[&str], idx: &mut usize) -> Result<TestCase, String
         setup: Vec::new(),
         params: HashMap::new(),
         tags: Vec::new(),
+        language: None,
         skip: None,
         expect: Expect::default(),
         variants: HashMap::new(),
@@ -285,6 +287,10 @@ fn parse_single_test(lines: &[&str], idx: &mut usize) -> Result<TestCase, String
                 }
                 "tags" => {
                     tc.tags = parse_yaml_list(value);
+                    *idx += 1;
+                }
+                "language" => {
+                    tc.language = Some(unquote(value));
                     *idx += 1;
                 }
                 "params" => {
@@ -768,23 +774,29 @@ fn generate_single_test(
     lang_override: Option<&str>,
     rel_path: &str,
 ) {
-    let language = lang_override.unwrap_or(&file.meta.language);
+    let language = lang_override
+        .or(tc.language.as_deref())
+        .unwrap_or(&file.meta.language);
     let model = &file.meta.model;
 
-    // Feature gate
-    let feature_gate = match language {
-        "cypher" => Some("cypher"),
-        "gremlin" => Some("gremlin"),
-        "graphql" => Some("graphql"),
-        "sparql" => Some("sparql"),
-        "sql-pgq" | "sql_pgq" => Some("sql-pgq"),
-        _ => None,
+    // Feature gate: languages that require specific feature flags.
+    // graphql-rdf needs both "graphql" and "rdf" features.
+    let feature_gates: Vec<&str> = match language {
+        "cypher" => vec!["cypher"],
+        "gremlin" => vec!["gremlin"],
+        "graphql" => vec!["graphql"],
+        "graphql-rdf" => vec!["graphql", "rdf"],
+        "sparql" => vec!["sparql"],
+        "sql-pgq" | "sql_pgq" => vec!["sql-pgq"],
+        _ => vec![],
     };
 
     // Requires from file meta
     let mut all_requires: Vec<&str> = file.meta.requires.iter().map(String::as_str).collect();
-    if let Some(fg) = feature_gate.filter(|fg| !all_requires.contains(fg)) {
-        all_requires.push(fg);
+    for fg in feature_gates {
+        if !all_requires.contains(&fg) {
+            all_requires.push(fg);
+        }
     }
 
     if !all_requires.is_empty() {

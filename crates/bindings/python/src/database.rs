@@ -477,6 +477,17 @@ impl PyGrafeoDB {
         self.execute_language_impl("sparql", query, params)
     }
 
+    /// Execute a query in a named language (e.g. `"graphql-rdf"`).
+    #[pyo3(signature = (language, query, params=None))]
+    fn execute_language(
+        &self,
+        language: &str,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<PyQueryResult> {
+        self.execute_language_impl(language, query, params)
+    }
+
     /// Create a node.
     #[pyo3(signature = (labels, properties=None))]
     fn create_node(
@@ -1659,6 +1670,7 @@ impl PyGrafeoDB {
         dict.set_item("path", info.path.map(|p| p.to_string_lossy().to_string()))?;
         dict.set_item("wal_enabled", info.wal_enabled)?;
         dict.set_item("version", info.version)?;
+        dict.set_item("features", pyo3::types::PyList::new(py, &info.features)?)?;
 
         Ok(dict.into())
     }
@@ -2757,6 +2769,17 @@ impl PyTransaction {
         self.execute_language_impl("sparql", query, params)
     }
 
+    /// Execute a query in a named language (e.g. `"graphql-rdf"`).
+    #[pyo3(signature = (language, query, params=None))]
+    fn execute_language(
+        &self,
+        language: &str,
+        query: &str,
+        params: Option<&Bound<'_, pyo3::types::PyDict>>,
+    ) -> PyResult<PyQueryResult> {
+        self.execute_language_impl(language, query, params)
+    }
+
     /// Check if transaction is active.
     #[getter]
     fn is_active(&self) -> bool {
@@ -2821,16 +2844,11 @@ impl PyDatabaseStats {
 
 /// Pulls nodes and edges out of query results so Python can work with them.
 fn extract_entities(result: &QueryResult, _db: &GrafeoDB) -> (Vec<PyNode>, Vec<PyEdge>) {
-    let (raw_nodes, raw_edges) = grafeo_bindings_common::entity::extract_entities(result);
-    let nodes = raw_nodes
-        .into_iter()
-        .map(|n| PyNode::new(n.id, n.labels, n.properties))
-        .collect();
-    let edges = raw_edges
-        .into_iter()
-        .map(|e| PyEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties))
-        .collect();
-    (nodes, edges)
+    grafeo_bindings_common::entity::extract_and_map(
+        result,
+        |n| PyNode::new(n.id, n.labels, n.properties),
+        |e| PyEdge::new(e.id, e.edge_type, e.source_id, e.target_id, e.properties),
+    )
 }
 
 /// Converts a CDC ChangeEvent to a Python dict-like HashMap.

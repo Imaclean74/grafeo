@@ -118,7 +118,7 @@ function parseTests(ctx) {
 function parseSingleTest(ctx) {
   const tc = {
     name: '', query: null, statements: [], setup: [],
-    params: {}, tags: [], skip: null,
+    params: {}, tags: [], skip: null, language: null,
     expect: makeExpect(), variants: {},
   }
 
@@ -149,6 +149,8 @@ function parseSingleTest(ctx) {
         ctx.idx++; tc.setup = parseStringList(ctx); break
       case 'statements':
         ctx.idx++; tc.statements = parseStringList(ctx); break
+      case 'language':
+        tc.language = unquote(value); ctx.idx++; break
       case 'tags':
         tc.tags = parseYamlList(value); ctx.idx++; break
       case 'params':
