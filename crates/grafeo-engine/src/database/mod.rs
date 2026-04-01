@@ -16,6 +16,8 @@ mod admin;
 mod async_ops;
 #[cfg(feature = "async-storage")]
 pub(crate) mod async_wal_store;
+#[cfg(feature = "cdc")]
+pub(crate) mod cdc_store;
 mod crud;
 #[cfg(feature = "embed")]
 mod embed;
