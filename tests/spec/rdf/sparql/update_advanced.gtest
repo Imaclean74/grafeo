@@ -318,6 +318,64 @@ tests:
         - [Gus, Prague]
         - [Vincent, Barcelona]
 
+  - name: modify_update_boolean_value
+    # MODIFY with boolean literals: same type-mismatch risk as integers.
+    # Boolean `true` is stored as xsd:boolean but bound as string "true".
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/feature> <http://ex.org/enabled> true .
+        }
+      - |
+        DELETE { ?s <http://ex.org/enabled> ?old }
+        INSERT { ?s <http://ex.org/enabled> false }
+        WHERE  { ?s <http://ex.org/enabled> ?old }
+    query: "SELECT ?v WHERE { <http://ex.org/feature> <http://ex.org/enabled> ?v }"
+    expect:
+      rows:
+        - [false]
+
+  - name: modify_update_double_value
+    # MODIFY with double literals: stored as xsd:double, bound as string.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/sensor> <http://ex.org/reading> 3.14 .
+        }
+      - |
+        DELETE { ?s <http://ex.org/reading> ?old }
+        INSERT { ?s <http://ex.org/reading> 2.72 }
+        WHERE  { ?s <http://ex.org/reading> ?old }
+    query: "SELECT ?v WHERE { <http://ex.org/sensor> <http://ex.org/reading> ?v }"
+    expect:
+      rows:
+        - [2.72]
+
+  - name: modify_multiple_typed_values_in_one_pass
+    # MODIFY that deletes and replaces typed values for multiple subjects
+    # in a single pass. Exercises the fallback delete path for each binding.
+    setup:
+      - |
+        INSERT DATA {
+          <http://ex.org/a> <http://ex.org/score> 10 .
+          <http://ex.org/b> <http://ex.org/score> 20 .
+          <http://ex.org/c> <http://ex.org/score> 30 .
+        }
+      - |
+        DELETE { ?s <http://ex.org/score> ?old }
+        INSERT { ?s <http://ex.org/score> 0 }
+        WHERE  { ?s <http://ex.org/score> ?old . FILTER(?old < 25) }
+    query: |
+      SELECT ?s ?v WHERE {
+        ?s <http://ex.org/score> ?v
+      } ORDER BY ?s
+    expect:
+      ordered: true
+      rows:
+        - [http://ex.org/a, 0]
+        - [http://ex.org/b, 0]
+        - [http://ex.org/c, 30]
+
   - name: modify_where_no_match_leaves_store_unchanged
     # DELETE/INSERT/WHERE where the WHERE clause matches nothing: no changes.
     setup:

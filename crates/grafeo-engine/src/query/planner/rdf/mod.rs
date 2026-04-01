@@ -2429,7 +2429,11 @@ impl Operator for RdfModifyOperator {
                                 .into_iter()
                                 .filter(|t| {
                                     if let Term::Literal(lit) = t.object() {
+                                        // Only match typed literals whose lexical
+                                        // value equals the target. Plain strings
+                                        // (xsd:string) should have matched exactly.
                                         lit.value() == target_lit.value()
+                                            && lit.datatype() != Literal::XSD_STRING
                                     } else {
                                         false
                                     }
