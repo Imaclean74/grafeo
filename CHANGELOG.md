@@ -25,6 +25,13 @@ Correctness hardening, Jepsen readiness, and Hybrid Logical Clock for causal con
 - **SPARQL gap tests**: advanced subqueries (nested SELECT, aggregate feeding outer filter), CONSTRUCT/DESCRIBE output forms, ASK with property paths, nested OPTIONAL, VALUES with UNDEF
 - **Rosetta cross-language tests**: pattern matching and aggregation equivalence across GQL, Cypher, Gremlin, and SQL/PGQ using movie and e-commerce datasets
 - **Common cross-cutting tests**: error handling (syntax errors, type mismatches, delete constraints), numeric edge cases (int64 boundaries, Infinity, NaN, rounding), string operations (case conversion, substring, trim, replace, split, reverse, NULL propagation)
+- **Production coverage gtests**: data type round-trips (every Value variant: int64, float64, string, bool, date, time, duration, datetime, list; property mutation roundtrips), mutation patterns (cascading DETACH DELETE, reinsert after delete, property type change, edge property update, batch UNWIND insert), input validation (special characters, long strings, identifier edge cases, type confusion, NULL three-valued logic, 5-hop patterns, large IN lists)
+- **Cross-language data fidelity (Rosetta)**: GQL insert verified readable in Cypher, Gremlin, and SQL/PGQ; int/bool/string/null type preservation; multi-label visibility; edge type and property fidelity across languages
+- **Parameter substitution tests**: $param in WHERE clause across GQL, Cypher, SQL/PGQ; string, int, float, bool parameter types; multiple parameters in single query
+- **Catalog diagnostics tests**: db.labels(), db.relationshipTypes(), db.propertyKeys() with WHERE filters, aliases, after insert, on empty database
+- **Index correctness tests**: Cypher CREATE INDEX then query, index survives property update, index survives deletion, insert-delete-reinsert cycle, numeric index range queries, bulk insert then index, DROP INDEX
+- **Temporal real-world queries**: date filtering (ranges, exact match), date ordering (ASC), date aggregation (year extraction, count per year), temporal CASE expressions, customer join date queries, date comparisons across relationships
+- **Production algorithm tests**: Dijkstra (unweighted, weighted, single-pair), PageRank, connected components, degree/betweenness/closeness centrality, BFS, strongly connected components on transportation and movie datasets
 
 ### Fixed
 

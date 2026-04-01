@@ -233,7 +233,7 @@ async function runTestCase(db, tc, language, setupLanguage) {
   const params = coerceParams(tc.params)
 
   // Determine queries
-  const queries = tc.statements.length > 0 ? tc.statements : tc.query ? [tc.query] : []
+  const queries = tc.statements.length > 0 ? tc.statements : (tc.query || exp.error != null) ? [tc.query ?? ''] : []
   if (queries.length === 0) throw new Error(`No query or statements in test '${tc.name}'`)
 
   // Error case: execute all-but-last normally, only last should fail

@@ -198,8 +198,8 @@ class GtestItem(pytest.Item):
 
         if statements:
             queries = list(statements)
-        elif query:
-            queries = [query]
+        elif query or tc.expect.get("error") is not None:
+            queries = [query or ""]
         else:
             pytest.fail(f"No query or statements in test '{tc.name}' in {self.path}")
             return  # unreachable, but keeps linters happy

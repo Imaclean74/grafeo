@@ -260,4 +260,4 @@ tests:
       END AS status
     expect:
       rows:
-        - [yes]
+        - ["yes"]
