@@ -616,6 +616,40 @@ impl GrafeoDB {
         })
     }
 
+    /// Converts the database to a read-only [`CompactStore`] for faster queries.
+    ///
+    /// Takes a snapshot of all nodes and edges from the current store, builds
+    /// a columnar `CompactStore` with CSR adjacency, and switches the database
+    /// to read-only mode. The original store is dropped to free memory.
+    ///
+    /// After calling this, all write queries will fail with
+    /// `TransactionError::ReadOnly`. Read queries (across all supported
+    /// languages) continue to work and benefit from ~60x memory reduction
+    /// and 100x+ traversal speedup.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the conversion fails (e.g. more than 32,767
+    /// distinct labels or edge types).
+    ///
+    /// [`CompactStore`]: grafeo_core::graph::compact::CompactStore
+    #[cfg(feature = "compact-store")]
+    pub fn compact(&mut self) -> Result<()> {
+        use grafeo_core::graph::compact::from_graph_store;
+
+        let current_store = self.graph_store();
+        let compact = from_graph_store(current_store.as_ref())
+            .map_err(|e| grafeo_common::utils::error::Error::Internal(e.to_string()))?;
+
+        self.external_read_store = Some(Arc::new(compact) as Arc<dyn GraphStore>);
+        self.external_write_store = None;
+        self.store = None;
+        self.read_only = true;
+        self.query_cache = Arc::new(QueryCache::default());
+
+        Ok(())
+    }
+
     /// Applies WAL records to restore the database state.
     ///
     /// Data mutation records are routed through a graph cursor that tracks

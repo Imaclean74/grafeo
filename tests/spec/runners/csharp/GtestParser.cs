@@ -152,6 +152,8 @@ public static class GtestParser
                     ctx.Idx++; tc.Statements = ParseStringList(ctx); break;
                 case "tags":
                     tc.Tags = ParseYamlList(value); ctx.Idx++; break;
+                case "requires":
+                    tc.Requires = ParseYamlList(value); ctx.Idx++; break;
                 case "params":
                     ctx.Idx++; tc.Params = ParseMap(ctx, 6); break;
                 case "expect":

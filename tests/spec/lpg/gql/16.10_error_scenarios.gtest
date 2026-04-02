@@ -165,6 +165,7 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: large_integer_addition
+    requires: [int64-safe]
     setup:
       - "INSERT (:N {v: 9223372036854775806})"
     query: "MATCH (n:N) RETURN n.v + 1 AS result"

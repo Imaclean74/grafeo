@@ -28,6 +28,11 @@ import (
 // into the grafeo-c library (e.g. "gql", "cypher", "algos").
 var compiledFeatures = map[string]bool{}
 
+// runnerCapabilities lists capabilities provided by this runner itself
+// (not compiled into the native library). For example, Go natively supports
+// 64-bit integers, so "int64-safe" is always available.
+var runnerCapabilities = map[string]bool{"int64-safe": true}
+
 func TestMain(m *testing.M) {
 	db, err := grafeo.OpenInMemory()
 	if err == nil {
@@ -45,7 +50,7 @@ func TestMain(m *testing.M) {
 // hasFeature checks if a feature or compound language key is available.
 // Handles compound keys like "graphql-rdf" by checking each part.
 func hasFeature(key string) bool {
-	if compiledFeatures[key] {
+	if compiledFeatures[key] || runnerCapabilities[key] {
 		return true
 	}
 	// Compound language key: "graphql-rdf" requires both "graphql" and "rdf"
@@ -84,6 +89,7 @@ type TestCase struct {
 	Setup      []string
 	Params     map[string]string
 	Tags       []string
+	Requires   []string
 	Skip       string
 	Language   string
 	Expect     Expect
@@ -733,6 +739,9 @@ func parseSingleTest(ctx *parseContext) TestCase {
 		case "tags":
 			tc.Tags = parseYamlList(value)
 			ctx.idx++
+		case "requires":
+			tc.Requires = parseYamlList(value)
+			ctx.idx++
 		case "params":
 			ctx.idx++
 			tc.Params = parseMap(ctx, 6)
@@ -1144,6 +1153,12 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 		key := strings.ReplaceAll(req, "_", "-")
 		if !hasFeature(key) {
 			t.Skipf("feature '%s' not available in this build", key)
+		}
+	}
+	for _, req := range tc.Requires {
+		key := strings.ReplaceAll(req, "_", "-")
+		if !hasFeature(key) {
+			t.Skipf("required capability '%s' not available", key)
 		}
 	}
 

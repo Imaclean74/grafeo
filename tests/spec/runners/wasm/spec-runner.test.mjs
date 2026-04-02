@@ -145,6 +145,8 @@ function executeQuery(db, language, query) {
   return db.executeWithLanguage(query, key)
 }
 
+const RUNNER_CAPABILITIES = new Set([])
+
 /** Cached set of compiled feature flags, populated on first use. */
 let _features = null
 function getFeatures(db) {
@@ -164,7 +166,7 @@ function isAvailable(db, requirement) {
     const f = getFeatures(db)
     return f.has('graphql') && f.has('rdf')
   }
-  return getFeatures(db).has(key)
+  return getFeatures(db).has(key) || RUNNER_CAPABILITIES.has(key)
 }
 
 // ---------------------------------------------------------------------------
@@ -203,6 +205,10 @@ for (const filePath of gtestFiles) {
             if (tc.skip) return ctx.skip()
             const db = new Database()
             if (!isAvailable(db, lang)) return ctx.skip()
+            // Check per-test requires
+            for (const req of (tc.requires || [])) {
+              if (!isAvailable(db, req)) return ctx.skip()
+            }
             if (meta.dataset && meta.dataset !== 'empty') {
               loadDataset(db, meta.dataset)
             }
@@ -231,6 +237,11 @@ for (const filePath of gtestFiles) {
 
         // Check requires: skip if binding does not expose the required method
         for (const req of meta.requires) {
+          if (!isAvailable(db, req)) return ctx.skip()
+        }
+
+        // Check per-test requires
+        for (const req of (tc.requires || [])) {
           if (!isAvailable(db, req)) return ctx.skip()
         }
 

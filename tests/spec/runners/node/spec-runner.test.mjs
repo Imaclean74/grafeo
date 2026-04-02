@@ -119,6 +119,8 @@ async function executeQuery(db, language, query, params) {
   }
 }
 
+const RUNNER_CAPABILITIES = new Set(['int64-safe'])
+
 /** Cached set of compiled feature flags, populated on first use. */
 let _features = null
 function getFeatures(db) {
@@ -138,7 +140,7 @@ function isAvailable(db, requirement) {
     const f = getFeatures(db)
     return f.has('graphql') && f.has('rdf')
   }
-  return getFeatures(db).has(key)
+  return getFeatures(db).has(key) || RUNNER_CAPABILITIES.has(key)
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +180,10 @@ for (const filePath of gtestFiles) {
             const db = GrafeoDB.create()
             try {
               if (!isAvailable(db, lang)) return ctx.skip()
+              // Check per-test requires
+              for (const req of (tc.requires || [])) {
+                if (!isAvailable(db, req)) return ctx.skip()
+              }
               if (meta.dataset && meta.dataset !== 'empty') {
                 await loadDataset(db, meta.dataset)
               }
@@ -204,6 +210,11 @@ for (const filePath of gtestFiles) {
 
           // Check requires: skip if the compiled build lacks the feature
           for (const req of meta.requires) {
+            if (!isAvailable(db, req)) return ctx.skip()
+          }
+
+          // Check per-test requires
+          for (const req of (tc.requires || [])) {
             if (!isAvailable(db, req)) return ctx.skip()
           }
 

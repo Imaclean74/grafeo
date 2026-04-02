@@ -578,6 +578,22 @@ impl super::Planner {
                         if !inner_vars.contains_key(variable) {
                             continue;
                         }
+                        // Skip if the Return already materializes this exact
+                        // property access (possibly under an alias). E.g.
+                        // RETURN caller.name AS caller ORDER BY caller.name
+                        // already has caller.name in the Return items.
+                        let already_in_return = ret.items.iter().any(|item| {
+                            matches!(
+                                &item.expression,
+                                LogicalExpression::Property {
+                                    variable: v,
+                                    property: p,
+                                } if v == variable && p == property
+                            )
+                        });
+                        if already_in_return {
+                            continue;
+                        }
                         let col_name = format!("{}_{}", variable, property);
                         if seen.insert(col_name.clone()) {
                             augmented_items.push(crate::query::plan::ReturnItem {

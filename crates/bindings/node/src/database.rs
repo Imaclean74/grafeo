@@ -724,6 +724,20 @@ impl JsGrafeoDB {
             .map_err(napi::Error::from)
     }
 
+    /// Converts the database to a read-only CompactStore for faster queries.
+    ///
+    /// Takes a snapshot of all nodes and edges, builds a columnar store with
+    /// CSR adjacency, and switches to read-only mode. After this call, write
+    /// operations will fail.
+    #[cfg(feature = "compact-store")]
+    #[napi]
+    pub fn compact(&self) -> Result<()> {
+        let mut db = self.inner.write();
+        db.compact()
+            .map_err(NodeGrafeoError::from)
+            .map_err(napi::Error::from)
+    }
+
     /// Close the database.
     #[napi]
     pub fn close(&self) -> Result<()> {

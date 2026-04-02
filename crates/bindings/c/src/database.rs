@@ -1927,6 +1927,26 @@ pub extern "C" fn grafeo_wal_checkpoint(db: *mut GrafeoDatabase) -> GrafeoStatus
 }
 
 // =========================================================================
+// CompactStore
+// =========================================================================
+
+/// Converts the database to a read-only CompactStore for faster queries.
+///
+/// Takes a snapshot of all nodes and edges, builds a columnar store with
+/// CSR adjacency, and switches to read-only mode. After this call, write
+/// operations will fail.
+#[cfg(feature = "compact-store")]
+#[unsafe(no_mangle)]
+pub extern "C" fn grafeo_compact(db: *mut GrafeoDatabase) -> GrafeoStatus {
+    let db = db_ref!(db);
+    let mut guard = db.inner.write();
+    match guard.compact() {
+        Ok(()) => GrafeoStatus::Ok,
+        Err(e) => set_error(&e),
+    }
+}
+
+// =========================================================================
 // Memory Management
 // =========================================================================
 

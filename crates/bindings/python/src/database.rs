@@ -2030,6 +2030,27 @@ impl PyGrafeoDB {
         self.inner.read().clear_plan_cache();
     }
 
+    /// Converts the database to a read-only CompactStore for faster queries.
+    ///
+    /// Takes a snapshot of all nodes and edges, builds a columnar store with
+    /// CSR adjacency, and switches to read-only mode. The original store is
+    /// dropped to free memory, giving ~60x memory reduction and 100x+
+    /// traversal speedup for read-only workloads.
+    ///
+    /// After calling this, write queries will fail.
+    ///
+    /// Example:
+    ///     db = GrafeoDB()
+    ///     db.execute("INSERT (:Person {name: 'Alix', age: 30})")
+    ///     db.compact()
+    ///     result = db.execute("MATCH (p:Person) RETURN p.name")
+    #[cfg(feature = "compact-store")]
+    fn compact(&self) -> PyResult<()> {
+        let mut db = self.inner.write();
+        db.compact().map_err(PyGrafeoError::from)?;
+        Ok(())
+    }
+
     /// Close the database.
     fn close(&self) -> PyResult<()> {
         let db = self.inner.read();

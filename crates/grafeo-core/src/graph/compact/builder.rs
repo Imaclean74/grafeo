@@ -578,6 +578,334 @@ fn compute_zone_map_bool(values: &[bool]) -> ZoneMap {
 }
 
 // ---------------------------------------------------------------------------
+// Conversion from GraphStore
+// ---------------------------------------------------------------------------
+
+/// Which columnar encoding to use for a property key, inferred from values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InferredType {
+    /// All non-null values are `Value::Int64` with value >= 0.
+    BitPacked,
+    /// All non-null values are `Value::Bool`.
+    Bitmap,
+    /// All non-null values are `Value::String`, or mixed/unsupported types.
+    Dict,
+}
+
+/// Converts any [`GraphStore`] into a [`CompactStore`].
+///
+/// Reads all nodes grouped by label, infers column types from property values,
+/// reads all edges grouped by type, and builds a `CompactStore` with backward
+/// CSR enabled for every relationship table.
+///
+/// # Type mapping
+///
+/// | Source type | Codec | Notes |
+/// |-------------|-------|-------|
+/// | `Int64` (>= 0) | `BitPacked` | Auto bit-width via `BitPackedInts::pack` |
+/// | `Bool` | `Bitmap` | |
+/// | `String` | `Dict` | |
+/// | All others | `Dict` | Serialized via `Display` |
+///
+/// Nodes with multiple labels use a canonical combined key (labels sorted,
+/// joined with `|`). `Null` values are stored as zero/false/empty-string
+/// depending on the inferred codec.
+///
+/// # Errors
+///
+/// Propagates any [`CompactStoreError`] from the underlying builder (e.g.
+/// if there are more than 32,767 distinct labels or edge types).
+pub fn from_graph_store(
+    store: &dyn crate::graph::traits::GraphStore,
+) -> Result<CompactStore, CompactStoreError> {
+    // Step 1: Collect all nodes grouped by label, build ID mapping.
+    let labels = store.all_labels();
+    if labels.is_empty() {
+        return CompactStoreBuilder::new().build();
+    }
+
+    // old_node_id -> (label_key, offset_within_label)
+    let mut id_map: FxHashMap<grafeo_common::types::NodeId, (ArcStr, u32)> = FxHashMap::default();
+
+    // label_key -> (ordered node IDs, property_key -> Vec<Value>)
+    // We use Vec<Value> to collect per-column values in row order.
+    let mut label_data: Vec<(
+        ArcStr,
+        Vec<grafeo_common::types::NodeId>,
+        FxHashMap<PropertyKey, Vec<Value>>,
+    )> = Vec::new();
+
+    // Collect all node IDs per label. Nodes with multiple labels use a
+    // compound key (sorted labels joined with "|").
+    let mut seen_node_ids: FxHashSet<grafeo_common::types::NodeId> = FxHashSet::default();
+    let mut label_key_index: FxHashMap<ArcStr, usize> = FxHashMap::default();
+
+    for label in &labels {
+        let node_ids = store.nodes_by_label(label);
+        for &nid in &node_ids {
+            if !seen_node_ids.insert(nid) {
+                continue; // already assigned via an earlier label
+            }
+
+            // Get the node to check its full label set.
+            let Some(node) = store.get_node(nid) else {
+                continue;
+            };
+
+            let label_key: ArcStr = if node.labels.len() <= 1 {
+                ArcStr::from(label.as_str())
+            } else {
+                let mut sorted: Vec<&str> = node.labels.iter().map(|l| l.as_str()).collect();
+                sorted.sort_unstable();
+                ArcStr::from(sorted.join("|"))
+            };
+
+            // Find or create the label_data entry.
+            let entry_idx = if let Some(&idx) = label_key_index.get(&label_key) {
+                idx
+            } else {
+                let idx = label_data.len();
+                label_key_index.insert(label_key.clone(), idx);
+                label_data.push((label_key.clone(), Vec::new(), FxHashMap::default()));
+                idx
+            };
+
+            let (_, ref mut node_ids_vec, ref mut props_map) = label_data[entry_idx];
+            let offset = node_ids_vec.len() as u32;
+            node_ids_vec.push(nid);
+            id_map.insert(nid, (label_key, offset));
+
+            // Collect properties.
+            for (key, value) in node.properties.iter() {
+                let col = props_map
+                    .entry(key.clone())
+                    .or_insert_with(|| vec![Value::Null; offset as usize]);
+                // Pad with nulls if this key appeared for the first time.
+                while col.len() < offset as usize {
+                    col.push(Value::Null);
+                }
+                col.push(value.clone());
+            }
+
+            // Pad all existing columns that this node didn't have.
+            let expected_len = offset as usize + 1;
+            for col in props_map.values_mut() {
+                while col.len() < expected_len {
+                    col.push(Value::Null);
+                }
+            }
+        }
+    }
+
+    // Step 2: Infer column types and build CompactStoreBuilder.
+    let mut builder = CompactStoreBuilder::new();
+
+    for (label_key, _node_ids, props_map) in &label_data {
+        builder = builder.node_table(label_key.as_str(), |t| {
+            for (key, values) in props_map {
+                let inferred = infer_type_from_values(values);
+                match inferred {
+                    InferredType::BitPacked => {
+                        let u64_values: Vec<u64> = values
+                            .iter()
+                            .map(|v| match v {
+                                Value::Int64(n) => *n as u64,
+                                _ => 0,
+                            })
+                            .collect();
+                        let bp = BitPackedInts::pack(&u64_values);
+                        let zone_map = compute_zone_map_u64(&u64_values);
+                        t.zone_maps.push((key.clone(), zone_map));
+                        t.columns.push((key.clone(), ColumnCodec::BitPacked(bp)));
+                        t.record_len(u64_values.len());
+                    }
+                    InferredType::Bitmap => {
+                        let bool_values: Vec<bool> = values
+                            .iter()
+                            .map(|v| matches!(v, Value::Bool(true)))
+                            .collect();
+                        let bv = BitVector::from_bools(&bool_values);
+                        let zone_map = compute_zone_map_bool(&bool_values);
+                        t.zone_maps.push((key.clone(), zone_map));
+                        t.columns.push((key.clone(), ColumnCodec::Bitmap(bv)));
+                        t.record_len(bool_values.len());
+                    }
+                    InferredType::Dict => {
+                        let str_values: Vec<String> = values
+                            .iter()
+                            .map(|v| match v {
+                                Value::Null => String::new(),
+                                Value::String(s) => s.to_string(),
+                                other => format!("{other}"),
+                            })
+                            .collect();
+                        let str_refs: Vec<&str> = str_values.iter().map(String::as_str).collect();
+                        let mut dict_builder = DictionaryBuilder::new();
+                        for s in &str_refs {
+                            dict_builder.add(s);
+                        }
+                        let dict = dict_builder.build();
+                        let zone_map = compute_zone_map_strings(&str_refs);
+                        t.zone_maps.push((key.clone(), zone_map));
+                        t.columns.push((key.clone(), ColumnCodec::Dict(dict)));
+                        t.record_len(str_values.len());
+                    }
+                }
+            }
+            t
+        });
+    }
+
+    // Step 3: Collect all edges in a single pass, grouped by (edge_type, src_label, dst_label).
+    // Key: (edge_type, src_label_key, dst_label_key) -> Vec<(src_offset, dst_offset)>
+    type EdgeGroupKey = (ArcStr, ArcStr, ArcStr);
+    let mut edge_groups: FxHashMap<EdgeGroupKey, Vec<(u32, u32)>> = FxHashMap::default();
+    let mut edge_props_groups: FxHashMap<EdgeGroupKey, FxHashMap<PropertyKey, Vec<Value>>> =
+        FxHashMap::default();
+
+    // Iterate all nodes and their outgoing edges.
+    for (_label_key, node_ids, _) in &label_data {
+        for &nid in node_ids {
+            let outgoing = store.edges_from(nid, crate::graph::Direction::Outgoing);
+            for (_target_nid, edge_id) in outgoing {
+                let Some(edge) = store.get_edge(edge_id) else {
+                    continue;
+                };
+
+                let Some((src_label, src_offset)) = id_map.get(&edge.src) else {
+                    continue;
+                };
+                let Some((dst_label, dst_offset)) = id_map.get(&edge.dst) else {
+                    continue;
+                };
+
+                let group_key: EdgeGroupKey =
+                    (edge.edge_type.clone(), src_label.clone(), dst_label.clone());
+
+                let edges_vec = edge_groups.entry(group_key.clone()).or_default();
+                let edge_idx = edges_vec.len();
+                edges_vec.push((*src_offset, *dst_offset));
+
+                // Collect edge properties.
+                if !edge.properties.is_empty() {
+                    let props = edge_props_groups.entry(group_key).or_default();
+                    for (key, value) in edge.properties.iter() {
+                        let col = props
+                            .entry(key.clone())
+                            .or_insert_with(|| vec![Value::Null; edge_idx]);
+                        while col.len() < edge_idx {
+                            col.push(Value::Null);
+                        }
+                        col.push(value.clone());
+                    }
+                    let expected_len = edge_idx + 1;
+                    for col in props.values_mut() {
+                        while col.len() < expected_len {
+                            col.push(Value::Null);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 4: Add relationship tables to the builder.
+    for ((edge_type, src_label, dst_label), edges) in &edge_groups {
+        let edge_props =
+            edge_props_groups.get(&(edge_type.clone(), src_label.clone(), dst_label.clone()));
+
+        builder = builder.rel_table(
+            edge_type.as_str(),
+            src_label.as_str(),
+            dst_label.as_str(),
+            |r| {
+                r.edges(edges.clone()).backward(true);
+
+                // Add edge property columns.
+                if let Some(props) = edge_props {
+                    for (key, values) in props {
+                        let inferred = infer_type_from_values(values);
+                        match inferred {
+                            InferredType::BitPacked => {
+                                let u64_values: Vec<u64> = values
+                                    .iter()
+                                    .map(|v| match v {
+                                        Value::Int64(n) => *n as u64,
+                                        _ => 0,
+                                    })
+                                    .collect();
+                                let bp = BitPackedInts::pack(&u64_values);
+                                r.properties.push((key.clone(), ColumnCodec::BitPacked(bp)));
+                            }
+                            InferredType::Bitmap => {
+                                let bool_values: Vec<bool> = values
+                                    .iter()
+                                    .map(|v| matches!(v, Value::Bool(true)))
+                                    .collect();
+                                let bv = BitVector::from_bools(&bool_values);
+                                r.properties.push((key.clone(), ColumnCodec::Bitmap(bv)));
+                            }
+                            InferredType::Dict => {
+                                let str_values: Vec<String> = values
+                                    .iter()
+                                    .map(|v| match v {
+                                        Value::Null => String::new(),
+                                        Value::String(s) => s.to_string(),
+                                        other => format!("{other}"),
+                                    })
+                                    .collect();
+                                let mut dict_builder = DictionaryBuilder::new();
+                                for s in &str_values {
+                                    dict_builder.add(s);
+                                }
+                                let dict = dict_builder.build();
+                                r.properties.push((key.clone(), ColumnCodec::Dict(dict)));
+                            }
+                        }
+                    }
+                }
+
+                r
+            },
+        );
+    }
+
+    builder.build()
+}
+
+/// Infers the columnar encoding type from a slice of [`Value`]s.
+///
+/// Rules:
+/// - If all non-null values are `Int64` with value >= 0, returns `BitPacked`.
+/// - If all non-null values are `Bool`, returns `Bitmap`.
+/// - Otherwise returns `Dict` (string fallback).
+fn infer_type_from_values(values: &[Value]) -> InferredType {
+    let mut saw_int = false;
+    let mut saw_bool = false;
+    let mut saw_other = false;
+
+    for v in values {
+        match v {
+            Value::Null => {} // skip nulls
+            Value::Int64(n) if *n >= 0 => saw_int = true,
+            Value::Bool(_) => saw_bool = true,
+            _ => saw_other = true,
+        }
+    }
+
+    if saw_other || (saw_int && saw_bool) {
+        InferredType::Dict
+    } else if saw_int {
+        InferredType::BitPacked
+    } else if saw_bool {
+        InferredType::Bitmap
+    } else {
+        // All nulls: default to Dict.
+        InferredType::Dict
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -629,5 +957,122 @@ mod tests {
             .build();
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_from_graph_store_round_trip() {
+        // Build a CompactStore via the builder, then convert it back via
+        // from_graph_store and verify the data survives the round-trip.
+        let original = CompactStoreBuilder::new()
+            .node_table("Person", |t| {
+                t.column_bitpacked("age", &[25, 30, 35], 6)
+                    .column_dict("name", &["Alix", "Gus", "Vincent"])
+                    .column_bitmap("active", &[true, false, true])
+            })
+            .node_table("City", |t| t.column_dict("name", &["Amsterdam", "Berlin"]))
+            .rel_table("LIVES_IN", "Person", "City", |r| {
+                r.edges([(0, 0), (1, 1), (2, 0)]).backward(true)
+            })
+            .build()
+            .unwrap();
+
+        // Round-trip through from_graph_store.
+        let converted = from_graph_store(&original).unwrap();
+
+        // Verify node counts.
+        assert_eq!(converted.nodes_by_label("Person").len(), 3);
+        assert_eq!(converted.nodes_by_label("City").len(), 2);
+
+        // Verify properties survived.
+        let person_ids = converted.nodes_by_label("Person");
+        let mut ages: Vec<i64> = person_ids
+            .iter()
+            .filter_map(|&id| {
+                converted
+                    .get_node_property(id, &PropertyKey::new("age"))
+                    .and_then(|v| v.as_int64())
+            })
+            .collect();
+        ages.sort_unstable();
+        assert_eq!(ages, vec![25, 30, 35]);
+
+        // Verify edges survived.
+        let city_ids = converted.nodes_by_label("City");
+        let mut total_edges = 0;
+        for &pid in &person_ids {
+            let edges = converted.edges_from(pid, crate::graph::Direction::Outgoing);
+            total_edges += edges.len();
+        }
+        assert_eq!(total_edges, 3);
+
+        // Verify backward edges (incoming to cities).
+        for &cid in &city_ids {
+            let incoming = converted.edges_from(cid, crate::graph::Direction::Incoming);
+            assert!(!incoming.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_from_graph_store_empty() {
+        let empty = CompactStoreBuilder::new().build().unwrap();
+        let converted = from_graph_store(&empty).unwrap();
+        assert_eq!(converted.nodes_by_label("Anything").len(), 0);
+    }
+
+    #[test]
+    fn test_from_graph_store_with_lpg_store() {
+        use crate::graph::lpg::LpgStore;
+
+        let store = LpgStore::new().unwrap();
+
+        // Insert nodes.
+        let alix_id = store.create_node(&["Person"]);
+        store.set_node_property(alix_id, "name", Value::from("Alix"));
+        store.set_node_property(alix_id, "age", Value::Int64(30));
+
+        let gus_id = store.create_node(&["Person"]);
+        store.set_node_property(gus_id, "name", Value::from("Gus"));
+        store.set_node_property(gus_id, "age", Value::Int64(25));
+
+        let amsterdam_id = store.create_node(&["City"]);
+        store.set_node_property(amsterdam_id, "name", Value::from("Amsterdam"));
+
+        // Insert edges.
+        store.create_edge(alix_id, amsterdam_id, "LIVES_IN");
+        store.create_edge(gus_id, amsterdam_id, "LIVES_IN");
+
+        // Convert.
+        let compact = from_graph_store(&store).unwrap();
+
+        // Verify.
+        assert_eq!(compact.nodes_by_label("Person").len(), 2);
+        assert_eq!(compact.nodes_by_label("City").len(), 1);
+
+        // Check that properties are readable.
+        let person_ids = compact.nodes_by_label("Person");
+        let mut names: Vec<String> = person_ids
+            .iter()
+            .filter_map(|&id| {
+                compact
+                    .get_node_property(id, &PropertyKey::new("name"))
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["Alix", "Gus"]);
+
+        // Check edges: both persons should have outgoing edges.
+        let mut total_outgoing = 0;
+        for &pid in &person_ids {
+            let edges = compact.edges_from(pid, crate::graph::Direction::Outgoing);
+            total_outgoing += edges.len();
+        }
+        assert_eq!(total_outgoing, 2);
+
+        // Check incoming edges on the city.
+        let city_ids = compact.nodes_by_label("City");
+        assert_eq!(city_ids.len(), 1);
+        let incoming = compact.edges_from(city_ids[0], crate::graph::Direction::Incoming);
+        assert_eq!(incoming.len(), 2);
     }
 }

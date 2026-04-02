@@ -50,6 +50,7 @@ tests:
         - [1000000000]
 
   - name: int64_max
+    requires: [int64-safe]
     setup:
       - "INSERT (:T {v: 9223372036854775807})"
     query: "MATCH (n:T) RETURN n.v AS val"

@@ -178,6 +178,7 @@ void               grafeo_free_transaction(GrafeoTransaction* tx);
 char*        grafeo_info(GrafeoDatabase* db);
 GrafeoStatus grafeo_save(GrafeoDatabase* db, const char* path);
 GrafeoStatus grafeo_wal_checkpoint(GrafeoDatabase* db);
+GrafeoStatus grafeo_compact(GrafeoDatabase* db);
 
 /* ---- Memory management --------------------------------------------------- */
 

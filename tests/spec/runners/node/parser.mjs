@@ -119,7 +119,7 @@ function parseSingleTest(ctx) {
   const tc = {
     name: '', query: null, statements: [], setup: [],
     params: {}, tags: [], skip: null, language: null,
-    expect: makeExpect(), variants: {},
+    expect: makeExpect(), variants: {}, requires: [],
   }
 
   // First line: "- name: xxx"
@@ -153,6 +153,8 @@ function parseSingleTest(ctx) {
         tc.language = unquote(value); ctx.idx++; break
       case 'tags':
         tc.tags = parseYamlList(value); ctx.idx++; break
+      case 'requires':
+        tc.requires = parseYamlList(value); ctx.idx++; break
       case 'params':
         ctx.idx++; tc.params = parseMap(ctx, 6); break
       case 'expect':

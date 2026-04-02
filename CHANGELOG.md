@@ -8,6 +8,7 @@ Correctness hardening, Jepsen readiness, and Hybrid Logical Clock for causal con
 
 ### Added
 
+- **`GrafeoDB::compact()`**: converts a live database to a read-only `CompactStore` in one call. Snapshots all nodes and edges, builds columnar storage with CSR adjacency, and switches to read-only mode. Exposed as `db.compact()` in Python, Node.js, and WASM; `grafeo_compact(db)` in C (flows through to Dart, C#, Go). Included in the `embedded` and `browser` feature profiles by default ([#199](https://github.com/GrafeoDB/grafeo/issues/199))
 - **Gremlin `valueMap()` and `elementMap()` with no arguments**: `g.V().valueMap()` returns all properties as a map; `g.V().elementMap()` returns id, label, and all properties as a map
 - **WAL-disabled crash injection tests**: crash recovery tests for single-file format with WAL disabled
 - **High-contention stress tests**: concurrent MERGE, mixed read/write, and concurrent schema mutation scenarios
