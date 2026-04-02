@@ -523,13 +523,14 @@ fn unquote(s: &str) -> String {
     let s = s.trim();
     if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
         let inner = &s[1..s.len() - 1];
-        // Handle basic escape sequences
+        // Only unescape YAML-level escapes (quotes and backslashes).
+        // Do NOT process \n or \t here: those are GQL string escapes
+        // that the GQL parser handles via unescape_string().
         inner
-            .replace("\\n", "\n")
-            .replace("\\t", "\t")
+            .replace("\\\\", "\x00")
             .replace("\\\"", "\"")
             .replace("\\'", "'")
-            .replace("\\\\", "\\")
+            .replace('\x00', "\\")
     } else {
         s.to_string()
     }

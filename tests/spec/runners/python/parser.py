@@ -499,17 +499,22 @@ def _lb_parse_kv(s: str) -> tuple:
 
 
 def _unquote(s: str) -> str:
+    """Strip surrounding quotes and unescape YAML-level escapes only.
+
+    Do NOT process ``\\n`` or ``\\t`` here: those are GQL string escapes
+    that the engine's parser handles via ``unescape_string()``.
+    """
     s = s.strip()
     if len(s) >= 2 and (
         (s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")
     ):
         inner = s[1:-1]
+        # Use a sentinel to avoid order-dependent replacement issues
         return (
-            inner.replace("\\n", "\n")
-            .replace("\\t", "\t")
+            inner.replace("\\\\", "\x00")
             .replace('\\"', '"')
             .replace("\\'", "'")
-            .replace("\\\\", "\\")
+            .replace("\x00", "\\")
         )
     return s
 
