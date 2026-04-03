@@ -383,6 +383,255 @@ pub fn k_core(store: &dyn GraphStore, k: usize) -> Vec<NodeId> {
 }
 
 // ============================================================================
+// K-Truss Decomposition
+// ============================================================================
+
+/// Result of k-truss decomposition.
+#[derive(Debug, Clone)]
+pub struct KTrussResult {
+    /// Maps each edge (as ordered node pair) to its truss number.
+    /// The truss number is the maximum k for which the edge belongs to the k-truss.
+    pub truss_numbers: FxHashMap<(NodeId, NodeId), usize>,
+    /// The maximum truss number found in the graph.
+    pub max_truss: usize,
+}
+
+impl KTrussResult {
+    /// Returns edges in the k-truss (edges with truss number >= k).
+    pub fn k_truss(&self, k: usize) -> Vec<(NodeId, NodeId)> {
+        self.truss_numbers
+            .iter()
+            .filter(|&(_, &truss)| truss >= k)
+            .map(|(&edge, _)| edge)
+            .collect()
+    }
+}
+
+/// Computes the number of triangles containing each edge (edge support).
+///
+/// For each edge (u, v), the support is the number of common neighbors of u and v.
+/// This is a standalone metric useful for edge importance analysis.
+///
+/// # Complexity
+///
+/// O(m * d_max) where m is the number of edges and d_max is the maximum degree
+pub fn edge_triangle_support(store: &dyn GraphStore) -> FxHashMap<(NodeId, NodeId), u64> {
+    let nodes = store.node_ids();
+    if nodes.is_empty() {
+        return FxHashMap::default();
+    }
+
+    let neighbors = build_undirected_neighbors_set(store);
+    let mut support: FxHashMap<(NodeId, NodeId), u64> = FxHashMap::default();
+
+    // For each node u, for each pair of neighbors (v, w), if v-w is also
+    // an edge, increment support for all three edges of the triangle.
+    for (&node, node_neighbors) in &neighbors {
+        let nb_list: Vec<NodeId> = node_neighbors.iter().copied().collect();
+        for i in 0..nb_list.len() {
+            for j in (i + 1)..nb_list.len() {
+                let v = nb_list[i];
+                let w = nb_list[j];
+                if neighbors.get(&v).is_some_and(|s| s.contains(&w)) {
+                    // Triangle found: {node, v, w}. Increment support for all three edges.
+                    let edges = [
+                        ordered_pair(node, v),
+                        ordered_pair(node, w),
+                        ordered_pair(v, w),
+                    ];
+                    for edge in edges {
+                        *support.entry(edge).or_default() += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Each triangle is found 3 times (once from each vertex), so divide by 3.
+    for val in support.values_mut() {
+        *val /= 3;
+    }
+
+    support
+}
+
+/// Full k-truss decomposition: compute the truss number of every edge.
+///
+/// An edge belongs to the k-truss if it is supported by at least k-2 triangles
+/// in every iteration of the peeling process. The truss number is the maximum k
+/// for which this holds.
+///
+/// Uses iterative edge peeling: repeatedly remove edges with the lowest support,
+/// recording their truss number, and updating support counts for affected edges.
+///
+/// # Complexity
+///
+/// O(m^1.5) total across all peeling iterations
+pub fn ktruss_decomposition(store: &dyn GraphStore) -> KTrussResult {
+    let nodes = store.node_ids();
+    if nodes.is_empty() {
+        return KTrussResult {
+            truss_numbers: FxHashMap::default(),
+            max_truss: 0,
+        };
+    }
+
+    // Build undirected adjacency using HashSets for fast membership tests.
+    let mut neighbors: FxHashMap<NodeId, FxHashSet<NodeId>> = FxHashMap::default();
+    for &node in &nodes {
+        neighbors.insert(node, FxHashSet::default());
+    }
+    for &node in &nodes {
+        for (nb, _) in store.edges_from(node, Direction::Outgoing) {
+            if let Some(set) = neighbors.get_mut(&node) {
+                set.insert(nb);
+            }
+            if let Some(set) = neighbors.get_mut(&nb) {
+                set.insert(node);
+            }
+        }
+    }
+
+    // Collect all undirected edges.
+    let mut live_edges: FxHashSet<(NodeId, NodeId)> = FxHashSet::default();
+    for (&u, u_neighbors) in &neighbors {
+        for &v in u_neighbors {
+            live_edges.insert(ordered_pair(u, v));
+        }
+    }
+
+    if live_edges.is_empty() {
+        return KTrussResult {
+            truss_numbers: FxHashMap::default(),
+            max_truss: 0,
+        };
+    }
+
+    // Compute initial edge support (triangle count per edge).
+    let mut support: FxHashMap<(NodeId, NodeId), usize> = FxHashMap::default();
+    for &(u, v) in &live_edges {
+        let u_nb = &neighbors[&u];
+        let v_nb = &neighbors[&v];
+        let common = u_nb.intersection(v_nb).count();
+        support.insert((u, v), common);
+    }
+
+    // Iterative peeling.
+    let mut truss_numbers: FxHashMap<(NodeId, NodeId), usize> = FxHashMap::default();
+    let mut max_truss = 0usize;
+    let mut k: usize = 2;
+
+    while !live_edges.is_empty() {
+        // Find all edges with support < k - 2.
+        let threshold = k.saturating_sub(2);
+        let mut to_remove: Vec<(NodeId, NodeId)> = live_edges
+            .iter()
+            .filter(|e| support.get(*e).copied().unwrap_or(0) < threshold)
+            .copied()
+            .collect();
+
+        if to_remove.is_empty() {
+            // All remaining edges have support >= threshold.
+            // These edges have truss number >= k, try next k.
+            k += 1;
+            // Safety: if k exceeds possible support, everything will be removed next iteration.
+            if k > live_edges.len() + 2 {
+                // Remaining edges all belong to truss k-1.
+                for &edge in &live_edges {
+                    truss_numbers.insert(edge, k - 1);
+                    max_truss = max_truss.max(k - 1);
+                }
+                break;
+            }
+            continue;
+        }
+
+        // Remove edges and update support.
+        while let Some((u, v)) = to_remove.pop() {
+            if !live_edges.contains(&(u, v)) {
+                continue;
+            }
+            live_edges.remove(&(u, v));
+            truss_numbers.insert((u, v), k - 1);
+            max_truss = max_truss.max(k - 1);
+
+            // Update adjacency.
+            if let Some(set) = neighbors.get_mut(&u) {
+                set.remove(&v);
+            }
+            if let Some(set) = neighbors.get_mut(&v) {
+                set.remove(&u);
+            }
+
+            // For each common neighbor w of (u, v) that still exists:
+            // decrement support of edges (u, w) and (v, w).
+            let u_nb: Vec<NodeId> = neighbors
+                .get(&u)
+                .map(|s| s.iter().copied().collect())
+                .unwrap_or_default();
+            let v_nb: FxHashSet<NodeId> = neighbors.get(&v).cloned().unwrap_or_default();
+
+            for w in u_nb {
+                if v_nb.contains(&w) {
+                    let uw = ordered_pair(u, w);
+                    let vw = ordered_pair(v, w);
+                    if let Some(s) = support.get_mut(&uw) {
+                        *s = s.saturating_sub(1);
+                        if *s < threshold && live_edges.contains(&uw) {
+                            to_remove.push(uw);
+                        }
+                    }
+                    if let Some(s) = support.get_mut(&vw) {
+                        *s = s.saturating_sub(1);
+                        if *s < threshold && live_edges.contains(&vw) {
+                            to_remove.push(vw);
+                        }
+                    }
+                }
+            }
+
+            support.remove(&(u, v));
+        }
+    }
+
+    KTrussResult {
+        truss_numbers,
+        max_truss,
+    }
+}
+
+/// Extracts edges in the k-truss subgraph.
+pub fn k_truss(store: &dyn GraphStore, k: usize) -> Vec<(NodeId, NodeId)> {
+    let result = ktruss_decomposition(store);
+    result.k_truss(k)
+}
+
+/// Orders a node pair so the smaller ID comes first (canonical edge representation).
+fn ordered_pair(a: NodeId, b: NodeId) -> (NodeId, NodeId) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
+/// Builds undirected neighbor sets for all nodes (same as clustering.rs helper).
+fn build_undirected_neighbors_set(store: &dyn GraphStore) -> FxHashMap<NodeId, FxHashSet<NodeId>> {
+    let nodes = store.node_ids();
+    let mut neighbors: FxHashMap<NodeId, FxHashSet<NodeId>> = FxHashMap::default();
+    for &node in &nodes {
+        neighbors.insert(node, FxHashSet::default());
+    }
+    for &node in &nodes {
+        for (neighbor, _) in store.edges_from(node, Direction::Outgoing) {
+            if let Some(set) = neighbors.get_mut(&node) {
+                set.insert(neighbor);
+            }
+            if let Some(set) = neighbors.get_mut(&neighbor) {
+                set.insert(node);
+            }
+        }
+    }
+    neighbors
+}
+
+// ============================================================================
 // Algorithm Wrappers for Plugin Registry
 // ============================================================================
 
@@ -502,6 +751,74 @@ impl GraphAlgorithm for KCoreAlgorithm {
                     Value::Int64(node.0 as i64),
                     Value::Int64(core as i64),
                     Value::Int64(decomposition.max_core as i64),
+                ]);
+            }
+
+            Ok(result)
+        }
+    }
+}
+
+/// Static parameter definitions for K-Truss algorithm.
+static KTRUSS_PARAMS: OnceLock<Vec<ParameterDef>> = OnceLock::new();
+
+fn ktruss_params() -> &'static [ParameterDef] {
+    KTRUSS_PARAMS.get_or_init(|| {
+        vec![ParameterDef {
+            name: "k".to_string(),
+            description: "Truss number threshold (optional, returns decomposition if not set)"
+                .to_string(),
+            param_type: ParameterType::Integer,
+            required: false,
+            default: None,
+        }]
+    })
+}
+
+/// K-Truss decomposition algorithm wrapper.
+pub struct KTrussAlgorithm;
+
+impl GraphAlgorithm for KTrussAlgorithm {
+    fn name(&self) -> &str {
+        "ktruss"
+    }
+
+    fn description(&self) -> &str {
+        "K-truss decomposition: finds dense subgraphs where every edge \
+         is supported by at least k-2 triangles"
+    }
+
+    fn parameters(&self) -> &[ParameterDef] {
+        ktruss_params()
+    }
+
+    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+        let decomposition = ktruss_decomposition(store);
+
+        if let Some(k) = params.get_int("k") {
+            // Return edges in the k-truss
+            let edges = decomposition.k_truss(k as usize);
+
+            let mut result = AlgorithmResult::new(vec!["source".to_string(), "target".to_string()]);
+
+            for (src, dst) in edges {
+                result.add_row(vec![Value::Int64(src.0 as i64), Value::Int64(dst.0 as i64)]);
+            }
+
+            Ok(result)
+        } else {
+            // Return full decomposition
+            let mut result = AlgorithmResult::new(vec![
+                "source".to_string(),
+                "target".to_string(),
+                "truss_number".to_string(),
+            ]);
+
+            for ((src, dst), truss) in &decomposition.truss_numbers {
+                result.add_row(vec![
+                    Value::Int64(src.0 as i64),
+                    Value::Int64(dst.0 as i64),
+                    Value::Int64(*truss as i64),
                 ]);
             }
 
@@ -730,5 +1047,199 @@ mod tests {
         // Total nodes in all shells should equal total nodes
         let total_in_shells: usize = (0..=result.max_core).map(|k| result.k_shell(k).len()).sum();
         assert_eq!(total_in_shells, 4);
+    }
+
+    // ---- K-Truss tests ----
+
+    fn create_complete(n: usize) -> LpgStore {
+        let store = LpgStore::new().unwrap();
+        let nodes: Vec<NodeId> = (0..n).map(|_| store.create_node(&["Node"])).collect();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                store.create_edge(nodes[i], nodes[j], "EDGE");
+                store.create_edge(nodes[j], nodes[i], "EDGE");
+            }
+        }
+        store
+    }
+
+    #[test]
+    fn test_ktruss_empty_graph() {
+        let store = LpgStore::new().unwrap();
+        let result = ktruss_decomposition(&store);
+        assert!(result.truss_numbers.is_empty());
+        assert_eq!(result.max_truss, 0);
+    }
+
+    #[test]
+    fn test_ktruss_path_graph() {
+        let store = create_simple_path();
+        let result = ktruss_decomposition(&store);
+
+        // Path has no triangles, so all edges have truss number 2.
+        for (_, &truss) in &result.truss_numbers {
+            assert_eq!(truss, 2, "Path edges should have truss number 2");
+        }
+    }
+
+    #[test]
+    fn test_ktruss_triangle() {
+        let store = LpgStore::new().unwrap();
+        let n0 = store.create_node(&["Node"]);
+        let n1 = store.create_node(&["Node"]);
+        let n2 = store.create_node(&["Node"]);
+
+        store.create_edge(n0, n1, "EDGE");
+        store.create_edge(n1, n0, "EDGE");
+        store.create_edge(n1, n2, "EDGE");
+        store.create_edge(n2, n1, "EDGE");
+        store.create_edge(n2, n0, "EDGE");
+        store.create_edge(n0, n2, "EDGE");
+
+        let result = ktruss_decomposition(&store);
+
+        // Triangle (K_3): each edge has support 1, so truss number = 3.
+        assert_eq!(result.max_truss, 3);
+        for (_, &truss) in &result.truss_numbers {
+            assert_eq!(truss, 3);
+        }
+    }
+
+    #[test]
+    fn test_ktruss_complete_k4() {
+        let store = create_complete(4);
+        let result = ktruss_decomposition(&store);
+
+        // K_4: each edge has support 2 (2 common neighbors), truss number = 4.
+        assert_eq!(result.max_truss, 4);
+        for (_, &truss) in &result.truss_numbers {
+            assert_eq!(truss, 4);
+        }
+    }
+
+    #[test]
+    fn test_ktruss_complete_k5() {
+        let store = create_complete(5);
+        let result = ktruss_decomposition(&store);
+
+        // K_5: each edge has 3 common neighbors, truss number = 5.
+        assert_eq!(result.max_truss, 5);
+        for (_, &truss) in &result.truss_numbers {
+            assert_eq!(truss, 5);
+        }
+    }
+
+    #[test]
+    fn test_ktruss_extraction() {
+        let store = create_complete(4);
+        let edges_4 = k_truss(&store, 4);
+        // All 6 edges of K_4 should be in 4-truss
+        assert_eq!(edges_4.len(), 6);
+
+        let edges_5 = k_truss(&store, 5);
+        // No edges should be in 5-truss for K_4
+        assert!(edges_5.is_empty());
+    }
+
+    #[test]
+    fn test_edge_triangle_support() {
+        let store = create_complete(4);
+        let support = edge_triangle_support(&store);
+
+        // K_4: each edge is in 2 triangles
+        for (_, &count) in &support {
+            assert_eq!(count, 2);
+        }
+    }
+
+    #[test]
+    fn test_ktruss_algorithm_wrapper() {
+        let store = create_complete(4);
+        let algo = KTrussAlgorithm;
+
+        assert_eq!(algo.name(), "ktruss");
+
+        // Full decomposition
+        let params = Parameters::new();
+        let result = algo.execute(&store, &params).unwrap();
+        assert_eq!(result.columns.len(), 3); // source, target, truss_number
+        assert_eq!(result.row_count(), 6); // 6 edges in K_4
+
+        // Extract k=4 truss
+        let mut params = Parameters::new();
+        params.set_int("k", 4);
+        let result = algo.execute(&store, &params).unwrap();
+        assert_eq!(result.columns.len(), 2); // source, target
+        assert_eq!(result.row_count(), 6);
+    }
+
+    // ---- Cross-model: RDF adapter produces same results as LPG ----
+
+    #[cfg(feature = "rdf")]
+    #[test]
+    fn test_ktruss_rdf_matches_lpg() {
+        use grafeo_core::graph::rdf::{RdfGraphStoreAdapter, RdfStore, Term, Triple};
+
+        // Build K_4 in RDF
+        let rdf = RdfStore::new();
+        let names = ["a", "b", "c", "d"];
+        let pred = Term::iri("http://example.org/knows");
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                let u = Term::iri(format!("http://example.org/{}", names[i]));
+                let v = Term::iri(format!("http://example.org/{}", names[j]));
+                rdf.insert(Triple::new(u.clone(), pred.clone(), v.clone()));
+                rdf.insert(Triple::new(v, pred.clone(), u));
+            }
+        }
+
+        let adapter = RdfGraphStoreAdapter::new(&rdf);
+        let rdf_result = ktruss_decomposition(&adapter);
+
+        // K_4 via LPG
+        let lpg = create_complete(4);
+        let lpg_result = ktruss_decomposition(&lpg);
+
+        assert_eq!(
+            rdf_result.max_truss, lpg_result.max_truss,
+            "RDF ({}) and LPG ({}) max_truss must match for K_4",
+            rdf_result.max_truss, lpg_result.max_truss
+        );
+        assert_eq!(rdf_result.max_truss, 4);
+        assert_eq!(
+            rdf_result.truss_numbers.len(),
+            lpg_result.truss_numbers.len()
+        );
+    }
+
+    #[cfg(feature = "rdf")]
+    #[test]
+    fn test_kcore_rdf_matches_lpg() {
+        use grafeo_core::graph::rdf::{RdfGraphStoreAdapter, RdfStore, Term, Triple};
+
+        // Build K_4 in RDF
+        let rdf = RdfStore::new();
+        let names = ["a", "b", "c", "d"];
+        let pred = Term::iri("http://example.org/knows");
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                let u = Term::iri(format!("http://example.org/{}", names[i]));
+                let v = Term::iri(format!("http://example.org/{}", names[j]));
+                rdf.insert(Triple::new(u.clone(), pred.clone(), v.clone()));
+                rdf.insert(Triple::new(v, pred.clone(), u));
+            }
+        }
+
+        let adapter = RdfGraphStoreAdapter::new(&rdf);
+        let rdf_result = kcore_decomposition(&adapter);
+
+        let lpg = create_complete(4);
+        let lpg_result = kcore_decomposition(&lpg);
+
+        assert_eq!(
+            rdf_result.max_core, lpg_result.max_core,
+            "RDF ({}) and LPG ({}) max_core must match for K_4",
+            rdf_result.max_core, lpg_result.max_core
+        );
     }
 }

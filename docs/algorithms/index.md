@@ -68,8 +68,11 @@ Grafeo includes a library of built-in graph algorithms for common analysis tasks
 | Shortest Path | Path | O(V + E) | Navigation, routing |
 | PageRank | Centrality | O(V + E) | Ranking, importance |
 | Louvain | Community | O(V log V) | Clustering |
+| Stochastic Block Partition | Community | O(V * B^2) | Bayesian community inference |
 | Connected Components | Community | O(V + E) | Graph structure |
 | Triangle Count | Metrics | O(E^1.5) | Clustering analysis |
+| K-Truss | Structure | O(m^1.5) | Dense subgraph discovery |
+| Subgraph Isomorphism | Structure | O(n^k) | Pattern matching, motif counting |
 
 ## Using Algorithms
 
@@ -133,13 +136,16 @@ The `algorithms()` object provides these methods:
 **Structure:**
 
 - `triangles()` - Triangle counting
+- `triangles(parallel=True)` - Parallel triangle counting (degree-ordered, merge intersection)
 - `transitivity()` - Global clustering coefficient
+- `ktruss(k=None)` - K-truss decomposition (dense subgraph discovery)
+- `subgraph_isomorphism_count(pattern)` - Count subgraph isomorphisms
 - `minimum_spanning_tree()` - MST construction
 - `max_flow(source, sink)` - Maximum flow
 
 ### From Query Languages (GQL, Cypher, SQL/PGQ)
 
-All 22 algorithms are available via `CALL` statements in any supported query language:
+All algorithms are available via `CALL` statements in any supported query language:
 
 ```sql
 -- Run PageRank with default parameters
@@ -205,6 +211,10 @@ Works the same way across all three languages:
 | `grafeo.articulation_points()` | Structure | node_id |
 | `grafeo.bridges()` | Structure | source, target |
 | `grafeo.k_core()` | Structure | node_id, core_number, max_core |
+| `grafeo.ktruss()` | Structure | source, target, truss_number |
+| `grafeo.total_triangles()` | Clustering | total_triangles |
+| `grafeo.stochastic_block_partition()` | Community | node_id, block_id, description_length |
+| `grafeo.subgraph_isomorphism()` | Structure | count |
 
 ## NetworkX Integration
 

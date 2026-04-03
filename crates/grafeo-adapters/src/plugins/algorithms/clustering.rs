@@ -370,9 +370,192 @@ pub fn clustering_coefficient_parallel(
     }
 }
 
+/// Counts the total number of unique triangles in parallel.
+///
+/// This is a dedicated parallel path optimized purely for triangle counting,
+/// without the overhead of computing per-node clustering coefficients. Uses
+/// three key optimizations:
+///
+/// 1. **Degree ordering**: For each edge (u, v), only process when
+///    degree(u) <= degree(v). This ensures each triangle is counted exactly
+///    once and halves the work.
+/// 2. **Sorted neighbor intersection**: Pre-sort adjacency lists and use
+///    merge-based intersection instead of hash lookups. This is cache-friendly.
+/// 3. **Atomic accumulator**: Uses `AtomicU64` instead of per-thread maps,
+///    avoiding lock contention during the reduce phase.
+///
+/// Falls back to sequential `total_triangles` for small graphs.
+///
+/// # Arguments
+///
+/// * `store` - The graph store (treated as undirected)
+/// * `parallel_threshold` - Minimum node count to enable parallelism
+///
+/// # Returns
+///
+/// Total number of unique triangles.
+///
+/// # Complexity
+///
+/// O(m * sqrt(m) / threads) where m is the number of edges
+#[cfg(feature = "parallel")]
+pub fn total_triangles_parallel(store: &dyn GraphStore, parallel_threshold: usize) -> u64 {
+    let nodes = store.node_ids();
+    if nodes.len() < parallel_threshold {
+        return total_triangles(store);
+    }
+
+    // Phase 1: Build sorted undirected adjacency lists + degree array.
+    let neighbors = build_undirected_neighbors(store);
+    let n = neighbors.len();
+    if n == 0 {
+        return 0;
+    }
+
+    // Convert to index-based adjacency with degree-based orientation.
+    // Orient each undirected edge u -> v where degree(u) < degree(v)
+    // (tiebreak: u < v). A triangle {a, b, c} with a -> b, a -> c, b -> c
+    // is counted exactly once: from edge (a, b) when c appears in the
+    // oriented neighbors of BOTH a and b.
+    let mut node_list: Vec<NodeId> = neighbors.keys().copied().collect();
+    node_list.sort_unstable();
+
+    let node_to_idx: FxHashMap<NodeId, usize> =
+        node_list.iter().enumerate().map(|(i, &n)| (n, i)).collect();
+
+    let degrees: Vec<usize> = node_list.iter().map(|node| neighbors[node].len()).collect();
+
+    // Build degree-oriented adjacency: u -> v only if deg(u) < deg(v) or (== and u < v).
+    let mut oriented_adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for u in 0..n {
+        let node_u = node_list[u];
+        for &nb in &neighbors[&node_u] {
+            let v = node_to_idx[&nb];
+            if degrees[u] < degrees[v] || (degrees[u] == degrees[v] && u < v) {
+                oriented_adj[u].push(v);
+            }
+        }
+        oriented_adj[u].sort_unstable();
+    }
+
+    // Collect oriented edges for parallel iteration.
+    let mut edge_list: Vec<(usize, usize)> = Vec::new();
+    for (u, adj) in oriented_adj.iter().enumerate() {
+        for &v in adj {
+            edge_list.push((u, v));
+        }
+    }
+
+    // Phase 3: Parallel triangle counting.
+    // For each oriented edge (u, v), count common neighbors w in the
+    // intersection of oriented_adj[u] and oriented_adj[v].
+    // Since w must be a neighbor of both u and v in the oriented graph,
+    // and orientation ensures u < v < w (in degree order), each triangle
+    // is counted exactly once.
+    let oriented_adj = Arc::new(oriented_adj);
+    let counter = std::sync::atomic::AtomicU64::new(0);
+
+    edge_list.par_iter().for_each(|&(u, v)| {
+        let count = sorted_intersection_count(&oriented_adj[u], &oriented_adj[v]);
+        counter.fetch_add(count, std::sync::atomic::Ordering::Relaxed);
+    });
+
+    counter.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Counts the size of the intersection of two sorted slices.
+///
+/// Uses a merge-based approach: O(min(|a|, |b|)) with excellent cache behavior.
+#[cfg(feature = "parallel")]
+fn sorted_intersection_count(a: &[usize], b: &[usize]) -> u64 {
+    let mut count = 0u64;
+    let mut i = 0;
+    let mut j = 0;
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                count += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    count
+}
+
 // ============================================================================
 // Algorithm Wrapper for Plugin Registry
 // ============================================================================
+
+/// Static parameter definitions for Total Triangles algorithm.
+static TOTAL_TRIANGLES_PARAMS: OnceLock<Vec<ParameterDef>> = OnceLock::new();
+
+fn total_triangles_params() -> &'static [ParameterDef] {
+    TOTAL_TRIANGLES_PARAMS.get_or_init(|| {
+        vec![
+            ParameterDef {
+                name: "parallel".to_string(),
+                description: "Enable parallel computation (default: true)".to_string(),
+                param_type: ParameterType::Boolean,
+                required: false,
+                default: Some("true".to_string()),
+            },
+            ParameterDef {
+                name: "parallel_threshold".to_string(),
+                description: "Minimum nodes for parallel execution (default: 50)".to_string(),
+                param_type: ParameterType::Integer,
+                required: false,
+                default: Some("50".to_string()),
+            },
+        ]
+    })
+}
+
+/// Total Triangles algorithm wrapper for the plugin registry.
+///
+/// Returns a single-row result with the total triangle count.
+/// Uses the optimized parallel path when available and enabled.
+pub struct TotalTrianglesAlgorithm;
+
+impl GraphAlgorithm for TotalTrianglesAlgorithm {
+    fn name(&self) -> &str {
+        "total_triangles"
+    }
+
+    fn description(&self) -> &str {
+        "Count the total number of unique triangles in the graph"
+    }
+
+    fn parameters(&self) -> &[ParameterDef] {
+        total_triangles_params()
+    }
+
+    fn execute(&self, store: &dyn GraphStore, params: &Parameters) -> Result<AlgorithmResult> {
+        #[cfg(feature = "parallel")]
+        let count = {
+            let parallel = params.get_bool("parallel").unwrap_or(true);
+            let threshold = params.get_int("parallel_threshold").unwrap_or(50) as usize;
+
+            if parallel {
+                total_triangles_parallel(store, threshold)
+            } else {
+                total_triangles(store)
+            }
+        };
+
+        #[cfg(not(feature = "parallel"))]
+        let count = {
+            let _ = params;
+            total_triangles(store)
+        };
+
+        let mut output = AlgorithmResult::new(vec!["total_triangles".to_string()]);
+        output.add_row(vec![Value::Int64(count as i64)]);
+        Ok(output)
+    }
+}
 
 /// Static parameter definitions for Clustering Coefficient algorithm.
 static CLUSTERING_PARAMS: OnceLock<Vec<ParameterDef>> = OnceLock::new();
@@ -780,6 +963,78 @@ mod tests {
         assert_eq!(result.row_count(), 10);
     }
 
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_total_triangles_parallel_matches_sequential() {
+        let store = create_complete_graph(20);
+
+        let sequential = total_triangles(&store);
+        let parallel = total_triangles_parallel(&store, 1); // Force parallel
+
+        assert_eq!(
+            sequential, parallel,
+            "Sequential ({}) and parallel ({}) triangle counts diverge",
+            sequential, parallel
+        );
+
+        // K_20 has C(20,3) = 1140 triangles
+        assert_eq!(sequential, 1140);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_total_triangles_parallel_triangle_graph() {
+        let store = create_triangle_graph();
+        let count = total_triangles_parallel(&store, 1);
+        assert_eq!(count, 1);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_total_triangles_parallel_star_graph() {
+        let store = create_star_graph();
+        let count = total_triangles_parallel(&store, 1);
+        assert_eq!(count, 0);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_total_triangles_parallel_path_graph() {
+        let store = create_path_graph();
+        let count = total_triangles_parallel(&store, 1);
+        assert_eq!(count, 0);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_total_triangles_parallel_empty_graph() {
+        let store = LpgStore::new().unwrap();
+        let count = total_triangles_parallel(&store, 1);
+        assert_eq!(count, 0);
+    }
+
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn test_total_triangles_parallel_threshold_fallback() {
+        let store = create_triangle_graph();
+        // Threshold higher than node count: should use sequential path
+        let count = total_triangles_parallel(&store, 100);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_total_triangles_algorithm_wrapper() {
+        let store = create_complete_graph(5);
+        let algo = TotalTrianglesAlgorithm;
+
+        assert_eq!(algo.name(), "total_triangles");
+        let params = Parameters::new();
+        let result = algo.execute(&store, &params).unwrap();
+        assert_eq!(result.row_count(), 1);
+        // K_5 has 10 triangles
+        assert_eq!(result.rows[0][0], Value::Int64(10));
+    }
+
     #[test]
     fn test_two_triangles_sharing_edge() {
         // Two triangles sharing edge 0-1:
@@ -829,5 +1084,73 @@ mod tests {
             "Expected 2/3, got {}",
             coeff_0
         );
+    }
+
+    // ---- Cross-model: RDF adapter produces same results as LPG ----
+
+    #[cfg(feature = "rdf")]
+    #[test]
+    fn test_triangle_count_rdf_matches_lpg() {
+        use grafeo_core::graph::rdf::{RdfGraphStoreAdapter, RdfStore, Term, Triple};
+
+        // Build a K_4 graph in RDF
+        let rdf = RdfStore::new();
+        let nodes = ["a", "b", "c", "d"];
+        for i in 0..nodes.len() {
+            for j in (i + 1)..nodes.len() {
+                let u = Term::iri(format!("http://example.org/{}", nodes[i]));
+                let v = Term::iri(format!("http://example.org/{}", nodes[j]));
+                let pred = Term::iri("http://example.org/knows");
+                rdf.insert(Triple::new(u.clone(), pred.clone(), v.clone()));
+                rdf.insert(Triple::new(v, pred, u));
+            }
+        }
+
+        let adapter = RdfGraphStoreAdapter::new(&rdf);
+
+        // K_4 on RDF adapter
+        let rdf_triangles = total_triangles(&adapter);
+
+        // K_4 on LPG
+        let lpg = create_complete_graph(4);
+        let lpg_triangles = total_triangles(&lpg);
+
+        assert_eq!(
+            rdf_triangles, lpg_triangles,
+            "RDF adapter ({}) and LPG ({}) triangle counts must match for K_4",
+            rdf_triangles, lpg_triangles
+        );
+        // K_4 has C(4,3) = 4 triangles
+        assert_eq!(rdf_triangles, 4);
+    }
+
+    #[cfg(feature = "rdf")]
+    #[test]
+    fn test_clustering_coefficient_rdf_matches_lpg() {
+        use grafeo_core::graph::rdf::{RdfGraphStoreAdapter, RdfStore, Term, Triple};
+
+        // Build a triangle in RDF
+        let rdf = RdfStore::new();
+        let pred = Term::iri("http://example.org/knows");
+        let pairs = [("a", "b"), ("b", "c"), ("c", "a")];
+        for (s, o) in pairs {
+            let subj = Term::iri(format!("http://example.org/{s}"));
+            let obj = Term::iri(format!("http://example.org/{o}"));
+            rdf.insert(Triple::new(subj.clone(), pred.clone(), obj.clone()));
+            rdf.insert(Triple::new(obj, pred.clone(), subj));
+        }
+
+        let adapter = RdfGraphStoreAdapter::new(&rdf);
+        let rdf_result = clustering_coefficient(&adapter);
+
+        // All coefficients should be 1.0 (triangle)
+        for (_, coeff) in &rdf_result.coefficients {
+            assert!(
+                (*coeff - 1.0).abs() < 1e-10,
+                "RDF triangle coefficient should be 1.0, got {}",
+                coeff
+            );
+        }
+        assert_eq!(rdf_result.total_triangles, 1);
     }
 }

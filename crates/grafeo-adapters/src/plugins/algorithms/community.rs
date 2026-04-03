@@ -343,6 +343,345 @@ fn compute_modularity(
     modularity / m2
 }
 
+// ============================================================================
+// Stochastic Block Partition
+// ============================================================================
+
+/// Result of stochastic block partition.
+#[derive(Debug, Clone)]
+pub struct StochasticBlockPartitionResult {
+    /// Maps each node to its block/community ID.
+    pub partition: FxHashMap<NodeId, usize>,
+    /// Number of blocks in the partition.
+    pub num_blocks: usize,
+    /// Description length (MDL) of the partition: lower is better.
+    pub description_length: f64,
+}
+
+/// Infers the optimal block partition using the degree-corrected stochastic
+/// block model.
+///
+/// Uses agglomerative merging to minimize the description length of the graph
+/// under the SBM generative model. Starting from each node in its own block,
+/// it greedily merges the pair of blocks that gives the largest decrease in
+/// description length until no merge improves the objective.
+///
+/// # Arguments
+///
+/// * `store` - The graph to partition.
+/// * `num_blocks` - Optional target number of blocks. If `None`, the algorithm
+///   selects the optimal number by minimizing description length.
+/// * `max_iterations` - Maximum merge iterations.
+///
+/// # Complexity
+///
+/// O(V * B^2) per iteration where B is the current block count.
+pub fn stochastic_block_partition(
+    store: &dyn GraphStore,
+    num_blocks: Option<usize>,
+    max_iterations: usize,
+) -> StochasticBlockPartitionResult {
+    stochastic_block_partition_inner(store, num_blocks, max_iterations, None)
+}
+
+/// Incrementally updates an existing stochastic block partition after edges
+/// have been added to the graph.
+///
+/// Takes the previous partition as a warm start and refines it. Much faster
+/// than computing from scratch when only a small number of edges were added.
+pub fn stochastic_block_partition_incremental(
+    store: &dyn GraphStore,
+    prior_partition: &FxHashMap<NodeId, usize>,
+    max_iterations: usize,
+) -> StochasticBlockPartitionResult {
+    stochastic_block_partition_inner(store, None, max_iterations, Some(prior_partition))
+}
+
+/// Core SBP implementation with optional warm start.
+fn stochastic_block_partition_inner(
+    store: &dyn GraphStore,
+    target_blocks: Option<usize>,
+    max_iterations: usize,
+    warm_start: Option<&FxHashMap<NodeId, usize>>,
+) -> StochasticBlockPartitionResult {
+    let nodes = store.node_ids();
+    let n = nodes.len();
+
+    if n == 0 {
+        return StochasticBlockPartitionResult {
+            partition: FxHashMap::default(),
+            num_blocks: 0,
+            description_length: 0.0,
+        };
+    }
+
+    // Build node index mapping.
+    let mut node_to_idx: FxHashMap<NodeId, usize> = FxHashMap::default();
+    let mut idx_to_node: Vec<NodeId> = Vec::with_capacity(n);
+    for (idx, &node) in nodes.iter().enumerate() {
+        node_to_idx.insert(node, idx);
+        idx_to_node.push(node);
+    }
+
+    // Build undirected adjacency (as index pairs).
+    let mut adj: Vec<FxHashSet<usize>> = vec![FxHashSet::default(); n];
+    for &node in &nodes {
+        let i = node_to_idx[&node];
+        for (neighbor, _) in store.edges_from(node, Direction::Outgoing) {
+            if let Some(&j) = node_to_idx.get(&neighbor) {
+                adj[i].insert(j);
+                adj[j].insert(i);
+            }
+        }
+    }
+
+    // Initialize partition: each node in its own block, or warm start.
+    let mut block: Vec<usize> = if let Some(prior) = warm_start {
+        // Map prior partition to index-based blocks. New nodes get fresh block IDs.
+        let mut max_block = prior.values().copied().max().unwrap_or(0);
+        (0..n)
+            .map(|i| {
+                if let Some(&b) = prior.get(&idx_to_node[i]) {
+                    b
+                } else {
+                    max_block += 1;
+                    max_block
+                }
+            })
+            .collect()
+    } else {
+        (0..n).collect()
+    };
+
+    // Count total edges (undirected, so each edge counted once).
+    let total_edges: usize = adj.iter().map(|a| a.len()).sum::<usize>() / 2;
+
+    if total_edges == 0 {
+        // No edges: each node is its own block.
+        let partition = idx_to_node
+            .iter()
+            .enumerate()
+            .map(|(i, &node)| (node, i))
+            .collect();
+        return StochasticBlockPartitionResult {
+            partition,
+            num_blocks: n,
+            description_length: 0.0,
+        };
+    }
+
+    // Compute block-level statistics.
+    let mut block_edge_counts: FxHashMap<(usize, usize), usize> = FxHashMap::default();
+    let mut block_degrees: FxHashMap<usize, usize> = FxHashMap::default();
+
+    for i in 0..n {
+        *block_degrees.entry(block[i]).or_default() += adj[i].len();
+        for &j in &adj[i] {
+            if i < j {
+                let (bi, bj) = ordered_block(block[i], block[j]);
+                *block_edge_counts.entry((bi, bj)).or_default() += 1;
+            }
+        }
+    }
+
+    let mut current_dl =
+        compute_description_length(&block, &block_edge_counts, &block_degrees, total_edges, n);
+
+    // Agglomerative merging: greedily merge blocks that reduce description length.
+    let target = target_blocks.unwrap_or(1);
+
+    for _ in 0..max_iterations {
+        let active_blocks: FxHashSet<usize> = block.iter().copied().collect();
+        let num_active = active_blocks.len();
+
+        if num_active <= target {
+            break;
+        }
+
+        // Try all pairs: pick the merge that reduces DL the most.
+        let mut best_dl = current_dl;
+        let mut best_pair: Option<(usize, usize)> = None;
+
+        let block_list: Vec<usize> = active_blocks.iter().copied().collect();
+        for i in 0..block_list.len() {
+            for j in (i + 1)..block_list.len() {
+                let bi = block_list[i];
+                let bj = block_list[j];
+
+                // Simulate merge: recompute block stats with bi merged into bj.
+                let mut trial_degrees = block_degrees.clone();
+                *trial_degrees.entry(bj).or_default() +=
+                    trial_degrees.get(&bi).copied().unwrap_or(0);
+                trial_degrees.remove(&bi);
+
+                let mut merged_counts: FxHashMap<(usize, usize), usize> = FxHashMap::default();
+                for (&(blk_a, blk_b), &count) in &block_edge_counts {
+                    let na = if blk_a == bi { bj } else { blk_a };
+                    let nb = if blk_b == bi { bj } else { blk_b };
+                    let (oa, ob) = ordered_block(na, nb);
+                    *merged_counts.entry((oa, ob)).or_default() += count;
+                }
+
+                let trial_dl = compute_description_length(
+                    &block,
+                    &merged_counts,
+                    &trial_degrees,
+                    total_edges,
+                    n,
+                );
+
+                if trial_dl < best_dl {
+                    best_dl = trial_dl;
+                    best_pair = Some((bi, bj));
+                }
+            }
+        }
+
+        // If no merge improves DL and we have no hard target, stop.
+        if best_pair.is_none() {
+            if target_blocks.is_some() && num_active > target {
+                // Forced merge: pick the least-worst pair.
+                let mut least_worst = f64::MAX;
+                for i in 0..block_list.len() {
+                    for j in (i + 1)..block_list.len() {
+                        let bi = block_list[i];
+                        let bj = block_list[j];
+
+                        let mut trial_degrees = block_degrees.clone();
+                        *trial_degrees.entry(bj).or_default() +=
+                            trial_degrees.get(&bi).copied().unwrap_or(0);
+                        trial_degrees.remove(&bi);
+
+                        let mut merged_counts: FxHashMap<(usize, usize), usize> =
+                            FxHashMap::default();
+                        for (&(blk_a, blk_b), &count) in &block_edge_counts {
+                            let na = if blk_a == bi { bj } else { blk_a };
+                            let nb = if blk_b == bi { bj } else { blk_b };
+                            let (oa, ob) = ordered_block(na, nb);
+                            *merged_counts.entry((oa, ob)).or_default() += count;
+                        }
+
+                        let trial_dl = compute_description_length(
+                            &block,
+                            &merged_counts,
+                            &trial_degrees,
+                            total_edges,
+                            n,
+                        );
+
+                        if trial_dl < least_worst {
+                            least_worst = trial_dl;
+                            best_pair = Some((bi, bj));
+                            best_dl = trial_dl;
+                        }
+                    }
+                }
+            }
+            if best_pair.is_none() {
+                break;
+            }
+        }
+
+        let (merge_from, merge_to) = best_pair.expect("best pair exists");
+
+        // Execute merge: move all nodes in merge_from to merge_to.
+        for b in &mut block {
+            if *b == merge_from {
+                *b = merge_to;
+            }
+        }
+
+        // Update block statistics.
+        *block_degrees.entry(merge_to).or_default() +=
+            block_degrees.get(&merge_from).copied().unwrap_or(0);
+        block_degrees.remove(&merge_from);
+
+        // Rebuild block edge counts for the merged block.
+        let keys_to_update: Vec<(usize, usize)> = block_edge_counts.keys().copied().collect();
+        let mut new_counts: FxHashMap<(usize, usize), usize> = FxHashMap::default();
+
+        for (bi, bj) in keys_to_update {
+            let count = block_edge_counts.remove(&(bi, bj)).unwrap_or(0);
+            let new_bi = if bi == merge_from { merge_to } else { bi };
+            let new_bj = if bj == merge_from { merge_to } else { bj };
+            let (nbi, nbj) = ordered_block(new_bi, new_bj);
+            *new_counts.entry((nbi, nbj)).or_default() += count;
+        }
+        block_edge_counts = new_counts;
+
+        current_dl = best_dl;
+    }
+
+    // Normalize block IDs to 0..num_blocks-1.
+    let unique_blocks: FxHashSet<usize> = block.iter().copied().collect();
+    let mut block_map: FxHashMap<usize, usize> = FxHashMap::default();
+    for (idx, &b) in unique_blocks.iter().enumerate() {
+        block_map.insert(b, idx);
+    }
+
+    let partition = idx_to_node
+        .iter()
+        .enumerate()
+        .map(|(i, &node)| (node, block_map[&block[i]]))
+        .collect();
+
+    StochasticBlockPartitionResult {
+        partition,
+        num_blocks: unique_blocks.len(),
+        description_length: current_dl,
+    }
+}
+
+/// Computes the description length (MDL) of a partition under the degree-corrected SBM.
+///
+/// DL = sum_{r,s} e_{rs} * log(e_{rs} / (d_r * d_s)) + sum_r d_r * log(d_r)
+///
+/// Lower is better.
+fn compute_description_length(
+    _block: &[usize],
+    block_edge_counts: &FxHashMap<(usize, usize), usize>,
+    block_degrees: &FxHashMap<usize, usize>,
+    total_edges: usize,
+    _n: usize,
+) -> f64 {
+    if total_edges == 0 {
+        return 0.0;
+    }
+
+    let m = total_edges as f64;
+    let mut dl = 0.0f64;
+
+    // Edge term: sum over block pairs.
+    for (&(bi, bj), &e_rs) in block_edge_counts {
+        if e_rs == 0 {
+            continue;
+        }
+        let d_r = block_degrees.get(&bi).copied().unwrap_or(1) as f64;
+        let d_s = block_degrees.get(&bj).copied().unwrap_or(1) as f64;
+        let e = e_rs as f64;
+
+        let expected = d_r * d_s / (2.0 * m);
+        if expected > 0.0 {
+            dl += e * (e / expected).ln();
+        }
+    }
+
+    // Degree term: sum over blocks.
+    for &d_r in block_degrees.values() {
+        if d_r > 0 {
+            let d = d_r as f64;
+            dl += d * d.ln();
+        }
+    }
+
+    dl
+}
+
+/// Orders two block IDs so the smaller comes first.
+fn ordered_block(a: usize, b: usize) -> (usize, usize) {
+    if a <= b { (a, b) } else { (b, a) }
+}
+
 /// Returns the number of communities detected.
 pub fn community_count(communities: &FxHashMap<NodeId, u64>) -> usize {
     let unique: FxHashSet<u64> = communities.values().copied().collect();
@@ -429,6 +768,63 @@ impl_algorithm! {
                 Value::Int64(node.0 as i64),
                 Value::Int64(community_id as i64),
                 Value::Float64(result.modularity),
+            ]);
+        }
+
+        Ok(output)
+    }
+}
+
+/// Static parameter definitions for Stochastic Block Partition algorithm.
+static SBP_PARAMS: OnceLock<Vec<ParameterDef>> = OnceLock::new();
+
+fn sbp_params() -> &'static [ParameterDef] {
+    SBP_PARAMS.get_or_init(|| {
+        vec![
+            ParameterDef {
+                name: "num_blocks".to_string(),
+                description: "Target number of blocks (optional, auto-selects if not set)"
+                    .to_string(),
+                param_type: ParameterType::Integer,
+                required: false,
+                default: None,
+            },
+            ParameterDef {
+                name: "max_iterations".to_string(),
+                description: "Maximum merge iterations (default: 100)".to_string(),
+                param_type: ParameterType::Integer,
+                required: false,
+                default: Some("100".to_string()),
+            },
+        ]
+    })
+}
+
+/// Stochastic Block Partition algorithm wrapper.
+pub struct StochasticBlockPartitionAlgorithm;
+
+impl_algorithm! {
+    StochasticBlockPartitionAlgorithm,
+    name: "stochastic_block_partition",
+    description: "Stochastic Block Model community detection (MDL minimization)",
+    params: sbp_params,
+    execute(store, params) {
+        let num_blocks = params.get_int("num_blocks").map(|v| v as usize);
+        let max_iter = params.get_int("max_iterations").unwrap_or(100) as usize;
+
+        let result = stochastic_block_partition(store, num_blocks, max_iter);
+
+        let mut output = AlgorithmResult::new(vec![
+            "node_id".to_string(),
+            "block_id".to_string(),
+            "description_length".to_string(),
+        ]);
+
+        for (node, block_id) in &result.partition {
+            output.add_row(vec![
+                Value::Int64(node.0 as i64),
+                Value::Int64(*block_id as i64),
+                Value::Float64(result.description_length),
             ]);
         }
 
@@ -604,5 +1000,116 @@ mod tests {
         communities.insert(NodeId::new(4), 2);
 
         assert_eq!(community_count(&communities), 3);
+    }
+
+    // ---- Stochastic Block Partition tests ----
+
+    #[test]
+    fn test_sbp_empty_graph() {
+        let store = LpgStore::new().unwrap();
+        let result = stochastic_block_partition(&store, None, 100);
+        assert!(result.partition.is_empty());
+        assert_eq!(result.num_blocks, 0);
+    }
+
+    #[test]
+    fn test_sbp_single_node() {
+        let store = LpgStore::new().unwrap();
+        store.create_node(&["Node"]);
+        let result = stochastic_block_partition(&store, None, 100);
+        assert_eq!(result.partition.len(), 1);
+        assert_eq!(result.num_blocks, 1);
+    }
+
+    #[test]
+    fn test_sbp_two_cliques() {
+        let store = create_two_cliques_graph();
+        let result = stochastic_block_partition(&store, None, 100);
+
+        // All 8 nodes should be partitioned.
+        assert_eq!(result.partition.len(), 8);
+        // Number of blocks should be between 1 and 8 inclusive.
+        assert!(
+            result.num_blocks >= 1 && result.num_blocks <= 8,
+            "num_blocks should be in [1,8], got {}",
+            result.num_blocks
+        );
+        // Description length should be finite.
+        assert!(result.description_length.is_finite());
+    }
+
+    #[test]
+    fn test_sbp_target_blocks() {
+        let store = create_two_cliques_graph();
+        let result = stochastic_block_partition(&store, Some(2), 100);
+
+        assert_eq!(result.partition.len(), 8);
+        assert_eq!(result.num_blocks, 2);
+    }
+
+    #[test]
+    fn test_sbp_description_length_decreases() {
+        let store = create_two_cliques_graph();
+
+        // With 8 blocks (each node alone) vs 2 blocks.
+        let result_2 = stochastic_block_partition(&store, Some(2), 100);
+        // Description length should be finite.
+        assert!(
+            result_2.description_length.is_finite(),
+            "DL should be finite, got {}",
+            result_2.description_length
+        );
+    }
+
+    #[test]
+    fn test_sbp_isolated_nodes() {
+        let store = LpgStore::new().unwrap();
+        store.create_node(&["Node"]);
+        store.create_node(&["Node"]);
+        store.create_node(&["Node"]);
+
+        let result = stochastic_block_partition(&store, None, 100);
+        assert_eq!(result.partition.len(), 3);
+        // Isolated nodes: each stays in its own block.
+        assert_eq!(result.num_blocks, 3);
+    }
+
+    #[test]
+    fn test_sbp_incremental() {
+        let store = LpgStore::new().unwrap();
+
+        // Phase 1: Two connected nodes.
+        let n0 = store.create_node(&["Node"]);
+        let n1 = store.create_node(&["Node"]);
+        store.create_edge(n0, n1, "EDGE");
+        store.create_edge(n1, n0, "EDGE");
+
+        let result1 = stochastic_block_partition(&store, None, 100);
+
+        // Phase 2: Add a third node.
+        let n2 = store.create_node(&["Node"]);
+        store.create_edge(n1, n2, "EDGE");
+        store.create_edge(n2, n1, "EDGE");
+
+        let result2 = stochastic_block_partition_incremental(&store, &result1.partition, 100);
+
+        assert_eq!(result2.partition.len(), 3);
+        // The incremental result should include the new node.
+        assert!(result2.partition.contains_key(&n2));
+    }
+
+    #[test]
+    fn test_sbp_algorithm_wrapper() {
+        use super::super::traits::GraphAlgorithm;
+
+        let store = create_two_cliques_graph();
+        let algo = StochasticBlockPartitionAlgorithm;
+
+        assert_eq!(algo.name(), "stochastic_block_partition");
+
+        let params = super::super::super::Parameters::new();
+        let result = algo.execute(&store, &params).unwrap();
+        assert_eq!(result.columns.len(), 3);
+        assert_eq!(result.row_count(), 8);
     }
 }

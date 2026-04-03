@@ -21,6 +21,7 @@ pub(crate) mod cdc_store;
 mod crud;
 #[cfg(feature = "embed")]
 mod embed;
+mod import;
 mod index;
 mod persistence;
 mod query;
