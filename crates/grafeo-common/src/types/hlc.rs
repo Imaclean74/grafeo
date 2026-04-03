@@ -514,6 +514,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        miri,
+        ignore = "requires wall clock (SystemTime::now) unavailable under Miri isolation"
+    )]
     fn default_clock() {
         // HlcClock::default() should work (it calls new())
         let _clock = HlcClock::default();
