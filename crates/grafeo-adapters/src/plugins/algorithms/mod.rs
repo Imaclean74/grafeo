@@ -39,6 +39,8 @@ mod clustering;
 mod community;
 mod components;
 mod flow;
+mod isomorphism;
+pub mod metrics;
 mod mst;
 mod shortest_path;
 mod structure;
@@ -72,39 +74,55 @@ pub use centrality::{
 };
 
 // Clustering algorithms
-#[cfg(feature = "parallel")]
-pub use clustering::clustering_coefficient_parallel;
 pub use clustering::{
     ClusteringCoefficientResult, clustering_coefficient, global_clustering_coefficient,
     local_clustering_coefficient, total_triangles, triangle_count,
 };
+#[cfg(feature = "parallel")]
+pub use clustering::{clustering_coefficient_parallel, total_triangles_parallel};
 
 // Community detection algorithms
-pub use community::{LouvainResult, community_count, label_propagation, louvain};
+pub use community::{
+    LouvainResult, StochasticBlockPartitionResult, community_count, label_propagation, louvain,
+    stochastic_block_partition, stochastic_block_partition_incremental,
+};
 
 // Minimum Spanning Tree algorithms
 pub use mst::{MstResult, kruskal, prim};
+
+// Subgraph isomorphism
+pub use isomorphism::{
+    subgraph_isomorphism, subgraph_isomorphism_count, subgraph_isomorphism_count_from_edges,
+};
 
 // Network Flow algorithms
 pub use flow::{MaxFlowResult, MinCostFlowResult, max_flow, min_cost_max_flow};
 
 // Structure analysis algorithms
-pub use structure::{KCoreResult, articulation_points, bridges, k_core, kcore_decomposition};
+pub use structure::{
+    KCoreResult, KTrussResult, articulation_points, bridges, edge_triangle_support, k_core,
+    k_truss, kcore_decomposition, ktruss_decomposition,
+};
 
 // Algorithm wrappers (for future registry integration)
 pub use centrality::{
     BetweennessCentralityAlgorithm, ClosenessCentralityAlgorithm, DegreeCentralityAlgorithm,
     PageRankAlgorithm,
 };
-pub use clustering::ClusteringCoefficientAlgorithm;
-pub use community::{LabelPropagationAlgorithm, LouvainAlgorithm};
+pub use clustering::{ClusteringCoefficientAlgorithm, TotalTrianglesAlgorithm};
+pub use community::{
+    LabelPropagationAlgorithm, LouvainAlgorithm, StochasticBlockPartitionAlgorithm,
+};
 pub use components::{
     ConnectedComponentsAlgorithm, StronglyConnectedComponentsAlgorithm, TopologicalSortAlgorithm,
 };
 pub use flow::{MaxFlowAlgorithm, MinCostFlowAlgorithm};
+pub use isomorphism::SubgraphIsomorphismAlgorithm;
 pub use mst::{KruskalAlgorithm, PrimAlgorithm};
 pub use shortest_path::{
     BellmanFordAlgorithm, DijkstraAlgorithm, FloydWarshallAlgorithm, SsspAlgorithm,
 };
-pub use structure::{ArticulationPointsAlgorithm, BridgesAlgorithm, KCoreAlgorithm};
+pub use structure::{
+    ArticulationPointsAlgorithm, BridgesAlgorithm, KCoreAlgorithm, KTrussAlgorithm,
+};
 pub use traversal::{BfsAlgorithm, DfsAlgorithm};

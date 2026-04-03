@@ -34,12 +34,14 @@
 //! }
 //! ```
 
+mod graph_store_adapter;
 pub mod nquads;
 mod store;
 mod term;
 mod triple;
 pub mod turtle;
 
+pub use graph_store_adapter::RdfGraphStoreAdapter;
 pub use store::{BulkLoadResult, NTriplesError, RdfStore, RdfStoreConfig};
 pub use term::{BlankNode, Iri, Literal, Term};
 pub use triple::{Triple, TriplePattern};

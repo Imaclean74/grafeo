@@ -43,6 +43,39 @@ Count triangles for clustering analysis.
 algs = db.algorithms()
 triangles = algs.triangles()
 print(f"Total triangles: {triangles}")
+
+# Parallel version for large graphs (degree-ordered, merge intersection)
+triangles = algs.triangles(parallel=True)
+```
+
+## K-Truss Decomposition
+
+Find dense subgraphs where every edge is supported by at least k-2 triangles. The truss number of an edge is the maximum k for which it belongs to the k-truss.
+
+```python
+algs = db.algorithms()
+
+# Full decomposition: truss number for every edge
+result = algs.ktruss()
+print(f"Max truss: {result['max_truss']}")
+
+# Extract edges in the 4-truss
+edges = algs.ktruss(k=4)
+print(f"Edges in 4-truss: {len(edges)}")
+```
+
+## Subgraph Isomorphism
+
+Count occurrences of a pattern subgraph within the graph. Uses VF2 backtracking with degree pruning.
+
+```python
+algs = db.algorithms()
+
+# Count triangles via subgraph isomorphism (should match triangles() * 6)
+count = algs.subgraph_isomorphism_count(
+    pattern_edges=[(0, 1), (1, 2), (2, 0)],
+    pattern_nodes=3
+)
 ```
 
 ## Degree Distribution

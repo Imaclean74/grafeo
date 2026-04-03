@@ -56,6 +56,12 @@ The beta series focuses on correctness, completeness and real-world durability. 
 - **Correctness hardening** (0.5.32): epoch monotonicity guarantees, concurrent stress tests, write-write conflict detection improvements
 - **grafeo-server replication** (0.5.32): atomic sync apply (all-or-nothing transaction visibility on replicas), persistent replica epoch tracking (replicas resume from last position after restart), CDC auto-activation on replication primaries, relaxed replica guard for sync endpoints
 
+### Coming in 0.5.33
+
+- **GraphChallenge benchmark suite** (DARPA/MIT IEEE HPEC 2026): k-truss decomposition, parallel triangle counting, subgraph isomorphism (VF2), stochastic block partition with incremental warm-start, partition quality metrics (Rand, ARI, NMI, precision/recall)
+- **TSV/MMIO bulk import**: `import_tsv()`, `import_mmio()`, `import_tsv_rdf()` for fast loading of GraphChallenge datasets
+- **`RdfGraphStoreAdapter`**: bridges `RdfStore` to `GraphStore`, giving RDF graphs access to all 25+ graph algorithms
+
 ### What's left in 0.5
 
 - Crash recovery testing (failpoint injection), Jepsen testing for grafeo-server replication

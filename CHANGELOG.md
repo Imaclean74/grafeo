@@ -2,6 +2,21 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
+## [0.5.33] - Unreleased
+
+GraphChallenge benchmark suite and RDF-to-LPG bridge: all five DARPA/MIT IEEE HPEC 2026 algorithms, bulk import, partition quality metrics, and an adapter that gives RDF graphs access to all 25+ graph algorithms.
+
+### Added
+
+- **GraphChallenge algorithms** (DARPA/MIT IEEE HPEC 2026):
+  - **K-truss decomposition**: `ktruss_decomposition()`, `k_truss()`, `edge_triangle_support()` with `KTrussAlgorithm` plugin wrapper. Edge-based peeling that finds dense subgraphs where every edge is supported by at least k-2 triangles
+  - **Parallel triangle counting**: `total_triangles_parallel()` with degree-ordered edges, sorted merge-intersection, and `AtomicU64` accumulator. Dedicated fast path that skips clustering coefficient overhead
+  - **Subgraph isomorphism**: `subgraph_isomorphism_count()`, `subgraph_isomorphism()`, `subgraph_isomorphism_count_from_edges()` using VF2 backtracking with degree pruning and connectivity feasibility checks
+  - **Stochastic Block Partition**: `stochastic_block_partition()` with agglomerative merging to minimize description length under the degree-corrected SBM. Includes `stochastic_block_partition_incremental()` for warm-start after streaming edge additions
+  - **Partition quality metrics**: `rand_index()`, `adjusted_rand_index()`, `normalized_mutual_information()`, `pairwise_precision()`, `pairwise_recall()` for comparing community assignments against ground truth
+- **TSV/MMIO bulk import**: `import_tsv()`, `import_mmio()` for fast graph loading (bypasses per-edge transaction overhead), `import_tsv_rdf()` for loading edge lists directly into the RDF store
+- **`RdfGraphStoreAdapter`**: bridges `RdfStore` to `GraphStore`, giving RDF graphs access to all 25+ graph algorithms (PageRank, BFS, SSSP, k-core, k-truss, Louvain, triangle counting, subgraph isomorphism, etc.). Maps IRIs/blank nodes to nodes, predicates to edge types, `rdf:type` to labels, literals to properties
+
 ## [0.5.32] - 2026-04-03
 
 Correctness hardening, Jepsen readiness, and Hybrid Logical Clock for causal consistency.
