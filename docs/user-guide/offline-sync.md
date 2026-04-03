@@ -191,6 +191,24 @@ The `epoch` field in change events is strictly monotonic: `changes_between(from,
 events with no gaps, no duplicates, and strictly increasing epoch values. This is enforced by
 stress tests with 5 concurrent writers.
 
+### Atomic sync apply
+
+*Since 0.5.32.* When a replica applies incoming changes via `POST /db/{name}/sync`, all mutations
+are wrapped in a single session transaction. Readers on the replica never see a partially applied
+batch: either all changes become visible (on commit) or none (on rollback or crash).
+
+### Persistent replica epoch
+
+*Since 0.5.32.* Replicas that run with `--data-dir` persist the last-applied epoch per database to
+`{data_dir}/.replica-epochs`. After a restart, the replica resumes pulling from where it left off
+instead of re-fetching from epoch 0.
+
+### CDC auto-activation
+
+*Since 0.5.32.* CDC is opt-in per database in the engine. The server automatically enables CDC on
+all databases when running as a replication primary (`--replication-mode primary`), so that all
+mutations (both direct API and session-driven) produce change events for replicas to consume.
+
 ## Conflict Resolution
 
 The server uses **last-write-wins (LWW)**: HLC timestamps are compared. If the server has a CDC

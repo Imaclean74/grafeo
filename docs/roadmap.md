@@ -54,6 +54,7 @@ The beta series focuses on correctness, completeness and real-world durability. 
 - **Hybrid Logical Clock** (0.5.32): monotonic HLC timestamps in CDC events for causal ordering
 - **Session CDC** (0.5.32): mutations via query sessions (`INSERT`, `SET`, `DELETE`) now generate CDC events, buffered per-transaction
 - **Correctness hardening** (0.5.32): epoch monotonicity guarantees, concurrent stress tests, write-write conflict detection improvements
+- **grafeo-server replication** (0.5.32): atomic sync apply (all-or-nothing transaction visibility on replicas), persistent replica epoch tracking (replicas resume from last position after restart), CDC auto-activation on replication primaries, relaxed replica guard for sync endpoints
 
 ### What's left in 0.5
 
