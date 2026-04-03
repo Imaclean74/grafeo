@@ -2,7 +2,7 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.32] - Unreleased
+## [0.5.32] - U2026-04-03
 
 Correctness hardening, Jepsen readiness, and Hybrid Logical Clock for causal consistency.
 
