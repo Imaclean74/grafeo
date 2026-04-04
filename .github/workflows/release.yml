@@ -7,8 +7,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 jobs:
   # Create GitHub release
@@ -33,6 +31,9 @@ jobs:
   deploy-docs:
     name: Deploy Documentation
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     concurrency:
       group: "pages"
       cancel-in-progress: false
