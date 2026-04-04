@@ -64,6 +64,10 @@ impl super::Planner {
         // appear on the left are redundant (the join guarantees equality).
         // Build a projection that keeps all left columns plus only the
         // non-duplicate right columns.
+        if matches!(join.join_type, JoinType::Right | JoinType::Full) {
+            return Ok((join_op, all_columns));
+        }
+
         let left_count = left_columns.len();
         let mut keep_indices: Vec<usize> = (0..left_count).collect();
         let mut deduped_columns: Vec<String> = left_columns;
