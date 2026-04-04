@@ -143,7 +143,7 @@ impl CompactStore {
 
     /// Returns a reference to the first relationship table for the given edge type.
     ///
-    /// When an edge type spans multiple label pairs, use [`rel_tables_for_type`]
+    /// When an edge type spans multiple label pairs, use [`Self::rel_tables_for_type`]
     /// to get all matching tables.
     #[must_use]
     pub fn rel_table(&self, edge_type: &str) -> Option<&RelTable> {
