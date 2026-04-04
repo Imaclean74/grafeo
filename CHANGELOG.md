@@ -30,6 +30,7 @@ GraphChallenge benchmark suite and RDF-to-LPG bridge: all five DARPA/MIT IEEE HP
 - **`CAST(bool AS INT)`**: `true` casts to `1`, `false` to `0`
 - **List `+` concatenation**: `[1, 2] + [3, 4]` returns `[1, 2, 3, 4]`
 - **Parameter substitution in multi-statement queries**: `$param` variables in `INSERT`/`SET` statements now receive values when used with `statements:` in spec tests
+- **ORDER BY + LIMIT/SKIP ordering**: SKIP and LIMIT now apply after ORDER BY in the GQL translator, fixing queries like `ORDER BY x DESC LIMIT 3` that previously truncated input before sorting
 
 ### Performance
 
