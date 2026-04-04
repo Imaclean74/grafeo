@@ -72,8 +72,8 @@ tests:
       rows:
         - [Graph Databases, 3]
         - [Laptop Pro, 2]
-        - [Wireless Headphones, 2]
         - [Rust Programming, 2]
+        - [Wireless Headphones, 2]
         - [Tablet Mini, 1]
         - [Winter Jacket, 1]
 

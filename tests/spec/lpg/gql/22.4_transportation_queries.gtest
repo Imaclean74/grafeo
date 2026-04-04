@@ -97,7 +97,7 @@ tests:
       ordered: true
       rows:
         - [Amsterdam, 4]
-        - [Paris, 4]
+        - [Paris, 3]
         - [Barcelona, 2]
         - [Berlin, 2]
         - [Brussels, 2]
