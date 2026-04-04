@@ -1955,3 +1955,54 @@ fn test_order_by_secondary_sort_after_aggregation() {
     assert_eq!(result.rows[1][0], Value::String("Y".into()));
     assert_eq!(result.rows[2][0], Value::String("Z".into()));
 }
+
+/// Exact reproduction of movie_database scenario with 5 items, LIMIT 3.
+/// Multiple labels in the database (Genre, Director, Actor, Movie) so
+/// NodeScan may interact differently.
+#[test]
+fn test_order_by_desc_with_limit_multi_label() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    // The actual movies (5 movies, no noise nodes)
+    session
+        .execute("INSERT (:Movie {title: 'The Heist', rating: 8.2})")
+        .unwrap();
+    session
+        .execute("INSERT (:Movie {title: 'Midnight Code', rating: 7.5})")
+        .unwrap();
+    session
+        .execute("INSERT (:Movie {title: 'Berlin Express', rating: 8.7})")
+        .unwrap();
+    session
+        .execute("INSERT (:Movie {title: 'Prague Nights', rating: 6.9})")
+        .unwrap();
+    session
+        .execute("INSERT (:Movie {title: 'The Algorithm', rating: 8.0})")
+        .unwrap();
+
+    // First test without LIMIT to see all rows
+    let result = session
+        .execute("MATCH (m:Movie) RETURN m.title, m.rating ORDER BY m.rating DESC")
+        .unwrap();
+
+    eprintln!("All movies sorted DESC:");
+    for (i, row) in result.rows.iter().enumerate() {
+        eprintln!("  row {i}: {:?}", row);
+    }
+    assert_eq!(result.rows.len(), 5, "Should have 5 movies");
+
+    // Now test with LIMIT
+    let result = session
+        .execute("MATCH (m:Movie) RETURN m.title, m.rating ORDER BY m.rating DESC LIMIT 3")
+        .unwrap();
+
+    eprintln!("Top 3 movies sorted DESC:");
+    for (i, row) in result.rows.iter().enumerate() {
+        eprintln!("  row {i}: {:?}", row);
+    }
+    assert_eq!(result.rows.len(), 3);
+    assert_eq!(result.rows[0][0], Value::String("Berlin Express".into()));
+    assert_eq!(result.rows[1][0], Value::String("The Heist".into()));
+    assert_eq!(result.rows[2][0], Value::String("The Algorithm".into()));
+}
