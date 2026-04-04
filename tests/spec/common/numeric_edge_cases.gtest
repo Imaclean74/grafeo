@@ -26,7 +26,7 @@ tests:
         - [9223372036854775807]
 
   - name: min_int64
-    skip: "min int64 storage"
+    skip: "min int64 literal overflows parser"
     setup:
       - "INSERT (:N {v: -9223372036854775808})"
     query: "MATCH (n:N) RETURN n.v AS val"

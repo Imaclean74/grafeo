@@ -84,7 +84,6 @@ tests:
         - [Vincent]
 
   - name: actors_avg_movie_rating
-    skip: "avg with LIMIT ordering"
     query: |
       MATCH (a:Actor)-[:ACTED_IN]->(m:Movie)
       RETURN a.name, avg(m.rating) AS avg_rating
@@ -186,7 +185,7 @@ tests:
         - [Hans, 2]
 
   - name: director_actor_repeated_collaborations
-    skip: "HAVING-style filter with count"
+    skip: "WITH aggregation WHERE filter returns wrong count"
     query: |
       MATCH (d:Director)-[:DIRECTED]->(m:Movie)<-[:ACTED_IN]-(a:Actor)
       WITH d, a, count(m) AS collabs

@@ -147,7 +147,6 @@ tests:
         - [shipped, 1]
 
   - name: count_by_status_cypher
-    skip: "Cypher ORDER BY on entity property after aggregation"
     variants:
       cypher: |
         MATCH (o:Order)
@@ -205,7 +204,6 @@ tests:
         - [Vincent, 2]
 
   - name: orders_per_customer_cypher
-    skip: "Cypher ORDER BY on entity property after aggregation"
     variants:
       cypher: |
         MATCH (c:Customer)-[:PLACED]->(o:Order)
@@ -273,7 +271,6 @@ tests:
         - [Vincent]
 
   - name: customers_with_multiple_orders_cypher
-    skip: "Cypher WITH aggregation filter"
     variants:
       cypher: |
         MATCH (c:Customer)-[:PLACED]->(o:Order)

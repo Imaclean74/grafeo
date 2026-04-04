@@ -199,7 +199,7 @@ tests:
         - [0]
 
   - name: aggregation_on_empty_result
-    skip: "sum on empty returns 0 not null for some aggregates"
+    skip: "sum on empty returns null per ISO GQL, test expects 0"
     query: "MATCH (n:NonExistent) RETURN sum(n.value) AS total"
     expect:
       rows:
