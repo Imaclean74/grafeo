@@ -136,7 +136,6 @@ tests:
       error: "cast"
 
   - name: cast_bool_to_int
-    skip: "bool-to-int cast not supported"
     setup:
       - "INSERT (:N {v: true})"
     query: "MATCH (n:N) RETURN CAST(n.v AS INT) AS result"

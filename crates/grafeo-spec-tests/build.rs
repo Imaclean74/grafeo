@@ -90,6 +90,7 @@ struct TestCase {
     tags: Vec<String>,
     requires: Vec<String>,
     language: Option<String>,
+    dataset: Option<String>,
     skip: Option<String>,
     expect: Expect,
     variants: HashMap<String, String>,
@@ -230,6 +231,7 @@ fn parse_single_test(lines: &[&str], idx: &mut usize) -> Result<TestCase, String
         tags: Vec::new(),
         requires: Vec::new(),
         language: None,
+        dataset: None,
         skip: None,
         expect: Expect::default(),
         variants: HashMap::new(),
@@ -297,6 +299,10 @@ fn parse_single_test(lines: &[&str], idx: &mut usize) -> Result<TestCase, String
                 }
                 "language" => {
                     tc.language = Some(unquote(value));
+                    *idx += 1;
+                }
+                "dataset" => {
+                    tc.dataset = Some(unquote(value));
                     *idx += 1;
                 }
                 "params" => {
@@ -860,8 +866,9 @@ fn generate_single_test(
     // Create DB and load dataset
     writeln!(output, "        let db = GrafeoDB::new_in_memory();").unwrap();
 
-    if file.meta.dataset != "empty" {
-        let dataset_path = format!("tests/spec/datasets/{}.setup", file.meta.dataset);
+    let effective_dataset = tc.dataset.as_deref().unwrap_or(&file.meta.dataset);
+    if effective_dataset != "empty" {
+        let dataset_path = format!("tests/spec/datasets/{}.setup", effective_dataset);
         writeln!(
             output,
             "        load_dataset(&db, \"{}\");",

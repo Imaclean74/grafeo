@@ -1822,6 +1822,7 @@ impl ExpressionPredicate {
                 match val {
                     Value::Int64(i) => Some(Value::Int64(i)),
                     Value::Float64(f) => Some(Value::Int64(f as i64)),
+                    Value::Bool(b) => Some(Value::Int64(i64::from(b))),
                     Value::String(s) => s.parse::<i64>().ok().map(Value::Int64),
                     _ => None,
                 }
