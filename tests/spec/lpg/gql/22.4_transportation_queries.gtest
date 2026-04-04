@@ -176,7 +176,6 @@ tests:
   # ---------------------------------------------------------------------------
 
   - name: largest_cities
-    skip: "integer ordering"
     query: |
       MATCH (c:City)
       RETURN c.name, c.population

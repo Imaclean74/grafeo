@@ -1872,3 +1872,86 @@ fn test_start_node_equals_source_id() {
     assert_eq!(r.rows[0][0], Value::Bool(true), "startNode(r) != id(s)");
     assert_eq!(r.rows[0][1], Value::Bool(true), "endNode(r) != id(t)");
 }
+
+// ============================================================================
+// ORDER BY DESC with sort key in RETURN (regression)
+// ============================================================================
+
+/// ORDER BY DESC on a float property that is also in the RETURN clause.
+/// This reproduces the spec test `top_rated_movies` failure where DESC
+/// returns values in wrong order.
+#[test]
+fn test_order_by_desc_sort_key_in_return() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    session
+        .execute("INSERT (:Item {name: 'A', score: 7.5})")
+        .unwrap();
+    session
+        .execute("INSERT (:Item {name: 'B', score: 8.7})")
+        .unwrap();
+    session
+        .execute("INSERT (:Item {name: 'C', score: 8.0})")
+        .unwrap();
+
+    let result = session
+        .execute("MATCH (i:Item) RETURN i.name, i.score ORDER BY i.score DESC")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 3);
+    // Descending: B(8.7), C(8.0), A(7.5)
+    assert_eq!(result.rows[0][0], Value::String("B".into()));
+    assert_eq!(result.rows[1][0], Value::String("C".into()));
+    assert_eq!(result.rows[2][0], Value::String("A".into()));
+}
+
+/// ORDER BY DESC on an integer property that is in the RETURN clause.
+#[test]
+fn test_order_by_desc_integer_in_return() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    session
+        .execute("INSERT (:City {name: 'Amsterdam', pop: 905234})")
+        .unwrap();
+    session
+        .execute("INSERT (:City {name: 'Berlin', pop: 3748148})")
+        .unwrap();
+    session
+        .execute("INSERT (:City {name: 'Paris', pop: 2161000})")
+        .unwrap();
+
+    let result = session
+        .execute("MATCH (c:City) RETURN c.name, c.pop ORDER BY c.pop DESC")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 3);
+    // Descending: Berlin, Paris, Amsterdam
+    assert_eq!(result.rows[0][0], Value::String("Berlin".into()));
+    assert_eq!(result.rows[1][0], Value::String("Paris".into()));
+    assert_eq!(result.rows[2][0], Value::String("Amsterdam".into()));
+}
+
+/// Secondary sort: ORDER BY count DESC, name ASC to break ties.
+#[test]
+fn test_order_by_secondary_sort_after_aggregation() {
+    let db = GrafeoDB::new_in_memory();
+    let session = db.session();
+
+    session.execute("INSERT (:T {grp: 'X', val: 1})").unwrap();
+    session.execute("INSERT (:T {grp: 'X', val: 2})").unwrap();
+    session.execute("INSERT (:T {grp: 'Y', val: 3})").unwrap();
+    session.execute("INSERT (:T {grp: 'Y', val: 4})").unwrap();
+    session.execute("INSERT (:T {grp: 'Z', val: 5})").unwrap();
+
+    let result = session
+        .execute("MATCH (t:T) RETURN t.grp, count(t) AS cnt ORDER BY cnt DESC, t.grp")
+        .unwrap();
+
+    assert_eq!(result.rows.len(), 3);
+    // X(2) and Y(2) tied on cnt DESC, broken by grp ASC: X before Y
+    assert_eq!(result.rows[0][0], Value::String("X".into()));
+    assert_eq!(result.rows[1][0], Value::String("Y".into()));
+    assert_eq!(result.rows[2][0], Value::String("Z".into()));
+}

@@ -31,7 +31,6 @@ tests:
         - [SciFi, 2]
 
   - name: top_rated_movies
-    skip: "float ordering precision"
     query: |
       MATCH (m:Movie)
       RETURN m.title, m.rating
