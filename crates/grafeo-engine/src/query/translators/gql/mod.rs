@@ -223,8 +223,28 @@ impl GqlTranslator {
         // Order: RETURN first (closest to input), then Sort, Skip, Limit wrap it.
         // This ensures RETURN aliases are visible to ORDER BY in the binder.
         if let Some(return_clause) = &call.return_clause {
-            // Apply RETURN projection first (only when explicit items are present)
-            if !return_clause.items.is_empty() {
+            // Check if RETURN contains aggregate functions (e.g. count(label))
+            let has_aggregates = !return_clause.items.is_empty()
+                && return_clause
+                    .items
+                    .iter()
+                    .any(|item| contains_aggregate(&item.expression));
+
+            if has_aggregates {
+                let (aggregates, auto_group_by, post_return) =
+                    self.extract_aggregates_and_groups(&return_clause.items)?;
+
+                plan = LogicalOperator::Aggregate(AggregateOp {
+                    group_by: auto_group_by,
+                    aggregates,
+                    input: Box::new(plan),
+                    having: None,
+                });
+
+                if let Some(return_items) = post_return {
+                    plan = wrap_return(plan, return_items, return_clause.distinct);
+                }
+            } else if !return_clause.items.is_empty() {
                 let return_items = return_clause
                     .items
                     .iter()
