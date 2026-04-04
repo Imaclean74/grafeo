@@ -16,6 +16,18 @@ GraphChallenge benchmark suite and RDF-to-LPG bridge: all five DARPA/MIT IEEE HP
   - **Partition quality metrics**: `rand_index()`, `adjusted_rand_index()`, `normalized_mutual_information()`, `pairwise_precision()`, `pairwise_recall()` for comparing community assignments against ground truth
 - **TSV/MMIO bulk import**: `import_tsv()`, `import_mmio()` for fast graph loading (bypasses per-edge transaction overhead), `import_tsv_rdf()` for loading edge lists directly into the RDF store
 - **`RdfGraphStoreAdapter`**: bridges `RdfStore` to `GraphStore`, giving RDF graphs access to all 25+ graph algorithms (PageRank, BFS, SSSP, k-core, k-truss, Louvain, triangle counting, subgraph isomorphism, etc.). Maps IRIs/blank nodes to nodes, predicates to edge types, `rdf:type` to labels, literals to properties
+- **grafeo-cli PyPI publish workflow**: automated release flow for the Python CLI package ([#222](https://github.com/GrafeoDB/grafeo/pull/222))
+
+### Fixed
+
+- **CompactStore multi-table edge types**: edge types spanning multiple src/dst label combinations now correctly produce multiple `RelTable`s instead of silently overwriting. Added `rel_tables_for_type()` for querying all matching tables ([#221](https://github.com/GrafeoDB/grafeo/issues/221))
+- **WAL deadlock on property mutations**: `set_node_property()` and `set_edge_property()` now apply the store mutation before WAL logging, matching the lock ordering of create/delete methods and preventing ABBA deadlock under concurrent writes
+- **GQL `CREATE INDEX ... FOR` parsing**: `FOR` is now accepted whether lexed as keyword or identifier, fixing index creation in certain tokenizer contexts
+
+### Performance
+
+- **Triangle counting**: `total_triangles()` and `total_triangles_parallel()` build oriented adjacency directly from `GraphStore` without intermediate hash sets, improving cache efficiency on CSR-backed stores
+- **WAL `sync_all()` outside lock**: file sync is performed after releasing the active-log mutex, reducing lock contention under concurrent writes
 
 ## [0.5.32] - 2026-04-03
 
