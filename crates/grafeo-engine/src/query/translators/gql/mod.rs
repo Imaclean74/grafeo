@@ -674,20 +674,6 @@ impl GqlTranslator {
             }
         }
 
-        // Apply SKIP
-        if let Some(skip_expr) = &query.return_clause.skip
-            && let ast::Expression::Literal(ast::Literal::Integer(n)) = skip_expr
-        {
-            plan = wrap_skip(plan, *n as usize);
-        }
-
-        // Apply LIMIT
-        if let Some(limit_expr) = &query.return_clause.limit
-            && let ast::Expression::Literal(ast::Literal::Integer(n)) = limit_expr
-        {
-            plan = wrap_limit(plan, *n as usize);
-        }
-
         // FINISH: consume input, return empty result (mutations already applied)
         if query.return_clause.is_finish {
             // Wrap in a Limit(0) to consume input but return no rows
@@ -902,6 +888,20 @@ impl GqlTranslator {
 
                 plan = wrap_sort(plan, keys);
             }
+        }
+
+        // Apply SKIP (after ORDER BY so sort sees all rows)
+        if let Some(skip_expr) = &query.return_clause.skip
+            && let ast::Expression::Literal(ast::Literal::Integer(n)) = skip_expr
+        {
+            plan = wrap_skip(plan, *n as usize);
+        }
+
+        // Apply LIMIT (after ORDER BY so sort sees all rows)
+        if let Some(limit_expr) = &query.return_clause.limit
+            && let ast::Expression::Literal(ast::Literal::Integer(n)) = limit_expr
+        {
+            plan = wrap_limit(plan, *n as usize);
         }
 
         Ok(LogicalPlan::new(plan))
