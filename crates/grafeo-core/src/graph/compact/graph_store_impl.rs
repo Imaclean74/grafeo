@@ -361,21 +361,26 @@ impl GraphStore for CompactStore {
             return 0.0;
         };
         let mut total_edges: usize = 0;
-        let mut total_nodes: usize = 0;
+        let mut seen_node_tables = FxHashSet::<u16>::default();
         for &rid in rids {
             let Some(rt) = self.rel_tables_by_id.get(rid as usize) else {
                 continue;
             };
             total_edges += rt.num_edges();
-            let nodes = if outgoing {
-                self.resolve_node_table(rt.src_table_id())
-                    .map_or(1, |nt| nt.len().max(1))
+            let node_table_id = if outgoing {
+                rt.src_table_id()
             } else {
-                self.resolve_node_table(rt.dst_table_id())
-                    .map_or(1, |nt| nt.len().max(1))
+                rt.dst_table_id()
             };
-            total_nodes += nodes;
+            seen_node_tables.insert(node_table_id);
         }
+        let total_nodes: usize = seen_node_tables
+            .iter()
+            .map(|&tid| {
+                self.resolve_node_table(tid)
+                    .map_or(1, |nt| nt.len().max(1))
+            })
+            .sum();
         if total_nodes == 0 {
             return 0.0;
         }
