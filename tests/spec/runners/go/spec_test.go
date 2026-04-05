@@ -92,6 +92,7 @@ type TestCase struct {
 	Requires   []string
 	Skip       string
 	Language   string
+	Dataset    string
 	Expect     Expect
 	Variants   map[string]string
 }
@@ -730,6 +731,9 @@ func parseSingleTest(ctx *parseContext) TestCase {
 		case "language":
 			tc.Language = unquote(value)
 			ctx.idx++
+		case "dataset":
+			tc.Dataset = unquote(value)
+			ctx.idx++
 		case "setup":
 			ctx.idx++
 			tc.Setup = parseStringList(ctx)
@@ -1169,9 +1173,13 @@ func runSingleTest(t *testing.T, gf *GtestFile, tc TestCase, variantLang, varian
 	}
 	defer db.Close()
 
-	// Load dataset
-	if gf.Meta.Dataset != "" && gf.Meta.Dataset != "empty" {
-		loadDataset(t, db, gf.Meta.Dataset, datasetsDir)
+	// Load dataset (per-test override takes priority)
+	effectiveDataset := gf.Meta.Dataset
+	if tc.Dataset != "" {
+		effectiveDataset = tc.Dataset
+	}
+	if effectiveDataset != "" && effectiveDataset != "empty" {
+		loadDataset(t, db, effectiveDataset, datasetsDir)
 	}
 
 	// Run setup queries in the file's declared language

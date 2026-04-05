@@ -186,9 +186,10 @@ class GtestItem(pytest.Item):
         # Fresh database per test
         db = grafeo.GrafeoDB()
 
-        # Load dataset
-        if meta.dataset and meta.dataset != "empty":
-            _load_dataset(db, meta.dataset)
+        # Load dataset (per-test override takes priority over file-level)
+        effective_dataset = tc.dataset or meta.dataset
+        if effective_dataset and effective_dataset != "empty":
+            _load_dataset(db, effective_dataset)
 
         # Run setup queries in the file's declared language
         setup_language = meta.language or "gql"

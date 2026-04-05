@@ -124,9 +124,10 @@ public class SpecTests : IDisposable
 
         try
         {
-            // Load dataset
-            if (!string.IsNullOrEmpty(meta.Dataset) && meta.Dataset != "empty")
-                LoadDataset(_db, meta.Dataset);
+            // Load dataset (per-test override takes priority)
+            var effectiveDataset = tc.Dataset ?? meta.Dataset;
+            if (!string.IsNullOrEmpty(effectiveDataset) && effectiveDataset != "empty")
+                LoadDataset(_db, effectiveDataset);
 
             // Run setup queries in the file's declared language
             var setupLanguage = string.IsNullOrEmpty(meta.Language) ? "gql" : meta.Language;
