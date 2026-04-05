@@ -2,7 +2,7 @@
 
 All notable changes to Grafeo, for future reference (and enjoyment).
 
-## [0.5.33] - Unreleased
+## [0.5.33] - 2026-04-05
 
 GraphChallenge benchmark suite and RDF-to-LPG bridge: all five DARPA/MIT IEEE HPEC 2026 algorithms, bulk import, partition quality metrics, and an adapter that gives RDF graphs access to all 25+ graph algorithms.
 
